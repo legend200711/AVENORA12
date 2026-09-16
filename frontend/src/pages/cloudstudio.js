@@ -10,21 +10,26 @@
  * Firestore collections used:
  *   cloudStreamTracks/{uid}/tracks/{trackId}
  *   studioPlaylists/{uid}/playlists/{plId}
+ *
+ * Layout is driven by cloudstudio.css (mobile-first, no inline grid hacks).
  */
 
 registerPage('cloudstudio', {
   async render(container) {
     container.innerHTML = `
-      <div style="padding:var(--space-lg);max-width:1100px;margin:0 auto">
-        <div class="page-header" style="padding-top:var(--space-xl);padding-bottom:var(--space-md)">
-          <h1 style="font-family:var(--font-display);letter-spacing:0.1em;margin-bottom:4px">
+      <div class="csstudio-page">
+
+        <!-- ── Page header ───────────────────────────────── -->
+        <div class="csstudio-header">
+          <h1 class="csstudio-title">
             <span style="color:var(--neon-blue)">AVENORA</span> CREATOR STUDIO
           </h1>
-          <p class="tagline">BUILD YOUR 24-HOUR CLOUD STREAM PLAYLIST</p>
+          <p class="csstudio-tagline">BUILD YOUR 24-HOUR CLOUD STREAM PLAYLIST</p>
         </div>
 
+        <!-- ── Auth gate (shown when logged out) ─────────── -->
         <div id="csstudio-auth-gate" style="display:none;">
-          <div class="card" style="text-align:center;padding:var(--space-2xl);border-color:var(--border-blue)">
+          <div class="card csstudio-auth-gate">
             <p style="font-size:2rem;margin-bottom:var(--space-md)">🔒</p>
             <h3 style="font-family:var(--font-display);margin-bottom:var(--space-sm)">SIGN IN REQUIRED</h3>
             <p style="color:var(--text-secondary);margin-bottom:var(--space-lg)">
@@ -34,14 +39,17 @@ registerPage('cloudstudio', {
           </div>
         </div>
 
+        <!-- ── Loading state ─────────────────────────────── -->
         <div id="csstudio-loading" style="display:flex;flex-direction:column;align-items:center;padding:var(--space-3xl);gap:var(--space-md)">
           <div class="spinner spinner-lg"></div>
           <span style="color:var(--text-muted)">Loading Creator Studio…</span>
         </div>
 
+        <!-- ── Main app ───────────────────────────────────── -->
         <div id="csstudio-app" style="display:none;">
-          <!-- Top action bar -->
-          <div style="display:flex;gap:var(--space-sm);align-items:center;flex-wrap:wrap;margin-bottom:var(--space-xl)">
+
+          <!-- Action button bar -->
+          <div class="csstudio-actions">
             <button class="btn btn-green" onclick="cssGoLive()">
               📡 Go to Cloud Stream
             </button>
@@ -53,12 +61,13 @@ registerPage('cloudstudio', {
             </button>
           </div>
 
-          <div style="display:grid;grid-template-columns:1fr 1.4fr;gap:var(--space-xl)">
+          <!-- Two-panel grid — stacks to single column on mobile -->
+          <div class="csstudio-panels">
 
             <!-- LEFT: Cloud Music Library -->
-            <div>
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-md)">
-                <h2 class="section-title" style="margin:0">CLOUD LIBRARY</h2>
+            <div class="csstudio-panel">
+              <div class="csstudio-section-hdr">
+                <h2 class="section-title">CLOUD LIBRARY</h2>
                 <button class="btn btn-ghost btn-sm" onclick="cssRefreshTracks()" title="Refresh">↻ Refresh</button>
               </div>
               <div id="csstudio-tracks-list" style="min-height:200px">
@@ -67,42 +76,43 @@ registerPage('cloudstudio', {
             </div>
 
             <!-- RIGHT: Playlists -->
-            <div>
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-md)">
-                <h2 class="section-title" style="margin:0">PLAYLISTS</h2>
+            <div class="csstudio-panel">
+              <div class="csstudio-section-hdr">
+                <h2 class="section-title">PLAYLISTS</h2>
                 <button class="btn btn-primary btn-sm" onclick="cssCreatePlaylist()">➕ New</button>
               </div>
               <div id="csstudio-playlists-area" style="min-height:200px">
                 <div style="text-align:center;color:var(--text-muted);padding:var(--space-xl)">Loading playlists…</div>
               </div>
             </div>
-          </div>
+
+          </div><!-- /.csstudio-panels -->
 
           <!-- Playlist editor (shown when a playlist is selected) -->
-          <div id="csstudio-editor" style="display:none;margin-top:var(--space-2xl)">
+          <div id="csstudio-editor" class="csstudio-editor" style="display:none;">
             <div class="card" style="border-color:var(--border-blue)">
-              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-lg);flex-wrap:wrap;gap:var(--space-sm)">
-                <h3 id="csstudio-editor-title" style="font-family:var(--font-display);letter-spacing:0.08em;margin:0">EDITING PLAYLIST</h3>
-                <div style="display:flex;gap:var(--space-sm)">
-                  <button class="btn btn-green btn-sm" onclick="cssSavePlaylist()">💾 Save Playlist</button>
+              <div class="csstudio-editor-header">
+                <h3 id="csstudio-editor-title" class="csstudio-editor-title">EDITING PLAYLIST</h3>
+                <div class="csstudio-editor-btns">
+                  <button class="btn btn-green btn-sm" onclick="cssSavePlaylist()">💾 Save</button>
                   <button class="btn btn-outline btn-sm" onclick="cssCloseEditor()">✕ Close</button>
                 </div>
               </div>
               <div id="csstudio-editor-body">
-                <p style="color:var(--text-muted);font-size:0.85rem">Select tracks from the library on the left to add them here.</p>
+                <p style="color:var(--text-muted);font-size:0.85rem">Select tracks from the library above to add them here.</p>
               </div>
             </div>
           </div>
-        </div>
-      </div>
+
+        </div><!-- /#csstudio-app -->
+      </div><!-- /.csstudio-page -->
     `;
 
-    // ── Bootstrap ───────────────────────────────────────────
+    // ── Bootstrap ────────────────────────────────────────
     const user = window.AvenoraFirebase?.Auth?.getUser?.();
     if (!user) {
       document.getElementById('csstudio-loading').style.display = 'none';
       document.getElementById('csstudio-auth-gate').style.display = '';
-      // Listen for sign-in
       window.AvenoraFirebase?.Auth?.listenAuthState?.((u) => {
         if (u) {
           document.getElementById('csstudio-auth-gate').style.display = 'none';
@@ -120,10 +130,10 @@ registerPage('cloudstudio', {
 // ─── Module-level state ──────────────────────────────────
 const _cssState = {
   uid: null,
-  tracks:     [],  // cloudStreamTracks
-  playlists:  [],  // studioPlaylists
-  editingPl:  null, // currently edited playlist object {id, name, trackIds:[]}
-  cleanup() { /* no subscriptions needed */ }
+  tracks:    [],   // cloudStreamTracks
+  playlists: [],   // studioPlaylists
+  editingPl: null, // { id, name, trackIds:[] }
+  cleanup() { /* no live subscriptions */ }
 };
 
 async function _cssInit(user) {
@@ -133,16 +143,14 @@ async function _cssInit(user) {
   await Promise.all([cssRefreshTracks(), cssRefreshPlaylists()]);
 }
 
-// ─── Firestore helpers ──────────────────────────────────
+// ─── Firestore helpers ───────────────────────────────────
 async function _cssGetFs() {
-  // Use the same Firebase SDK version as firebase.js (10.12.2) to avoid
-  // module version conflicts with the already-initialised Firebase app.
-  const db = await window.AvenoraFirebase.getFirestore();
+  const db  = await window.AvenoraFirebase.getFirestore();
   const mod = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
   return { db, ...mod };
 }
 
-// ─── Track library ──────────────────────────────────────
+// ─── Track library ───────────────────────────────────────
 window.cssRefreshTracks = async function () {
   const el = document.getElementById('csstudio-tracks-list');
   if (!el) return;
@@ -164,10 +172,11 @@ window.cssRefreshTracks = async function () {
 function _cssRenderTracks() {
   const el = document.getElementById('csstudio-tracks-list');
   if (!el) return;
+
   if (!_cssState.tracks.length) {
     el.innerHTML = `
-      <div class="card" style="text-align:center;border-color:var(--border-subtle)">
-        <p style="font-size:1.5rem;margin-bottom:var(--space-sm)">🎵</p>
+      <div class="card css-empty-state">
+        <p class="css-empty-icon">🎵</p>
         <p style="color:var(--text-secondary);margin-bottom:var(--space-md)">No tracks in your cloud library yet.</p>
         <button class="btn btn-green btn-sm" onclick="cssUploadMusic()">⬆ Upload Music</button>
       </div>`;
@@ -178,23 +187,23 @@ function _cssRenderTracks() {
   el.innerHTML = _cssState.tracks.map(t => {
     const added = inEditor.has(t.id);
     return `
-      <div class="card" style="padding:var(--space-sm) var(--space-md);margin-bottom:var(--space-sm);display:flex;align-items:center;gap:var(--space-sm)">
-        <div style="flex:1;min-width:0">
-          <div style="font-weight:600;font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.title || 'Untitled')}</div>
-          <div style="font-size:0.78rem;color:var(--text-muted)">${escapeHtml(t.artist || '')}${t.duration ? ' · ' + _cssFmtDuration(t.duration) : ''}</div>
+      <div class="card css-track-card">
+        <div class="css-track-info">
+          <div class="css-track-title">${escapeHtml(t.title || 'Untitled')}</div>
+          <div class="css-track-meta">${escapeHtml(t.artist || '')}${t.duration ? ' · ' + _cssFmtDuration(t.duration) : ''}</div>
         </div>
         ${_cssState.editingPl ? `
           <button class="btn btn-sm ${added ? 'btn-outline' : 'btn-green'}"
                   onclick="cssToggleTrackInEditor('${escapeHtml(t.id)}')"
                   title="${added ? 'Remove from playlist' : 'Add to playlist'}">
-            ${added ? '✓ Added' : '+ Add'}
+            ${added ? '✓' : '+'}
           </button>` : ''}
         <button class="btn btn-ghost btn-sm" onclick="cssDeleteTrack('${escapeHtml(t.id)}')" title="Delete track" style="color:var(--neon-red)">🗑</button>
       </div>`;
   }).join('');
 }
 
-// ─── Playlist management ──────────────────────────────────
+// ─── Playlist management ─────────────────────────────────
 window.cssRefreshPlaylists = async function () {
   const el = document.getElementById('csstudio-playlists-area');
   if (!el) return;
@@ -215,38 +224,41 @@ window.cssRefreshPlaylists = async function () {
 function _cssRenderPlaylists() {
   const el = document.getElementById('csstudio-playlists-area');
   if (!el) return;
+
   if (!_cssState.playlists.length) {
     el.innerHTML = `
-      <div class="card" style="text-align:center;border-color:var(--border-subtle)">
-        <p style="font-size:1.5rem;margin-bottom:var(--space-sm)">📂</p>
+      <div class="card css-empty-state">
+        <p class="css-empty-icon">📂</p>
         <p style="color:var(--text-secondary);margin-bottom:var(--space-md)">No playlists yet. Create one to start your broadcast.</p>
         <button class="btn btn-primary btn-sm" onclick="cssCreatePlaylist()">➕ Create Playlist</button>
       </div>`;
     return;
   }
+
   el.innerHTML = _cssState.playlists.map(pl => {
     const isEditing = _cssState.editingPl && _cssState.editingPl.id === pl.id;
     const count = (pl.trackIds || []).length;
     return `
-      <div class="card" style="padding:var(--space-sm) var(--space-md);margin-bottom:var(--space-sm);border-color:${isEditing ? 'var(--neon-blue)' : 'var(--border-subtle)'}">
-        <div style="display:flex;align-items:center;gap:var(--space-sm)">
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;font-size:0.9rem">${escapeHtml(pl.name || 'Untitled Playlist')}</div>
-            <div style="font-size:0.78rem;color:var(--text-muted)">${count} track${count !== 1 ? 's' : ''}</div>
+      <div class="card css-pl-card" style="border-color:${isEditing ? 'var(--neon-blue)' : 'var(--border-subtle)'}">
+        <div class="css-pl-row">
+          <div class="css-pl-info">
+            <div class="css-pl-name">${escapeHtml(pl.name || 'Untitled Playlist')}</div>
+            <div class="css-pl-meta">${count} track${count !== 1 ? 's' : ''}</div>
           </div>
-          <button class="btn btn-sm ${isEditing ? 'btn-primary' : 'btn-outline'}"
-                  onclick="cssEditPlaylist('${escapeHtml(pl.id)}')">
-            ${isEditing ? '✏️ Editing' : '✏️ Edit'}
-          </button>
-          <button class="btn btn-ghost btn-sm" onclick="cssDeletePlaylist('${escapeHtml(pl.id)}')" title="Delete playlist" style="color:var(--neon-red)">🗑</button>
+          <div class="css-pl-actions">
+            <button class="btn btn-sm ${isEditing ? 'btn-primary' : 'btn-outline'}"
+                    onclick="cssEditPlaylist('${escapeHtml(pl.id)}')">
+              ✏️ ${isEditing ? 'Editing' : 'Edit'}
+            </button>
+            <button class="btn btn-ghost btn-sm" onclick="cssDeletePlaylist('${escapeHtml(pl.id)}')" title="Delete playlist" style="color:var(--neon-red)">🗑</button>
+          </div>
         </div>
       </div>`;
   }).join('');
 }
 
-// ─── Create playlist ────────────────────────────────────
+// ─── Create playlist ─────────────────────────────────────
 window.cssCreatePlaylist = function () {
-  // Remove any stale modal
   document.getElementById('css-create-pl-modal')?.remove();
 
   const backdrop = document.createElement('div');
@@ -299,7 +311,6 @@ window.cssConfirmCreatePlaylist = async function () {
     );
     document.getElementById('css-create-pl-modal')?.remove();
     await cssRefreshPlaylists();
-    // Open the new playlist for editing automatically
     cssEditPlaylist(ref.id);
     Toast.success(`Playlist "${name}" created!`);
   } catch (err) {
@@ -307,18 +318,17 @@ window.cssConfirmCreatePlaylist = async function () {
   }
 };
 
-// ─── Edit playlist ──────────────────────────────────────
+// ─── Edit playlist ───────────────────────────────────────
 window.cssEditPlaylist = function (plId) {
   const pl = _cssState.playlists.find(p => p.id === plId);
   if (!pl) return;
-  // Clone so we can edit locally without committing
   _cssState.editingPl = { id: pl.id, name: pl.name, trackIds: [...(pl.trackIds || [])] };
-  // Re-render the library to show +/- buttons
   _cssRenderTracks();
   _cssRenderPlaylists();
   _cssRenderEditor();
-  document.getElementById('csstudio-editor').style.display = '';
-  document.getElementById('csstudio-editor').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  const editor = document.getElementById('csstudio-editor');
+  editor.style.display = '';
+  editor.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 };
 
 window.cssCloseEditor = function () {
@@ -336,9 +346,10 @@ function _cssRenderEditor() {
   if (!body) return;
 
   if (!pl.trackIds.length) {
-    body.innerHTML = `<p style="color:var(--text-muted);font-size:0.85rem;text-align:center;padding:var(--space-lg)">No tracks yet. Add tracks from the Cloud Library on the left.</p>`;
+    body.innerHTML = `<p style="color:var(--text-muted);font-size:0.85rem;text-align:center;padding:var(--space-lg)">No tracks yet. Add tracks from the Cloud Library above.</p>`;
     return;
   }
+
   const trackMap = new Map(_cssState.tracks.map(t => [t.id, t]));
   body.innerHTML = `
     <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:var(--space-md)">${pl.trackIds.length} track${pl.trackIds.length !== 1 ? 's' : ''} · Drag to reorder</p>
@@ -346,12 +357,11 @@ function _cssRenderEditor() {
     ${pl.trackIds.map((tid, i) => {
       const t = trackMap.get(tid) || { title: 'Unknown Track', artist: '' };
       return `
-        <div class="card" data-trackid="${escapeHtml(tid)}"
-             style="padding:var(--space-sm) var(--space-md);margin-bottom:6px;display:flex;align-items:center;gap:var(--space-sm)">
-          <span style="color:var(--text-muted);font-size:0.78rem;min-width:24px">${i + 1}</span>
-          <div style="flex:1;min-width:0">
-            <div style="font-weight:600;font-size:0.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(t.title || 'Untitled')}</div>
-            <div style="font-size:0.75rem;color:var(--text-muted)">${escapeHtml(t.artist || '')}${t.duration ? ' · ' + _cssFmtDuration(t.duration) : ''}</div>
+        <div class="card css-editor-row" data-trackid="${escapeHtml(tid)}">
+          <span style="color:var(--text-muted);font-size:0.78rem;min-width:20px;flex-shrink:0">${i + 1}</span>
+          <div class="css-editor-row-info">
+            <div class="css-editor-row-title">${escapeHtml(t.title || 'Untitled')}</div>
+            <div class="css-editor-row-meta">${escapeHtml(t.artist || '')}${t.duration ? ' · ' + _cssFmtDuration(t.duration) : ''}</div>
           </div>
           <button class="btn btn-ghost btn-sm" onclick="cssMoveTrackUp('${escapeHtml(tid)}')" title="Move up" ${i === 0 ? 'disabled' : ''}>▲</button>
           <button class="btn btn-ghost btn-sm" onclick="cssMoveTrackDown('${escapeHtml(tid)}')" title="Move down" ${i === pl.trackIds.length - 1 ? 'disabled' : ''}>▼</button>
@@ -392,7 +402,7 @@ window.cssMoveTrackDown = function (trackId) {
   _cssRenderEditor();
 };
 
-// ─── Save playlist ──────────────────────────────────────
+// ─── Save playlist ───────────────────────────────────────
 window.cssSavePlaylist = async function () {
   const pl = _cssState.editingPl;
   if (!pl) return;
@@ -403,11 +413,8 @@ window.cssSavePlaylist = async function () {
       { name: pl.name, trackIds: pl.trackIds, updatedAt: serverTimestamp() },
       { merge: true }
     );
-    // Update local state
     const idx = _cssState.playlists.findIndex(p => p.id === pl.id);
-    if (idx !== -1) {
-      _cssState.playlists[idx].trackIds = [...pl.trackIds];
-    }
+    if (idx !== -1) _cssState.playlists[idx].trackIds = [...pl.trackIds];
     Toast.success(`Playlist "${pl.name}" saved!`);
     _cssRenderPlaylists();
     _cssRenderEditor();
@@ -416,7 +423,7 @@ window.cssSavePlaylist = async function () {
   }
 };
 
-// ─── Delete playlist ─────────────────────────────────────
+// ─── Delete playlist ──────────────────────────────────────
 window.cssDeletePlaylist = async function (plId) {
   const pl = _cssState.playlists.find(p => p.id === plId);
   if (!pl) return;
@@ -431,13 +438,13 @@ window.cssDeletePlaylist = async function (plId) {
     }
     _cssRenderPlaylists();
     _cssRenderTracks();
-    Toast.success(`Playlist deleted.`);
+    Toast.success('Playlist deleted.');
   } catch (err) {
     alert('Could not delete: ' + err.message);
   }
 };
 
-// ─── Delete track ────────────────────────────────────────
+// ─── Delete track ─────────────────────────────────────────
 window.cssDeleteTrack = async function (trackId) {
   const t = _cssState.tracks.find(tr => tr.id === trackId);
   if (!t) return;
@@ -446,7 +453,6 @@ window.cssDeleteTrack = async function (trackId) {
     const { db, doc, deleteDoc } = await _cssGetFs();
     await deleteDoc(doc(db, 'cloudStreamTracks', _cssState.uid, 'tracks', trackId));
     _cssState.tracks = _cssState.tracks.filter(tr => tr.id !== trackId);
-    // Also remove from editing playlist if present
     if (_cssState.editingPl) {
       _cssState.editingPl.trackIds = _cssState.editingPl.trackIds.filter(id => id !== trackId);
     }
@@ -465,7 +471,6 @@ window.cssGoLive = function () {
 
 window.cssUploadMusic = function () {
   navigateTo('music');
-  // Switch to upload tab after render
   setTimeout(() => {
     if (typeof musicTabSwitch === 'function') musicTabSwitch('upload');
   }, 400);
@@ -474,9 +479,9 @@ window.cssUploadMusic = function () {
 // ─── Utility ─────────────────────────────────────────────
 function _cssFmtDuration(secs) {
   if (!secs || secs <= 0) return '0:00';
-  const h = Math.floor(secs / 3600);
-  const m = Math.floor((secs % 3600) / 60);
-  const s = Math.floor(secs % 60);
+  const h   = Math.floor(secs / 3600);
+  const m   = Math.floor((secs % 3600) / 60);
+  const s   = Math.floor(secs % 60);
   const pad = n => (n < 10 ? '0' : '') + n;
   return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
 }

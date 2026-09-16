@@ -1,0 +1,347 @@
+/**
+ * AVENORA — Creator Studio CSS
+ * Mobile-first. Fixes the two-column cut-off on phones.
+ * Tested breakpoints: 320 px, 360 px, 390 px, 412 px, desktop.
+ */
+
+/* ═══════════════════════════════════════════════════════
+   OUTER WRAPPER
+   ═══════════════════════════════════════════════════════ */
+
+.csstudio-page {
+  padding: var(--space-md);
+  max-width: 1100px;
+  margin: 0 auto;
+  /* Hard stop: nothing inside this wrapper may cause h-scroll */
+  box-sizing: border-box;
+  width: 100%;
+  overflow-x: hidden;
+}
+
+@media (min-width: 480px) {
+  .csstudio-page {
+    padding: var(--space-lg);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   PAGE HEADER
+   ═══════════════════════════════════════════════════════ */
+
+.csstudio-header {
+  padding-top: var(--space-xl);
+  padding-bottom: var(--space-md);
+  text-align: center;
+}
+
+.csstudio-title {
+  font-family: var(--font-display);
+  letter-spacing: 0.1em;
+  margin-bottom: 4px;
+  /* clamp prevents giant text on 320 px while staying readable */
+  font-size: clamp(1.3rem, 5vw, 2.4rem);
+  line-height: 1.2;
+  word-break: break-word;
+}
+
+.csstudio-tagline {
+  font-family: var(--font-display);
+  font-size: clamp(0.65rem, 2.5vw, 0.95rem);
+  letter-spacing: clamp(0.1em, 1.5vw, 0.3em);
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+/* ═══════════════════════════════════════════════════════
+   ACTION BUTTON BAR
+   ═══════════════════════════════════════════════════════ */
+
+.csstudio-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xl);
+}
+
+/* Each action button fills a minimum comfortable width on mobile */
+.csstudio-actions .btn {
+  flex: 1 1 140px;    /* grow, shrink, base-width */
+  justify-content: center;
+  white-space: normal; /* allow wrapping inside the button if needed */
+  text-align: center;
+  min-height: 44px;
+}
+
+@media (min-width: 480px) {
+  .csstudio-actions .btn {
+    flex: 0 1 auto;    /* let them be natural width on larger screens */
+    white-space: nowrap;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   TWO-PANEL GRID  (Library | Playlists)
+   THE ROOT CAUSE OF THE CUT-OFF — fixed here:
+   Mobile: single column. Desktop: 1fr / 1.4fr side by side.
+   ═══════════════════════════════════════════════════════ */
+
+.csstudio-panels {
+  display: grid;
+  grid-template-columns: 1fr;   /* ← single column on ALL phones */
+  gap: var(--space-xl);
+}
+
+/* Only go two-column once the viewport is wide enough for both panels */
+@media (min-width: 768px) {
+  .csstudio-panels {
+    grid-template-columns: 1fr 1.4fr;
+  }
+}
+
+/* Both grid children must respect the grid cell boundary */
+.csstudio-panel {
+  min-width: 0;             /* CRITICAL: allows flex/grid children to shrink */
+  overflow: hidden;         /* belt-and-suspenders */
+  box-sizing: border-box;
+  width: 100%;
+}
+
+/* ═══════════════════════════════════════════════════════
+   SECTION HEADER INSIDE PANELS
+   ═══════════════════════════════════════════════════════ */
+
+.csstudio-section-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-md);
+  gap: var(--space-sm);
+  flex-wrap: wrap;       /* let the button drop below on tiny screens */
+  row-gap: var(--space-xs);
+}
+
+.csstudio-section-hdr .section-title {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+/* ═══════════════════════════════════════════════════════
+   TRACK / PLAYLIST CARDS
+   ═══════════════════════════════════════════════════════ */
+
+/* Common track-row inside #csstudio-tracks-list */
+.css-track-card {
+  padding: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-sm);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;         /* must not overflow the panel */
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.css-track-info {
+  flex: 1;
+  min-width: 0;         /* allows ellipsis on long titles */
+}
+
+.css-track-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.css-track-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Action buttons inside track cards — never force the card wider */
+.css-track-card .btn {
+  flex-shrink: 0;
+}
+
+/* Playlist cards */
+.css-pl-card {
+  padding: var(--space-sm) var(--space-md);
+  margin-bottom: var(--space-sm);
+  min-width: 0;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.css-pl-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  flex-wrap: wrap;      /* let action buttons wrap on very narrow screens */
+  row-gap: var(--space-xs);
+}
+
+.css-pl-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.css-pl-name {
+  font-weight: 600;
+  font-size: 0.9rem;
+  /* wrap instead of overflow — playlist names should be fully readable */
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+
+.css-pl-meta {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+/* Keep action buttons from pushing card wider */
+.css-pl-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  flex-shrink: 0;
+}
+
+/* ═══════════════════════════════════════════════════════
+   PLAYLIST EDITOR
+   ═══════════════════════════════════════════════════════ */
+
+.csstudio-editor {
+  margin-top: var(--space-2xl);
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.csstudio-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-lg);
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+  row-gap: var(--space-xs);
+}
+
+.csstudio-editor-title {
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  font-size: clamp(0.95rem, 3.5vw, 1.3rem);
+}
+
+.csstudio-editor-btns {
+  display: flex;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+/* Editor track rows */
+.css-editor-row {
+  padding: var(--space-sm) var(--space-md);
+  margin-bottom: 6px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.css-editor-row-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.css-editor-row-title {
+  font-weight: 600;
+  font-size: 0.88rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.css-editor-row-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* ═══════════════════════════════════════════════════════
+   EMPTY STATES
+   ═══════════════════════════════════════════════════════ */
+
+.css-empty-state {
+  text-align: center;
+  border-color: var(--border-subtle);
+  padding: var(--space-xl) var(--space-md);
+}
+
+.css-empty-icon {
+  font-size: 1.5rem;
+  margin-bottom: var(--space-sm);
+}
+
+/* ═══════════════════════════════════════════════════════
+   AUTH GATE
+   ═══════════════════════════════════════════════════════ */
+
+.csstudio-auth-gate {
+  text-align: center;
+  padding: var(--space-2xl) var(--space-md);
+  border-color: var(--border-blue);
+}
+
+/* ═══════════════════════════════════════════════════════
+   BOTTOM NAV CLEARANCE
+   When the page is rendered inside .has-mobile-nav, the
+   global rule already adds 70 px padding-bottom to
+   .page-wrapper — no extra work needed here.
+   ═══════════════════════════════════════════════════════ */
+
+/* ═══════════════════════════════════════════════════════
+   EXTRA-SMALL PHONES (≤ 374 px)
+   ═══════════════════════════════════════════════════════ */
+
+@media (max-width: 374px) {
+  .csstudio-page {
+    padding: var(--space-sm);
+  }
+
+  .csstudio-title {
+    font-size: clamp(1.1rem, 7vw, 1.5rem);
+    letter-spacing: 0.06em;
+  }
+
+  .csstudio-tagline {
+    font-size: 0.6rem;
+    letter-spacing: 0.12em;
+  }
+
+  /* Stack action buttons fully on 320 px */
+  .csstudio-actions .btn {
+    flex: 1 1 100%;
+  }
+
+  .css-track-card,
+  .css-pl-card,
+  .css-editor-row {
+    padding: var(--space-xs) var(--space-sm);
+  }
+}
