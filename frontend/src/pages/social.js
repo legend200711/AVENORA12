@@ -273,6 +273,22 @@ const SNFeed = {
       container.innerHTML = `<div class="loading-state"><div class="spinner spinner-lg"></div><span>Loading Avenora Feed…</span></div>`;
     }
 
+    // Wait for Firebase auth to settle before loading the feed.
+    // Attempting Firestore queries while auth is loading can cause
+    // permission-denied errors even for publicly readable collections.
+    if (LegendState && LegendState.get('authLoading') === true) {
+      await new Promise((resolve) => {
+        const unsub = LegendState.subscribe('authLoading', (loading) => {
+          if (!loading) {
+            if (typeof unsub === 'function') unsub();
+            resolve();
+          }
+        });
+        // Safety timeout — proceed after 8 s regardless
+        setTimeout(() => { if (typeof unsub === 'function') unsub(); resolve(); }, 8000);
+      });
+    }
+
     try {
       const data = await LegendAPI.posts.feed(page);
       const posts = data.posts || [];
@@ -309,9 +325,12 @@ const SNFeed = {
     } catch (err) {
       console.warn('[AVN] Feed load error:', err);
       const isNetwork = err.message === 'Failed to fetch' || err.message?.includes('NetworkError') || err.message?.includes('net::ERR');
+      const isPermission = err.code === 'permission-denied' || err.message?.includes('permission');
       const display = isNetwork
         ? 'Could not connect. Check your connection and try again.'
-        : 'The feed is temporarily unavailable. Please try again.';
+        : isPermission
+          ? 'Could not load posts. Please sign in and try again.'
+          : 'Something went wrong loading the feed. Try again in a moment.';
       if (page === 1) {
         showError(container, display, () => SNFeed.load(1));
       } else {
@@ -331,6 +350,16 @@ const SNPost = {
     // Firestore returns `id` (not `_id`); support both for backward compat
     const postId = post._id || post.id || '';
     post._id = postId; // normalise so template references work
+
+    // Normalise author shape — Firestore posts may omit `profile` sub-object
+    // (older posts were written with a flat author structure).
+    if (post.author && !post.author.profile) {
+      post.author.profile = {
+        displayName: post.author.displayName || post.author.username || '',
+        avatarUrl:   post.author.avatarUrl || null,
+      };
+    }
+
     const el = document.createElement('article');
     el.className = 'sn-card sn-post';
     el.dataset.postId = postId;
@@ -845,9 +874,18 @@ const SNStories = {
       const data = await LegendAPI.stories.feed();
       const stories = data.stories || [];
 
-      // Filter client-side to ensure only non-expired stories shown
+      // Filter client-side to only show stories from the last 24 hours.
+      // Firestore stories do not have an `expiresAt` field — we compute expiry
+      // from `createdAt` (24h window).  Guard against missing/invalid timestamps.
       const now = Date.now();
-      const active = stories.filter(s => new Date(s.expiresAt).getTime() > now);
+      const MS_24H = 24 * 60 * 60 * 1000;
+      const active = stories.filter(s => {
+        // Prefer expiresAt if present (REST backend), otherwise derive from createdAt
+        if (s.expiresAt) return new Date(s.expiresAt).getTime() > now;
+        const created = _tsToDate(s.createdAt);
+        if (!created) return true; // no timestamp → include
+        return (now - created.getTime()) < MS_24H;
+      });
 
       if (!active.length && list) {
         list.innerHTML = '';

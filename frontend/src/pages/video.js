@@ -1536,6 +1536,17 @@ function initUploadForm() {
     if (e.target.files[0]) handleVideoFile(e.target.files[0]);
   });
 
+  // Click on the drop zone opens the file picker (the file input itself is hidden)
+  if (dropZone) {
+    dropZone.addEventListener('click', (e) => {
+      // Only trigger when clicking the zone itself or its non-input children
+      if (e.target !== videoInput) videoInput?.click();
+    });
+    dropZone.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); videoInput?.click(); }
+    });
+  }
+
   // Drag & drop
   if (dropZone) {
     dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
@@ -1582,8 +1593,10 @@ function initUploadForm() {
 
   // Form submit — uploads directly to Firebase Storage, then writes metadata to Firestore.
   // This replaces the previous XHR-to-backend approach which required an unreachable API server.
+  let _uploadInProgress = false;
   form?.addEventListener('submit', async e => {
     e.preventDefault();
+    if (_uploadInProgress) return; // prevent duplicate submission on multiple taps
     const title = titleInput?.value.trim();
     if (!title) { Toast.warning('Please enter a title.'); titleInput?.focus(); return; }
     if (!selectedVideoFile) { Toast.warning('Please select a video file.'); return; }
@@ -1596,6 +1609,7 @@ function initUploadForm() {
     const resultEl      = document.getElementById('som-upload-result');
     const uploadBtn     = document.getElementById('som-upload-btn');
 
+    _uploadInProgress = true;
     progressWrap.style.display = 'block';
     resultEl.style.display = 'none';
     uploadBtn.disabled = true;
@@ -1702,6 +1716,7 @@ function initUploadForm() {
         </div>
       `;
 
+      _uploadInProgress = false;
       uploadBtn.textContent = 'UPLOAD ANOTHER';
       uploadBtn.disabled = false;
       form.reset();
@@ -1711,6 +1726,7 @@ function initUploadForm() {
       if (preview) preview.style.display = 'none';
 
     } catch (err) {
+      _uploadInProgress = false;
       progressWrap.style.display = 'none';
       uploadBtn.disabled = false;
       uploadBtn.textContent = 'UPLOAD VIDEO';

@@ -108,18 +108,56 @@ registerPage('cloudstudio', {
       </div><!-- /.csstudio-page -->
     `;
 
-    // ── Bootstrap ────────────────────────────────────────
-    const user = window.AvenoraFirebase?.Auth?.getUser?.();
+    // ── Bootstrap ─────────────────────────────────────────────────────────
+    // listenAuthState returns a Promise that resolves only after the first
+    // onAuthStateChanged callback fires (i.e. after Firebase has confirmed
+    // whether a persisted session exists).  We must wait for that before
+    // deciding whether to show the auth gate — otherwise we always show it
+    // because getUser() returns null while Firebase is still restoring.
+
+    // Show loading spinner while we wait
+    document.getElementById('csstudio-loading').style.display = 'flex';
+    document.getElementById('csstudio-app').style.display    = 'none';
+    document.getElementById('csstudio-auth-gate').style.display = 'none';
+
+    // Attempt to get the user synchronously first (fast path when already known)
+    let user = window.AvenoraFirebase?.Auth?.getUser?.() || null;
+
+    if (!user && window.AvenoraFirebase?.Auth?.listenAuthState) {
+      // Wait for Firebase to resolve the persisted session (fires once)
+      await new Promise((resolve) => {
+        // If auth is already resolved (authLoading=false) get the user directly
+        if (LegendState && LegendState.get('authLoading') === false) {
+          user = window.AvenoraFirebase.Auth.getUser();
+          return resolve();
+        }
+        // Otherwise subscribe; the listener fires and resolves the promise
+        const unsub = LegendState?.subscribe?.('user', (u) => {
+          user = u;
+          if (typeof unsub === 'function') unsub();
+          resolve();
+        });
+        // Safety timeout — if state subscription never fires, proceed after 5 s
+        setTimeout(() => {
+          if (typeof unsub === 'function') unsub();
+          user = window.AvenoraFirebase?.Auth?.getUser?.() || null;
+          resolve();
+        }, 5000);
+      });
+    }
+
     if (!user) {
       document.getElementById('csstudio-loading').style.display = 'none';
       document.getElementById('csstudio-auth-gate').style.display = '';
-      window.AvenoraFirebase?.Auth?.listenAuthState?.((u) => {
+      // Listen for sign-in so we can initialize without a page reload
+      const authUnsub = LegendState?.subscribe?.('user', async (u) => {
         if (u) {
+          if (typeof authUnsub === 'function') authUnsub();
           document.getElementById('csstudio-auth-gate').style.display = 'none';
-          _cssInit(u);
+          await _cssInit(u);
         }
       });
-      return () => {};
+      return () => { if (typeof authUnsub === 'function') authUnsub(); };
     }
 
     await _cssInit(user);

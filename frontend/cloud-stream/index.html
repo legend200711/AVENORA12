@@ -33,7 +33,10 @@
      HEADER
 ════════════════════════════════════════════════════ -->
 <header class="csr-header">
-  <a class="csr-back-btn" href="../index.html#cloudstream" aria-label="Back to AVENORA">&#8592; AVENORA</a>
+  <!-- Back link: when loaded as an iframe inside the SPA, clicking this
+       navigates the parent frame back to the cloudstream hash-route.
+       When opened as a standalone page the href falls back to index.html. -->
+  <a class="csr-back-btn" id="csrBackBtn" href="../index.html#cloudstream" aria-label="Back to AVENORA">&#8592; AVENORA</a>
   <div class="csr-header-center">
     <div class="csr-logo">&#9925;</div>
     <div>
@@ -52,7 +55,7 @@
     <div class="csr-card-icon">&#128274;</div>
     <div class="csr-card-title">Sign In Required</div>
     <p class="csr-card-desc">Please sign in to Avenora to manage or listen to Cloud Radio broadcasts.</p>
-    <a class="csr-btn csr-btn-primary" href="../index.html#cloudstream">&#8592; Back to AVENORA</a>
+    <a class="csr-btn csr-btn-primary" id="csrAuthGateBackBtn" href="../index.html#cloudstream">&#8592; Back to AVENORA</a>
   </div>
 </div>
 

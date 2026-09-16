@@ -54,6 +54,34 @@ const _db   = getFirestore(_app);
 
 setPersistence(_auth, browserLocalPersistence).catch(() => {});
 
+/* ── Correct back-button href at runtime using the basePath ─────────────
+   On GitHub Pages (/AVENORA1/) the relative "../index.html" falls back
+   to the correct URL.  But when the parent SPA is open we want to navigate
+   the parent frame instead of doing a full page reload.
+   When inside an iframe, intercept the click and use parent.navigateTo.       */
+(function _fixBackLinks() {
+  const fixLink = (id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('click', (e) => {
+      if (window.parent && window.parent !== window && typeof window.parent.navigateTo === 'function') {
+        e.preventDefault();
+        window.parent.navigateTo('cloudstream');
+      }
+    });
+    // Also patch href for correct basePath
+    const base =
+      (window.parent && window.parent !== window && window.parent.AVENORA_BUILD?.basePath) ||
+      window.AVENORA_BUILD?.basePath || '/';
+    el.href = base.replace(/\/$/, '') + '/index.html#cloudstream';
+  };
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => { fixLink('csrBackBtn'); fixLink('csrAuthGateBackBtn'); });
+  } else {
+    fixLink('csrBackBtn'); fixLink('csrAuthGateBackBtn');
+  }
+})();
+
 /* ── Avenora Backend URL ─────────────────────────────────────────────── */
 // Resolved from runtime config (set by index.html or the page that hosts this).
 // If not configured, cloud stream API calls will log a clear error.
@@ -148,37 +176,50 @@ async function _startApp(user) {
   }
 }
 
+// Tracks the pending auth-gate timer so it can be cancelled when auth resolves.
+let _authGateTimer = null;
+
 onAuthStateChanged(_auth, async user => {
+  // Cancel any pending auth-gate timer the moment Firebase resolves auth state.
+  if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
+
   if (user) {
     await _startApp(user);
   } else if (!_appInitialised) {
-    // Firebase didn't restore a session yet — keep the loading spinner
-    // visible for a moment to allow the postMessage token path to fire first.
-    // If no token arrives within 3 s, show the auth gate.
-    setTimeout(() => {
+    // Firebase persistence is async — the first `null` callback can mean
+    // "still checking localStorage" rather than "definitely logged out".
+    // Wait 6 s for the parent SPA's postMessage token to arrive, or for a
+    // subsequent onAuthStateChanged(user) to fire, before showing the auth gate.
+    _authGateTimer = setTimeout(() => {
+      _authGateTimer = null;
       if (!_appInitialised) {
         _show('csrLoading', false);
         _show('csrAuthGate', true);
         _show('csrApp', false);
         _setAuthBadge('Sign In');
       }
-    }, 3000);
+    }, 6000);
   }
 });
 
 // If this page is embedded as an iframe inside the AVENORA SPA, the parent
 // sends the current Firebase ID token via postMessage immediately after the
-// iframe loads.  We use signInWithCustomToken here — but since we only have
-// an ID token (not a custom token), we simply ignore it; having the same SDK
-// version means Firebase will already share the localStorage session.
-// The postMessage is kept as a signal to suppress the auth-gate timeout.
+// iframe loads.  Both pages use Firebase SDK 10.12.2 with browserLocalPersistence,
+// so they share the same auth session via localStorage automatically.
+// The postMessage is an additional signal: if Firebase hasn't resolved auth yet
+// we cancel the gate timer early because we know the user IS signed in.
 window.addEventListener('message', async (event) => {
   try {
     if (!event.data || event.data.type !== 'AVN_AUTH_TOKEN') return;
-    // Parent confirmed the user is signed in — cancel the auth-gate timer
-    // by marking initialised if auth hasn't fired yet.
-    // The real sign-in is via shared localStorage (same SDK version as parent).
-    // Nothing else to do here; onAuthStateChanged will fire with the user.
+    // Parent confirmed the user is signed in.
+    // Cancel the gate timer — onAuthStateChanged will fire with the user shortly.
+    if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
+    // If auth still hasn't resolved but we trust the parent's token,
+    // extend the loading window rather than showing the auth gate.
+    if (!_appInitialised) {
+      _show('csrLoading', true);
+      _show('csrAuthGate', false);
+    }
   } catch (_) {}
 });
 

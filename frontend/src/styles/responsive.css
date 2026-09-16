@@ -1379,3 +1379,76 @@ svg {
     transition: none;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   UPLOAD FORMS — MOBILE FIXES (music + video)
+   The music upload uses an inline grid-template-columns: 1fr 1fr
+   which cannot be overridden without a higher-specificity selector.
+   ═══════════════════════════════════════════════════════════ */
+
+@media (max-width: 599px) {
+  /* Music upload form: collapse the title/artist/album/genre 2-col grid */
+  #music-upload-form > div[style*="grid-template-columns:1fr 1fr"],
+  #music-upload-form > div[style*="grid-template-columns: 1fr 1fr"] {
+    display: block !important;
+  }
+  #music-upload-form > div[style*="grid-template-columns:1fr 1fr"] > .form-group,
+  #music-upload-form > div[style*="grid-template-columns: 1fr 1fr"] > .form-group {
+    margin-bottom: var(--space-md);
+  }
+
+  /* Music drop zone — taller touch target on phones */
+  .music-upload-zone {
+    min-height: 120px;
+    padding: var(--space-lg) var(--space-md) !important;
+    cursor: pointer;
+  }
+
+  /* Video drop zone */
+  .midnight-upload-zone {
+    min-height: 120px;
+    padding: var(--space-lg) var(--space-md);
+    cursor: pointer;
+  }
+
+  /* Video upload visibility radio row — stack vertically */
+  #som-upload-form div[style*="display:flex;gap"] label {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    flex: unset;
+    width: 100%;
+    padding: var(--space-xs) 0;
+    min-height: 44px;
+  }
+
+  /* Cloud stream iframe wrapper — comfortable height on phones */
+  #csr-frame {
+    height: calc(100svh - 120px) !important;
+    min-height: 500px !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   VIDEO DROP ZONE — prevent the hidden file input from
+   creating a phantom click target on iOS Safari
+   ═══════════════════════════════════════════════════════════ */
+
+#som-drop-zone > input[type="file"] {
+  /* Visually hidden but functionally accessible via JS click() */
+  position: absolute;
+  width: 0;
+  height: 0;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+/* Make the entire drop zone visually a button on touch devices */
+@media (hover: none) {
+  .midnight-upload-zone,
+  .music-upload-zone {
+    -webkit-tap-highlight-color: rgba(184,149,75,0.2);
+    user-select: none;
+  }
+}

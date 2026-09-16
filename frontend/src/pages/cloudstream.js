@@ -41,7 +41,7 @@ registerPage('cloudstream', {
           <iframe
             id="csr-frame"
             src="${src}"
-            style="width:100%;min-height:85vh;border:none;display:block"
+            style="width:100%;height:calc(100svh - 130px);min-height:600px;border:none;display:block"
             allow="camera; microphone; autoplay; clipboard-write"
             title="Avenora 24-Hour Cloud Stream"
             loading="lazy"
