@@ -618,62 +618,56 @@
   };
 
   // ═══════════════════════════════════════════════════════════════
-  // STORAGE
+  // STORAGE — delegated to AvenoraStorage (Supabase backend proxy)
   // ═══════════════════════════════════════════════════════════════
-  let _storage = null;
-
-  async function getStorageInstance() {
-    if (_storage) return _storage;
-    const app = await getApp();
-    const { getStorage } = await loadModule('storage');
-    _storage = getStorage(app);
-    return _storage;
-  }
 
   /**
-   * AvenoraFirebase.Storage — replaces the multipart-upload endpoints
-   * in UploadAPI. Returns the public download URL.
+   * AvenoraFirebase.Storage
+   *
+   * Delegates all file operations to AvenoraStorage (supabase.js).
+   * The service-role key lives only on the backend — the browser
+   * never directly contacts Supabase.
+   *
+   * This shim preserves the existing call-site API so pages that
+   * previously called AvenoraFirebase.Storage.upload() continue
+   * to work without changes.
    */
   const StorageService = {
-    async upload(path, file, onProgress) {
-      const storage = await getStorageInstance();
-      const { ref, uploadBytesResumable, getDownloadURL } = await loadModule('storage');
-      const storageRef = ref(storage, path);
-      return new Promise((resolve, reject) => {
-        const task = uploadBytesResumable(storageRef, file);
-        task.on('state_changed',
-          (snap) => {
-            if (onProgress) onProgress(Math.round((snap.bytesTransferred / snap.totalBytes) * 100));
-          },
-          reject,
-          async () => {
-            const url = await getDownloadURL(task.snapshot.ref);
-            resolve(url);
-          }
-        );
-      });
+    /**
+     * Generic upload.
+     * @param {string} category  — 'avatar' | 'image' | 'audio' | 'video' | 'thumbnail'
+     * @param {File}   file
+     * @param {Function} [onProgress]
+     * @returns {Promise<string>} — the URL (signed or public)
+     */
+    async upload(category, file, onProgress) {
+      if (!global.AvenoraStorage) throw new Error('AvenoraStorage (supabase.js) not loaded');
+      const result = await global.AvenoraStorage.upload(category, file, onProgress);
+      return result.url;
     },
 
     async uploadAvatar(file, onProgress) {
-      const user = LegendState.get('user');
-      if (!user) throw new Error('Not authenticated');
-      const ext = file.name.split('.').pop();
-      return StorageService.upload(`avatars/${user.id}.${ext}`, file, onProgress);
+      if (!global.AvenoraStorage) throw new Error('AvenoraStorage not loaded');
+      const result = await global.AvenoraStorage.uploadAvatar(file, onProgress);
+      return result.url;
     },
 
     async uploadImage(file, onProgress) {
-      const name = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-      return StorageService.upload(`images/${name}`, file, onProgress);
+      if (!global.AvenoraStorage) throw new Error('AvenoraStorage not loaded');
+      const result = await global.AvenoraStorage.uploadImage(file, onProgress);
+      return result.url;
     },
 
     async uploadAudio(file, onProgress) {
-      const name = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-      return StorageService.upload(`audio/${name}`, file, onProgress);
+      if (!global.AvenoraStorage) throw new Error('AvenoraStorage not loaded');
+      const result = await global.AvenoraStorage.uploadAudio(file, onProgress);
+      return result.url;
     },
 
     async uploadVideo(file, onProgress) {
-      const name = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-      return StorageService.upload(`videos/${name}`, file, onProgress);
+      if (!global.AvenoraStorage) throw new Error('AvenoraStorage not loaded');
+      const result = await global.AvenoraStorage.uploadVideo(file, onProgress);
+      return result.url;
     },
   };
 

@@ -1,61 +1,6 @@
-{
-  "$schema": "node_modules/wrangler/config-schema.json",
-
-  // Avenora — CloudStream Worker
-  // Provides server-side 24-hour broadcast scheduling and control
-  // Firebase project: avenora-6e147
-  //
-  // Deploy: npx wrangler deploy --config wrangler-studio.jsonc
-  // Secrets: npx wrangler secret put FIREBASE_PROJECT_ID --config wrangler-studio.jsonc
-  //          npx wrangler secret put STREAM_SECRET --config wrangler-studio.jsonc
-
-  "name": "avenora-cloudstream",
-  "main": "workers/cloudstream-worker.js",
-  "compatibility_date": "2024-09-23",
-  "account_id": "f276c4406b82d3c1e35efed1ef486235",
-
-  // ── Routes ──
-  // Workers.dev endpoint is enabled so the worker is reachable immediately.
-  // To add a custom domain (e.g. cloudstream.avenora.app), add a
-  // Custom Domain in the Cloudflare dashboard: Workers > avenora-cloudstream > Settings > Domains & Routes
-  "workers_dev": true,
-
-  // ── KV Namespace for stream state ──
-  // Create with: npx wrangler kv namespace create cloudStreamKV
-  "kv_namespaces": [
-    {
-      "binding": "cloudStreamKV",
-      "id": "f0d77e4a5397436ba8e01ebe2fd4fe9f"
-    }
-  ],
-
-  // ── Durable Objects for persistent 24-hour scheduling ──
-  "durable_objects": {
-    "bindings": [
-      {
-        "name": "CloudStreamDO",
-        "class_name": "CloudStreamScheduler"
-      }
-    ]
-  },
-
-  // ── Migrations (required for new Durable Object class) ──
-  // Free plan requires new_sqlite_classes instead of new_classes
-  "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["CloudStreamScheduler"]
-    }
-  ],
-
-  // ── Non-secret config vars ──
-  "vars": {
-    "AVENORA_ORIGIN": "https://avenora-6e147.web.app",
-    "FIREBASE_PROJECT_ID": "avenora-6e147",
-    "WORKER_ENV": "production"
-  }
-
-  // ── Secrets (set via: npx wrangler secret put <NAME> --config wrangler-studio.jsonc) ──
-  //   STREAM_SECRET     — used to sign/verify stream auth tokens
-  //   FIREBASE_API_KEY  — Firebase Web API key for project avenora-6e147 (server-side REST calls only)
-}
+// REMOVED — wrangler configuration is no longer used.
+// The CloudStream Cloudflare Worker has been removed.
+// All stream control is handled by the AVENORA backend API.
+// See SUPABASE_SETUP.md for details.
+//
+// DO NOT deploy this file.

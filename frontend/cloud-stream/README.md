@@ -6,9 +6,29 @@
 
 **24-Hour Audio Cloud Stream** — the Avenora 24-hour audio broadcasting system.
 
-A creator can go live with a server-side 24-hour audio broadcast without a camera or live video.
-Audio files are served from Cloudflare R2 (or any CDN). A Cloudflare Worker (backed by a Durable Object)
-advances the playlist automatically. Listeners receive synchronized real-time playback via Firestore.
+A creator configures a playlist, goes live, and listeners receive real-time synchronized
+playback. Audio files are served from **Supabase Storage** (music bucket). Stream state
+(Now Playing, queue, status) is stored in **Firestore**. The client advances the playlist
+automatically when each track ends — no Cloudflare Worker or Durable Object is required.
+
+---
+
+## ARCHITECTURE
+
+```
+Creator client (cloud-stream.js)
+  ├── reads studioPlaylists/{uid}/playlists + cloudStreamTracks/{uid}/tracks from Firestore
+  ├── writes cloudStreams/{streamId} (broadcast record) to Firestore
+  ├── writes studioCloudStreamMusic/{streamId} (Now Playing + full queue) to Firestore
+  └── auto-advances queue in studioCloudStreamMusic when each track ends
+
+Listener client (cloud-stream.js)
+  └── subscribes to studioCloudStreamMusic/{streamId} via onSnapshot
+        → loads and plays audio from Supabase Storage signed URLs
+
+AVENORA Backend (/api/music/upload, /api/admin/cloud-stream/*)
+  └── Supabase Storage (music, stream-media, thumbnails buckets)
+```
 
 ---
 
@@ -16,121 +36,107 @@ advances the playlist automatically. Listeners receive synchronized real-time pl
 
 **Active Firebase project: `avenora-6e147`**
 
-The Cloud Stream requires the following Firebase services:
-
 | Service | Purpose |
 |---------|---------|
-| **Firebase Authentication** | Creator sign-in; ID tokens used to authenticate API calls |
-| **Firestore** | `cloudStreams/{streamId}` — broadcast record; `studioCloudStreamMusic/{streamId}` — live Now Playing (worker-owned); `studioPlaylists/{uid}/playlists/{plId}` — creator playlist metadata; `cloudStreamTracks/{uid}/tracks/{trackId}` — creator's track library; `users/{uid}` — display name / avatar / role |
-| **Firebase SDK** | CDN-loaded `firebase/app`, `firebase/auth`, `firebase/firestore` v12.18.0 |
+| **Firebase Authentication** | Creator sign-in; persisted via `browserLocalPersistence` |
+| **Firestore** | `cloudStreams/{streamId}` — broadcast record; `studioCloudStreamMusic/{streamId}` — live Now Playing + queue; `studioPlaylists/{uid}/playlists/{plId}` — creator playlists; `cloudStreamTracks/{uid}/tracks/{trackId}` — creator track library; `users/{uid}` — display name / role |
+| **Firebase SDK** | CDN-loaded `firebase/app`, `firebase/auth`, `firebase/firestore` v10.12.2 |
 
 > **Credentials:** The Firebase config (API key, project ID, etc.) is embedded in `js/cloud-stream.js`.
 > These are web-tier, client-safe credentials. Do NOT embed Firebase Admin or service account keys here.
 
 ---
 
-## CLOUDFLARE
+## SUPABASE STORAGE
 
-| Resource | Details |
-|----------|---------|
-| **Worker name** | `avenora-cloudstream` |
-| **Worker source** | `workers/cloudstream-worker.js` |
-| **Wrangler config** | `config/wrangler-studio.jsonc` |
-| **KV Namespace** | `cloudStreamKV` — stores stream state, music queue, events |
-| **Durable Object** | `CloudStreamScheduler` class — drives 24-hour track alarm scheduling |
+Audio files are uploaded via the **AVENORA backend** (`/api/music/upload`) and stored in the
+`music` bucket in Supabase Storage. The backend uses the service-role key (never exposed to
+the browser). Signed URLs (1-hour expiry by default) are returned and stored in Firestore
+track documents.
 
-### Worker Secrets (must be set via `wrangler secret put`)
+Required environment variables in `backend/.env`:
 
 ```
-STREAM_SECRET      — Signs/verifies stream auth tokens
-FIREBASE_API_KEY   — Firebase Web API key for project avenora-6e147 (server-side Firestore REST writes only)
+SUPABASE_URL=https://<project-ref>.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key>   # server only — never in frontend
+SUPABASE_ANON_KEY=<anon-key>
 ```
 
-### Deploying the Worker
-
-```bash
-npx wrangler deploy --config config/wrangler-studio.jsonc
-
-# Set required secrets
-npx wrangler secret put STREAM_SECRET --config config/wrangler-studio.jsonc
-npx wrangler secret put FIREBASE_API_KEY --config config/wrangler-studio.jsonc
-```
+See `SUPABASE_SETUP.md` for full bucket creation and policy instructions.
 
 ---
 
-## ENTRY POINT
+## REMOVED: Cloudflare Workers / KV / Durable Objects
 
-```
-24-hour-cloud-stream/index.html
-```
+The following Cloudflare resources have been **removed** and are **no longer used**:
 
-Open `index.html` in a browser (served from any static host) or deploy the folder to a CDN / Firebase Hosting.
-Firebase Auth must be configured on the same domain, or `localhost` must be in the authorised domains list.
+| Removed Resource | Replaced By |
+|-----------------|-------------|
+| Cloudflare Worker (`avenora-cloudstream`) | Client-side Firestore writes + AVENORA backend |
+| Cloudflare KV (`cloudStreamKV`) | Firestore `studioCloudStreamMusic/{streamId}` |
+| Durable Object (`CloudStreamScheduler`) | Client-side `_autoAdvanceQueue()` in `cloud-stream.js` |
+| Cloudflare R2 storage | Supabase Storage (music bucket) |
+| `wrangler-studio.jsonc` | Deprecated — do not deploy |
+| `workers/cloudstream-worker.js` | Deprecated — do not deploy |
 
 ---
 
 ## REQUIRED FILES
 
 ```
-24-hour-cloud-stream/
+frontend/cloud-stream/
 │
 ├── index.html                         — App shell & HTML
 │
 ├── css/
-│   └── cloud-stream.css               — All UI styles (standalone, no external CSS)
+│   └── cloud-stream.css               — All UI styles (standalone)
 │
 ├── js/
 │   └── cloud-stream.js                — All client-side logic (creator + listener)
 │
 ├── workers/
-│   └── cloudstream-worker.js          — Cloudflare Worker (server-side brain)
+│   └── cloudstream-worker.js          — DEPRECATED (removal notice only, do not deploy)
 │
 ├── assets/
-│   ├── apple-touch-icon.png           — PWA icon
-│   ├── favicon.ico                    — Favicon
-│   ├── favicon-16x16.png              — Favicon 16px
-│   └── favicon-32x32.png             — Favicon 32px
+│   ├── apple-touch-icon.png
+│   ├── favicon.ico
+│   ├── favicon-16x16.png
+│   └── favicon-32x32.png
 │
 ├── config/
-│   └── wrangler-studio.jsonc          — Worker deployment config
+│   └── wrangler-studio.jsonc          — DEPRECATED (removal notice only)
 │
 └── README.md                          — This file
 ```
 
 ---
 
-## WORKER API ENDPOINTS
+## BACKEND API ENDPOINTS (AVENORA)
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| POST | `/api/stream/start` | Start a new broadcast |
-| POST | `/api/stream/stop` | Stop an active broadcast |
-| POST | `/api/stream/control` | Scene / music control actions |
-| GET  | `/api/stream/health/{streamId}` | Poll stream health + Now Playing |
-| GET  | `/api/stream/sync/{streamId}` | Listener sync (public, no auth) |
-| GET  | `/api/stream/active/{uid}` | Check if user already has an active stream |
-| POST | `/api/stream/music/set` | Replace music queue |
-| POST | `/api/stream/music/control` | Skip / pause / resume / volume |
-| GET  | `/api/stream/music/{streamId}` | Read current music state |
-| POST | `/api/admin/stream/stop` | Force-stop (founder only) |
-| GET  | `/api/admin/streams` | List all active streams (founder only) |
-| GET  | `/health` | Worker liveness check |
+| POST | `/api/music/upload` | Upload audio track to Supabase Storage |
+| GET  | `/api/music/tracks` | List music library |
+| GET  | `/api/music/tracks/:id/url` | Refresh signed URL for a private track |
+| POST | `/api/admin/cloud-stream/media/upload` | Upload to stream-media bucket (founder) |
+| GET  | `/api/admin/cloud-stream/media/library` | List stream-media bucket files (founder) |
+| GET  | `/api/stream/health/:streamId` | Poll stream health + Now Playing |
 
 ---
 
 ## TEST CHECKLIST
 
 - [ ] `index.html` opens and shows the loading spinner
-- [ ] After Firebase Auth resolves, the app shows Create Broadcast form or active stream panel
+- [ ] Firebase Auth resolves — app shows Create Broadcast form or active stream panel
 - [ ] Selecting a playlist populates the queue preview
-- [ ] Clicking GO LIVE FOR 24 HOURS starts the broadcast
+- [ ] Clicking GO LIVE FOR 24 HOURS starts the broadcast and writes to Firestore
 - [ ] Stream status panel shows LIVE badge, title, host, expiry countdown
-- [ ] Another device / account opens `index.html?id=<streamId>` and sees the listener player
+- [ ] Another device opens `index.html?id=<streamId>` and sees the listener player
 - [ ] Listener hears audio (browser autoplay may require user interaction)
-- [ ] Now Playing updates when the Durable Object alarm advances the track
+- [ ] Now Playing updates automatically when each track ends (`_autoAdvanceQueue`)
 - [ ] Skip Track advances to the next track
-- [ ] Listener count displayed in the status panel
+- [ ] Broadcast history panel lists past streams
 - [ ] Cover artwork displays if uploaded
-- [ ] END CLOUD BROADCAST stops the stream and cleans up Firestore
-- [ ] `GET /health` at the worker URL returns `{ ok: true, worker: "cloudstream", v: "1.4.0" }`
+- [ ] END CLOUD BROADCAST stops the stream and updates Firestore
 - [ ] No camera is requested at any point
+- [ ] Refreshing the page re-opens the active stream (session persists via Firebase localStorage)

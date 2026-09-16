@@ -1,7 +1,8 @@
 /**
  * Track Model — Avenora Music Hub
  * Represents a single audio track in the music library.
- * Audio files are stored in object storage (R2/S3); fileUrl is the CDN URL.
+ * Audio files are stored in Supabase Storage (music bucket).
+ * fileUrl holds a signed URL; storagePath holds the bucket path for renewal.
  */
 
 const mongoose = require('mongoose');
@@ -15,7 +16,8 @@ const trackSchema = new mongoose.Schema({
   uploader:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
 
   // Audio file
-  fileUrl:       { type: String },   // CDN / R2 URL — empty until storage connected
+  fileUrl:       { type: String },   // Signed URL — refresh via GET /api/music/tracks/:id/url
+  storagePath:   { type: String },   // Supabase Storage path (music bucket)
   fileSize:      { type: Number },   // bytes
   mimeType:      { type: String },
   duration:      { type: Number },   // seconds

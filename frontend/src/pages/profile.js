@@ -366,15 +366,16 @@ const SNProfile = {
       if (btn) { btn.disabled = true; btn.textContent = '…'; }
 
       try {
-        const data = await LegendAPI.upload.avatar(file);
-        await LegendAPI.users.updateProfile({ avatarUrl: data.url });
+        if (!window.AvenoraStorage) throw new Error('Storage service not available');
+        const result = await window.AvenoraStorage.uploadAvatar(file);
+        await LegendAPI.users.updateProfile({ avatarUrl: result.url });
         const user = LegendAPI.auth.getUser();
-        if (user) LegendState.set('user', { ...user, profile: { ...user.profile, avatarUrl: data.url } });
+        if (user) LegendState.set('user', { ...user, profile: { ...user.profile, avatarUrl: result.url } });
         Toast.success('Avatar updated!');
         navigateTo('profile');
       } catch (err) {
         console.warn('[AVN] Avatar upload error:', err);
-        Toast.error('Your avatar could not be updated. Please try again.');
+        Toast.error(err.message || 'Your avatar could not be updated. Please try again.');
       } finally {
         if (btn) { btn.disabled = false; btn.textContent = '📷'; }
       }
@@ -392,13 +393,14 @@ const SNProfile = {
       if (!file) return;
       if (file.size > 20 * 1024 * 1024) { Toast.error('Banner must be under 20 MB.'); return; }
       try {
-        const data = await LegendAPI.upload.image(file);
-        await LegendAPI.users.updateProfile({ bannerUrl: data.url });
+        if (!window.AvenoraStorage) throw new Error('Storage service not available');
+        const result = await window.AvenoraStorage.uploadImage(file);
+        await LegendAPI.users.updateProfile({ bannerUrl: result.url });
         Toast.success('Banner updated!');
         navigateTo('profile');
       } catch (err) {
         console.warn('[AVN] Banner upload error:', err);
-        Toast.error('Your banner could not be updated. Please try again.');
+        Toast.error(err.message || 'Your banner could not be updated. Please try again.');
       }
     };
     input.click();

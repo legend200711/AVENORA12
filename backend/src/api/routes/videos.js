@@ -6,8 +6,6 @@
 
 const express  = require('express');
 const router   = express.Router();
-const path     = require('path');
-const fs       = require('fs');
 const multer   = require('multer');
 
 const { authenticate, optionalAuth, requireRole } = require('../middleware/auth');
@@ -17,11 +15,9 @@ const VideoComment = require('../../models/VideoComment');
 const WatchHistory = require('../../models/WatchHistory');
 const Channel      = require('../../models/Channel');
 const Report       = require('../../models/Report');
+const storageSvc   = require('../../services/storage/supabaseStorage');
 
-// ─── Multer for video/thumbnail uploads (dev — use object storage in prod) ──
-const uploadDir = path.join(__dirname, '../../../uploads/videos');
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
-
+// ─── Multer — memory storage; files uploaded to Supabase Storage ─────────────
 const ALLOWED_VIDEO_MIME = new Set([
   'video/mp4','video/webm','video/ogg','video/quicktime','video/x-msvideo',
 ]);
@@ -31,16 +27,8 @@ const ALLOWED_IMAGE_MIME = new Set([
 const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
 const MAX_THUMB_BYTES = 5 * 1024 * 1024;         // 5 MB
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase().replace(/[^.a-z0-9]/g,'');
-    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
-  },
-});
-
 const videoUpload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: MAX_VIDEO_BYTES },
   fileFilter(req, file, cb) {
     if (file.fieldname === 'video' && !ALLOWED_VIDEO_MIME.has(file.mimetype)) {
@@ -122,15 +110,31 @@ router.post('/upload', authenticate, (req, res, next) => {
       const videoFile = req.files?.video?.[0];
       if (!videoFile) throw new ValidationError('Video file is required.');
 
-      // Build file URL (dev: local path; prod: swap for CDN/Mux URL)
-      const baseUrl = process.env.BACKEND_URL || `http://localhost:${process.env.PORT || 3001}`;
-      const relPath  = videoFile.path.replace(/.*uploads/, '/uploads');
-      const fileUrl  = `${baseUrl}${relPath.replace(/\\/g, '/')}`;
+      const uid = req.user.id;
 
+      // Upload video to Supabase Storage (videos bucket — private)
+      const videoPath = storageSvc.uploadFilePath('videos', uid, videoFile.originalname);
+      const videoResult = await storageSvc.uploadBuffer({
+        bucket:   'videos',
+        storagePath: videoPath,
+        buffer:   videoFile.buffer,
+        mimetype: videoFile.mimetype,
+      });
+      const fileUrl = videoResult.signedUrl || videoResult.publicUrl;
+
+      // Upload thumbnail to Supabase Storage (thumbnails bucket — public)
       let thumbnailUrl = null;
-      if (req.files?.thumbnail?.[0]) {
-        const thumbRel = req.files.thumbnail[0].path.replace(/.*uploads/, '/uploads');
-        thumbnailUrl   = `${baseUrl}${thumbRel.replace(/\\/g, '/')}`;
+      let thumbnailPath = null;
+      const thumbFile = req.files?.thumbnail?.[0];
+      if (thumbFile) {
+        thumbnailPath = storageSvc.uploadFilePath('thumbnails', uid, thumbFile.originalname);
+        const thumbResult = await storageSvc.uploadBuffer({
+          bucket:      'thumbnails',
+          storagePath: thumbnailPath,
+          buffer:      thumbFile.buffer,
+          mimetype:    thumbFile.mimetype,
+        });
+        thumbnailUrl = thumbResult.publicUrl || thumbResult.signedUrl;
       }
 
       // Create or find channel for this uploader
@@ -149,15 +153,15 @@ router.post('/upload', authenticate, (req, res, next) => {
         uploader:        req.user.id,
         channelId:       channel._id,
         originalFileUrl: fileUrl,
+        storagePath:     videoPath,
         thumbnailUrl,
+        thumbnailStoragePath: thumbnailPath,
         fileSize:        videoFile.size,
         category:        ['movies','shows','music','short','gaming','education','comedy','other'].includes(category) ? category : 'other',
         visibility:      ['public','unlisted','private'].includes(visibility) ? visibility : 'public',
         isPublished:     true,
-        // NOTE: processingStatus stays 'pending' until Mux/Cloudflare Stream processes it.
-        // In dev without a video CDN, set to 'ready' so the file is playable directly.
-        processingStatus: process.env.VIDEO_CDN_ENABLED === 'true' ? 'pending' : 'ready',
-        hlsUrl: process.env.VIDEO_CDN_ENABLED !== 'true' ? fileUrl : null,
+        processingStatus: 'ready',
+        hlsUrl:          fileUrl,
       });
 
       await video.populate('uploader', 'username profile.displayName profile.avatarUrl');
@@ -165,6 +169,18 @@ router.post('/upload', authenticate, (req, res, next) => {
       res.status(201).json({ success: true, video });
     } catch (err) { next(err); }
   });
+});
+
+// GET /api/videos/:id/url — refresh signed URL for a private video
+router.get('/:id/url', authenticate, async (req, res, next) => {
+  try {
+    const video = await Video.findById(req.params.id).lean();
+    if (!video) return res.status(404).json({ success: false, message: 'Video not found' });
+    if (!video.storagePath) return res.json({ success: true, url: video.originalFileUrl });
+
+    const signedUrl = await storageSvc.getSignedUrl('videos', video.storagePath, 3600);
+    res.json({ success: true, url: signedUrl });
+  } catch (err) { next(err); }
 });
 
 // ─── GET /api/videos/channels ────────────────────────────────

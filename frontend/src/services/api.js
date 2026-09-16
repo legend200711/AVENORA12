@@ -672,37 +672,25 @@
     },
   };
 
-  // ─── Upload API — delegates to Firebase Storage ───────────
+  // ─── Upload API — delegates to Supabase Storage via AvenoraStorage ───────────
   const UploadAPI = {
     async image(file, onProgress) {
-      if (window.AvenoraFirebase?.Storage) {
-        const url = await window.AvenoraFirebase.Storage.uploadImage(file, onProgress);
-        return { url };
-      }
+      if (window.AvenoraStorage) return window.AvenoraStorage.uploadImage(file, onProgress);
       const fd = new FormData(); fd.append('file', file);
       return upload('/upload/image', fd);
     },
     async avatar(file, onProgress) {
-      if (window.AvenoraFirebase?.Storage) {
-        const url = await window.AvenoraFirebase.Storage.uploadAvatar(file, onProgress);
-        return { url };
-      }
+      if (window.AvenoraStorage) return window.AvenoraStorage.uploadAvatar(file, onProgress);
       const fd = new FormData(); fd.append('file', file);
       return upload('/upload/avatar', fd);
     },
     async audio(file, onProgress) {
-      if (window.AvenoraFirebase?.Storage) {
-        const url = await window.AvenoraFirebase.Storage.uploadAudio(file, onProgress);
-        return { url };
-      }
+      if (window.AvenoraStorage) return window.AvenoraStorage.uploadAudio(file, onProgress);
       const fd = new FormData(); fd.append('file', file);
       return upload('/upload/audio', fd);
     },
     async video(file, onProgress) {
-      if (window.AvenoraFirebase?.Storage) {
-        const url = await window.AvenoraFirebase.Storage.uploadVideo(file, onProgress);
-        return { url };
-      }
+      if (window.AvenoraStorage) return window.AvenoraStorage.uploadVideo(file, onProgress);
       const fd = new FormData(); fd.append('file', file);
       return upload('/upload/video', fd);
     },
@@ -754,7 +742,7 @@
     },
   };
 
-  // ─── Gallery API — backed by Firestore + Firebase Storage ──
+  // ─── Gallery API — backed by Firestore + Supabase Storage ──
   const GalleryAPI = {
     async list(params = {}) {
       if (window.AvenoraFirebase?.Firestore) {

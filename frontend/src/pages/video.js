@@ -1011,7 +1011,7 @@ async function openVideoDetail(videoId) {
 
 /* ─── Player HTML ────────────────────────────────────────── */
 function buildPlayerHtml(video) {
-  // Accept videoUrl (Firebase Storage), hlsUrl, or originalFileUrl (legacy API)
+  // Accept videoUrl (Supabase Storage), hlsUrl, or originalFileUrl (legacy API)
   const src = video.videoUrl || video.hlsUrl || video.originalFileUrl;
   if (!src) {
     return `
@@ -1591,8 +1591,7 @@ function initUploadForm() {
     if (descCount) descCount.textContent = `${descInput.value.length} / 5000`;
   });
 
-  // Form submit — uploads directly to Firebase Storage, then writes metadata to Firestore.
-  // This replaces the previous XHR-to-backend approach which required an unreachable API server.
+  // Form submit — uploads to Supabase Storage via AVENORA backend, then saves metadata to MongoDB.
   let _uploadInProgress = false;
   form?.addEventListener('submit', async e => {
     e.preventDefault();
@@ -1622,84 +1621,32 @@ function initUploadForm() {
     try {
       const user = LegendState.get('user');
       if (!user) throw new Error('You must be signed in to upload videos.');
+      if (!window.AvenoraStorage) throw new Error('Storage service not loaded. Refresh the page and try again.');
 
-      if (!window.AvenoraFirebase?.Storage) throw new Error('Firebase Storage is not available.');
-      if (!window.AvenoraFirebase?.Firestore) throw new Error('Firebase Firestore is not available.');
-
-      // ── Phase 1: Upload video to Firebase Storage ──────────────
+      // ── Upload video + thumbnail via backend → Supabase Storage ──
       progressLabel.textContent = 'Uploading video…';
-      statusEl.textContent = 'Transferring to Firebase Storage…';
+      statusEl.textContent = 'Transferring to Supabase Storage…';
       progressFill.style.width = '0%';
       progressPct.textContent = '0%';
 
-      // Build a deterministic, safe storage path
-      const safeFileName = selectedVideoFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-      const videoStoragePath = `videos/${user.uid || user.id}/${Date.now()}_${safeFileName}`;
+      const thumbFile = thumbInput?.files[0] || null;
 
-      const videoUrl = await window.AvenoraFirebase.Storage.upload(
-        videoStoragePath,
+      const data = await window.AvenoraStorage.uploadVideoWithMeta(
         selectedVideoFile,
+        thumbFile,
+        { title, description, category, visibility },
         (pct) => {
           if (progressFill) progressFill.style.width = `${pct}%`;
           if (progressPct)  progressPct.textContent  = `${pct}%`;
           if (pct === 100) {
-            progressLabel.textContent = 'Finalising upload…';
-            statusEl.textContent = 'Getting download URL…';
+            progressLabel.textContent = 'Finalising…';
+            statusEl.textContent = 'Saving to database…';
           }
         }
       );
 
-      // ── Phase 2: Upload thumbnail (optional) ──────────────────
-      let thumbnailUrl = null;
-      const thumbFile = thumbInput?.files[0];
-      if (thumbFile) {
-        progressLabel.textContent = 'Uploading thumbnail…';
-        statusEl.textContent = 'Uploading cover image…';
-        const safeThumb = thumbFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-        const thumbPath = `images/thumbnails/${user.uid || user.id}/${Date.now()}_${safeThumb}`;
-        thumbnailUrl = await window.AvenoraFirebase.Storage.upload(thumbPath, thumbFile, null);
-      }
-
-      // ── Phase 3: Write metadata to Firestore videos collection ─
-      progressLabel.textContent = 'Saving video details…';
-      statusEl.textContent = 'Writing to database…';
       progressFill.style.width = '100%';
       progressPct.textContent = '100%';
-
-      const uid = user.uid || user.id;
-      const videoDoc = {
-        title,
-        description,
-        category,
-        visibility,
-        videoUrl,
-        thumbnailUrl: thumbnailUrl || null,
-        storagePath: videoStoragePath,
-        owner: {
-          uid,
-          username: user.username || user.profile?.displayName || 'Unknown',
-          avatarUrl: user.profile?.avatarUrl || null,
-        },
-        views: 0,
-        likes: [],
-        commentCount: 0,
-        processingStatus: 'ready',
-        createdAt: null,   // will be set to serverTimestamp below
-      };
-
-      // Use the Firestore service to write the document with a serverTimestamp
-      const db = await window.AvenoraFirebase.getFirestore();
-      // We import addDoc / collection / serverTimestamp directly since
-      // FirestoreService doesn't expose a generic addDoc method.
-      const { collection, addDoc, serverTimestamp } =
-        await (async () => {
-          // The firebase.js module caches the firestore module; we import it here.
-          const SDK_VER = '10.12.2';
-          return import(`https://www.gstatic.com/firebasejs/${SDK_VER}/firebase-firestore.js`);
-        })();
-
-      videoDoc.createdAt = serverTimestamp();
-      const docRef = await addDoc(collection(db, 'videos'), videoDoc);
 
       // ── Success ────────────────────────────────────────────────
       progressLabel.textContent = 'Upload complete!';

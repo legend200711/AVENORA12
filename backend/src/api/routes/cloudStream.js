@@ -5,14 +5,20 @@
  * Exposes the 24-hour cloud stream service over a secure REST API.
  *
  * Mount point: /api/admin/cloud-stream
+ *
+ * NEW: POST /api/admin/cloud-stream/media/upload
+ *   Uploads a media file to Supabase Storage (stream-media bucket).
+ *   Returns the storagePath and a 7-day signed URL usable by the stream engine.
  */
 
 const express = require('express');
 const router = express.Router();
 const rateLimit = require('express-rate-limit');
+const multer = require('multer');
 const { authenticate, requireFounder } = require('../middleware/auth');
 const { ValidationError } = require('../middleware/errorHandler');
 const cloudStream = require('../../services/stream/cloudStreamService');
+const storageSvc  = require('../../services/storage/supabaseStorage');
 const logger = require('../../utils/logger');
 
 // ─── Auth guard for all routes ────────────────────────────
@@ -209,6 +215,72 @@ router.delete('/queue', controlLimiter, (req, res) => {
   logAction(req, 'queue/clear');
   cloudStream.clearQueue();
   res.json({ success: true, message: 'Queue cleared' });
+});
+
+// ─────────────────────────────────────────────────────────
+// POST /api/admin/cloud-stream/media/upload
+// Upload a media file to Supabase Storage (stream-media bucket).
+// Returns storagePath + signed URL.
+// ─────────────────────────────────────────────────────────
+const streamMediaUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500 MB
+  fileFilter: (req, file, cb) => {
+    const allowed = new Set([
+      'audio/mpeg','audio/mp3','audio/wav','audio/ogg','audio/flac','audio/aac','audio/x-m4a','audio/mp4','audio/opus','audio/webm',
+      'video/mp4','video/webm','video/ogg','video/quicktime',
+    ]);
+    if (!allowed.has(file.mimetype)) {
+      return cb(new ValidationError(`Unsupported media type: ${file.mimetype}`));
+    }
+    cb(null, true);
+  },
+});
+
+router.post('/media/upload', controlLimiter, streamMediaUpload.single('file'), async (req, res, next) => {
+  if (!req.file) return res.status(400).json({ error: true, message: 'No file uploaded' });
+  try {
+    logAction(req, 'media/upload', req.file.originalname);
+    const storagePath = storageSvc.uploadFilePath('stream-media', req.user.id, req.file.originalname);
+    const result = await storageSvc.uploadBuffer({
+      bucket:      'stream-media',
+      storagePath,
+      buffer:      req.file.buffer,
+      mimetype:    req.file.mimetype,
+    });
+    const signedUrl = result.signedUrl || await storageSvc.getSignedUrl('stream-media', storagePath);
+    res.status(201).json({
+      success: true,
+      storagePath,
+      signedUrl,
+      name: req.file.originalname,
+      size: req.file.size,
+    });
+  } catch (err) { next(err); }
+});
+
+// ─────────────────────────────────────────────────────────
+// GET /api/admin/cloud-stream/media/library
+// List all files in the stream-media bucket.
+// ─────────────────────────────────────────────────────────
+router.get('/media/library', async (req, res, next) => {
+  try {
+    const files = await storageSvc.listFiles('stream-media');
+    res.json({ success: true, files });
+  } catch (err) { next(err); }
+});
+
+// ─────────────────────────────────────────────────────────
+// GET /api/admin/cloud-stream/media/:storagePath*/url
+// Refresh a signed URL for a stream-media file.
+// ─────────────────────────────────────────────────────────
+router.get('/media/url', async (req, res, next) => {
+  try {
+    const storagePath = req.query.path;
+    if (!storagePath) return res.status(400).json({ error: true, message: 'path query param required' });
+    const signedUrl = await storageSvc.getSignedUrl('stream-media', storagePath);
+    res.json({ success: true, signedUrl });
+  } catch (err) { next(err); }
 });
 
 // ─────────────────────────────────────────────────────────

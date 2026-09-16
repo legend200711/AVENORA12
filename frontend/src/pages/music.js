@@ -959,77 +959,67 @@ window.musicUploadSubmit = async function (e) {
   const visibility = form.querySelector('[name="visibility"]')?.value || 'private';
 
   try {
-    // 1. Upload the file to Firebase Storage under audio/{uid}/
-    const uid = firebaseUser.uid || firebaseUser.id;
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const storagePath = `audio/${uid}/${Date.now()}_${safeName}`;
+    if (!window.AvenoraStorage) throw new Error('Storage service not loaded. Refresh the page and try again.');
 
-    const downloadURL = await window.AvenoraFirebase.Storage.upload(
-      storagePath,
+    // 1. Upload file + metadata to backend → Supabase Storage (music bucket)
+    if (status) status.textContent = 'Uploading to Supabase Storage…';
+
+    const data = await window.AvenoraStorage.uploadMusic(
       file,
+      { title: titleVal, artist, album, genre },
       (p) => {
         if (fill) fill.style.width = p + '%';
         if (pct) pct.textContent = p + '%';
       }
     );
 
-    if (status) status.textContent = 'Saving track metadata…';
     if (fill) fill.style.width = '100%';
     if (pct) pct.textContent = '100%';
-
-    // 2. Measure duration from the file
-    let duration = 0;
-    try {
-      duration = await new Promise((res) => {
-        const tmpAudio = new Audio();
-        tmpAudio.preload = 'metadata';
-        const objUrl = URL.createObjectURL(file);
-        tmpAudio.src = objUrl;
-        tmpAudio.onloadedmetadata = () => {
-          res(isFinite(tmpAudio.duration) ? Math.round(tmpAudio.duration) : 0);
-          URL.revokeObjectURL(objUrl);
-        };
-        tmpAudio.onerror = () => { res(0); URL.revokeObjectURL(objUrl); };
-        setTimeout(() => res(0), 5000); // safety timeout
-      });
-    } catch(_) {}
-
-    // 3. Save metadata to Firestore: cloudStreamTracks/{uid}/tracks/{autoId}
-    //    This collection is read by the Cloud Stream app.
-    //    Use the same Firebase SDK version as firebase.js (10.12.2).
-    const fsDb = await window.AvenoraFirebase.getFirestore();
-    const fsModule = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
-    const trackRef = await fsModule.addDoc(
-      fsModule.collection(fsDb, 'cloudStreamTracks', uid, 'tracks'),
-      {
-        uid,
-        title:       titleVal,
-        artist,
-        album,
-        genre,
-        description: desc,
-        visibility,
-        url:         downloadURL,
-        downloadURL,
-        storagePath,
-        duration,
-        fileName:    file.name,
-        fileSize:    file.size,
-        mimeType:    file.type,
-        status:      'ready',
-        createdAt:   fsModule.serverTimestamp(),
-      }
-    );
-    console.log('[AVN] Track metadata saved, id:', trackRef.id);
+    if (status) status.textContent = 'Track saved!';
 
     progW?.classList.add('hidden');
 
+    // 2. Optionally save to Firestore cloudStreamTracks so the Cloud Stream
+    //    dashboard can pick it up. The backend track record is the primary store;
+    //    Firestore is a secondary index used by the stream dashboard.
+    try {
+      const track = data.track;
+      if (track && window.AvenoraFirebase?.getFirestore) {
+        const uid = (firebaseUser.uid || firebaseUser.id);
+        const fsDb = await window.AvenoraFirebase.getFirestore();
+        const fsModule = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+        await fsModule.setDoc(
+          fsModule.doc(fsDb, 'cloudStreamTracks', uid, 'tracks', track.id || track._id),
+          {
+            uid,
+            backendTrackId: track.id || track._id,
+            title:        track.title,
+            artist:       track.artistName || artist,
+            album:        track.albumTitle || album,
+            genre:        track.genre || genre,
+            url:          track.fileUrl,
+            storagePath:  track.storagePath || null,
+            duration:     track.duration || 0,
+            fileName:     file.name,
+            fileSize:     file.size,
+            mimeType:     file.type,
+            status:       'ready',
+            createdAt:    fsModule.serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+    } catch (_fsErr) {
+      // Firestore sync is optional — log but don't fail the upload
+      console.warn('[AVN] Firestore cloudStreamTracks sync skipped:', _fsErr.message);
+    }
+
     // Show success message
     if (succEl) {
-      succEl.textContent = `✓ "${titleVal}" uploaded successfully! It is now available in your Cloud Stream library.`;
+      succEl.textContent = `✓ "${titleVal}" uploaded successfully! It is now available in your Music Hub and Cloud Stream library.`;
       succEl.classList.remove('hidden');
     }
-    Toast.success(`Track "${titleVal}" uploaded to cloud!`);
+    Toast.success(`Track "${titleVal}" uploaded!`);
 
     // Reset form
     form.reset();
@@ -1038,20 +1028,7 @@ window.musicUploadSubmit = async function (e) {
   } catch (err) {
     console.warn('[AVN] Music upload error:', err);
     progW?.classList.add('hidden');
-    // Provide a clear, specific error message
-    let msg = 'Upload failed. Please try again.';
-    if (err.code === 'storage/unauthorized') {
-      msg = 'Permission denied. Make sure you are signed in and try again.';
-    } else if (err.code === 'storage/canceled') {
-      msg = 'Upload was cancelled.';
-    } else if (err.code === 'storage/quota-exceeded') {
-      msg = 'Storage quota exceeded. Please contact support.';
-    } else if (err.code === 'storage/invalid-format') {
-      msg = 'Invalid file format. Please use MP3, WAV, OGG, FLAC, AAC, M4A, or OPUS.';
-    } else if (err.message) {
-      msg = err.message;
-    }
-    errEl.textContent = msg;
+    errEl.textContent = err.message || 'Upload failed. Please try again.';
     errEl.classList.remove('hidden');
   } finally {
     btn.disabled = false;

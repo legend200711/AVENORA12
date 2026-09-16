@@ -1,21 +1,15 @@
 /**
  * 24-Hour Cloud Stream — Backend Service
  *
- * This Node.js service runs inside the main server process.
- * It continuously cycles a media playlist and pushes to RTMP targets
- * using ffmpeg.
+ * Streams a managed media queue via ffmpeg to RTMP targets.
+ * Media files are resolved from:
+ *   1. Supabase Storage (stream-media bucket) — preferred in production
+ *   2. Local disk (CLOUD_STREAM_MEDIA_DIR) — fallback / dev mode
  *
  * REQUIREMENTS:
  *   - ffmpeg installed on the server (https://ffmpeg.org)
- *   - Media files accessible on disk
+ *   - SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY in .env (for cloud media)
  *   - RTMP ingest URL(s) for output platforms (optional — simulates if absent)
- *
- * USAGE (standalone):
- *   node src/services/stream/cloudStreamService.js
- *
- * USAGE (embedded — preferred):
- *   const cs = require('./cloudStreamService');
- *   cs.start();
  */
 
 const { spawn, execSync } = require('child_process');
@@ -37,6 +31,7 @@ const CONFIG = {
 const SUPPORTED_EXTENSIONS = ['.mp4', '.webm', '.mp3', '.wav', '.flac', '.aac', '.ogg', '.mkv', '.mov'];
 
 // ─── State ────────────────────────────────────────────────
+// Each queue item: { name, filePath?, storagePath?, signedUrl? }
 let playlist = [];          // Full scanned file list from disk
 let queue = [];             // Admin-managed ordered queue (overrides playlist when non-empty)
 let currentIndex = 0;       // Index into the active list
@@ -44,7 +39,7 @@ let consecutiveErrors = 0;
 let currentProcess = null;
 let isRunning = false;
 let isPaused = false;
-let currentTrack = null;    // basename of currently streaming file
+let currentTrack = null;    // name of currently streaming track
 let lastActivity = null;    // ISO timestamp of last successful track start
 const errorLog = [];        // Rolling error log (last 100)
 
@@ -58,7 +53,7 @@ function checkFfmpeg() {
   }
 }
 
-// ─── Playlist management ──────────────────────────────────
+// ─── Playlist management — local disk ─────────────────────
 function buildPlaylist() {
   const dir = CONFIG.mediaDir;
   if (!fs.existsSync(dir)) {
@@ -68,9 +63,9 @@ function buildPlaylist() {
 
   const files = fs.readdirSync(dir)
     .filter(f => SUPPORTED_EXTENSIONS.includes(path.extname(f).toLowerCase()))
-    .map(f => path.join(dir, f));
+    .map(f => ({ name: f, filePath: path.join(dir, f) }));
 
-  logger.info(`[CloudStream] Found ${files.length} media files`);
+  logger.info(`[CloudStream] Found ${files.length} media files on disk`);
   return files;
 }
 
@@ -92,37 +87,63 @@ function getNextTrack() {
   return track;
 }
 
+/**
+ * Resolve the ffmpeg input path/URL for a track item.
+ * Priority: local filePath → signedUrl (Supabase)
+ * If the item has a storagePath but no fresh signedUrl, we refresh it.
+ */
+async function resolveTrackInput(item) {
+  if (item.filePath) {
+    // Local disk file — verify existence
+    if (!fs.existsSync(item.filePath)) return null;
+    return item.filePath;
+  }
+  if (item.signedUrl) return item.signedUrl;
+  if (item.storagePath) {
+    try {
+      const storageSvc = require('../storage/supabaseStorage');
+      const url = await storageSvc.getSignedUrl('stream-media', item.storagePath, 3600);
+      item.signedUrl = url; // cache for this session
+      return url;
+    } catch (err) {
+      logger.warn(`[CloudStream] Could not get signed URL for ${item.storagePath}: ${err.message}`);
+      return null;
+    }
+  }
+  return null;
+}
+
 // ─── ffmpeg stream ────────────────────────────────────────
-function streamTrack(filePath, onComplete, onError) {
+function streamTrack(input, trackName, onComplete, onError) {
   if (!CONFIG.rtmpTargets.length) {
     logger.warn('[CloudStream] No RTMP targets configured (CLOUD_STREAM_RTMP_TARGETS). Simulating playback.');
     const duration = 10000 + Math.random() * 20000; // 10–30s for simulation
     const timer = setTimeout(() => {
-      logger.info(`[CloudStream] Simulated track complete: ${path.basename(filePath)}`);
+      logger.info(`[CloudStream] Simulated track complete: ${trackName}`);
       onComplete();
     }, duration);
     return () => clearTimeout(timer);
   }
 
-  const rtmpOutput = CONFIG.rtmpTargets[0]; // Primary target
+  const rtmpOutput = CONFIG.rtmpTargets[0];
 
   const ffmpegArgs = [
-    '-re',                          // Read at native framerate
-    '-i', filePath,                 // Input file
-    '-c:v', 'libx264',             // Video codec
-    '-preset', 'veryfast',          // Speed/quality tradeoff
+    '-re',
+    '-i', input,
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
     '-maxrate', '3000k',
     '-bufsize', '6000k',
     '-pix_fmt', 'yuv420p',
-    '-g', '50',                     // GOP size
-    '-c:a', 'aac',                  // Audio codec
+    '-g', '50',
+    '-c:a', 'aac',
     '-b:a', '128k',
     '-ar', '44100',
-    '-f', 'flv',                    // Output format for RTMP
+    '-f', 'flv',
     rtmpOutput,
   ];
 
-  logger.info(`[CloudStream] Streaming: ${path.basename(filePath)} → ${rtmpOutput}`);
+  logger.info(`[CloudStream] Streaming: ${trackName} → ${rtmpOutput}`);
 
   const proc = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
   currentProcess = proc;
@@ -158,16 +179,16 @@ function streamTrack(filePath, onComplete, onError) {
 }
 
 // ─── Stream loop ──────────────────────────────────────────
-function playNext() {
+async function playNext() {
   if (!isRunning || isPaused) return;
 
-  const track = getNextTrack();
-  if (!track) {
+  const item = getNextTrack();
+  if (!item) {
     logger.warn('[CloudStream] No tracks available. Rebuilding playlist in 30s...');
     setTimeout(() => {
       playlist = buildPlaylist();
       if (!getActiveList().length) {
-        logger.error('[CloudStream] Still no media. Add files to: ' + CONFIG.mediaDir);
+        logger.error('[CloudStream] Still no media. Add files to: ' + CONFIG.mediaDir + ' or upload via the admin dashboard.');
         setTimeout(playNext, 30000);
       } else {
         playNext();
@@ -176,9 +197,18 @@ function playNext() {
     return;
   }
 
-  // Skip missing files silently
-  if (!fs.existsSync(track)) {
-    logger.warn(`[CloudStream] File not found, skipping: ${track}`);
+  const trackName = item.name || path.basename(item.filePath || item.storagePath || 'unknown');
+
+  // Resolve the actual input (local file or signed URL)
+  let input;
+  try {
+    input = await resolveTrackInput(item);
+  } catch (err) {
+    input = null;
+  }
+
+  if (!input) {
+    logger.warn(`[CloudStream] Could not resolve media input for "${trackName}", skipping.`);
     consecutiveErrors++;
     if (consecutiveErrors < CONFIG.maxConsecutiveErrors) {
       setTimeout(playNext, 500);
@@ -189,11 +219,12 @@ function playNext() {
     return;
   }
 
-  currentTrack = path.basename(track);
+  currentTrack = trackName;
   lastActivity = new Date().toISOString();
 
   streamTrack(
-    track,
+    input,
+    trackName,
     () => {
       consecutiveErrors = 0;
       if (!CONFIG.repeat && currentIndex >= getActiveList().length) {
@@ -206,11 +237,11 @@ function playNext() {
     },
     (err) => {
       consecutiveErrors++;
-      const errorEntry = { track: path.basename(track), error: err.message, time: new Date().toISOString() };
+      const errorEntry = { track: trackName, error: err.message, time: new Date().toISOString() };
       errorLog.push(errorEntry);
       if (errorLog.length > 100) errorLog.shift();
 
-      logger.error(`[CloudStream] Error playing "${path.basename(track)}": ${err.message}`);
+      logger.error(`[CloudStream] Error playing "${trackName}": ${err.message}`);
 
       if (consecutiveErrors >= CONFIG.maxConsecutiveErrors) {
         logger.error(`[CloudStream] ${CONFIG.maxConsecutiveErrors} consecutive errors. Pausing 60s before retry.`);
@@ -343,28 +374,41 @@ function getStatus() {
 
 function getQueue() {
   const list = getActiveList();
-  return list.map((filePath, i) => ({
+  return list.map((item, i) => ({
     index: i,
-    name: path.basename(filePath),
+    name: item.name || path.basename(item.filePath || item.storagePath || 'unknown'),
+    storagePath: item.storagePath || null,
     active: i === (currentIndex % Math.max(1, list.length)) && isRunning && !isPaused,
   }));
 }
 
-/** Append absolute or relative paths to the admin-managed queue */
-function addToQueue(filePaths) {
+/**
+ * Add items to the admin-managed queue.
+ * Accepts two forms:
+ *   - { name, storagePath }  — Supabase Storage item
+ *   - "filename.mp3"         — local disk filename (legacy)
+ */
+function addToQueue(items) {
   const added = [];
-  for (const fp of filePaths) {
-    const resolved = path.isAbsolute(fp) ? fp : path.join(CONFIG.mediaDir, fp);
-    if (!fs.existsSync(resolved)) {
-      logger.warn(`[CloudStream] addToQueue: file not found: ${resolved}`);
-      continue;
+  for (const item of items) {
+    if (typeof item === 'string') {
+      // Legacy: local filename
+      const resolved = path.isAbsolute(item) ? item : path.join(CONFIG.mediaDir, item);
+      if (!fs.existsSync(resolved)) {
+        logger.warn(`[CloudStream] addToQueue: file not found: ${resolved}`);
+        continue;
+      }
+      if (!SUPPORTED_EXTENSIONS.includes(path.extname(resolved).toLowerCase())) {
+        logger.warn(`[CloudStream] addToQueue: unsupported extension: ${resolved}`);
+        continue;
+      }
+      queue.push({ name: path.basename(resolved), filePath: resolved });
+      added.push(path.basename(resolved));
+    } else if (item && item.storagePath) {
+      // Supabase Storage item
+      queue.push({ name: item.name || item.storagePath.split('/').pop(), storagePath: item.storagePath, signedUrl: item.signedUrl || null });
+      added.push(item.name || item.storagePath.split('/').pop());
     }
-    if (!SUPPORTED_EXTENSIONS.includes(path.extname(resolved).toLowerCase())) {
-      logger.warn(`[CloudStream] addToQueue: unsupported extension: ${resolved}`);
-      continue;
-    }
-    queue.push(resolved);
-    added.push(path.basename(resolved));
   }
   logger.info(`[CloudStream] Queue updated — ${queue.length} items`);
   return added;
@@ -414,13 +458,23 @@ function refreshPlaylist() {
   return { ok: true, playlistSize: playlist.length };
 }
 
-/** List all media files on disk (for the add-to-queue picker) */
+/** List all media files on disk (legacy — use /api/admin/cloud-stream/media/library for Supabase) */
 function listMediaFiles() {
   const dir = CONFIG.mediaDir;
   if (!fs.existsSync(dir)) return [];
   return fs.readdirSync(dir)
     .filter(f => SUPPORTED_EXTENSIONS.includes(path.extname(f).toLowerCase()))
     .map(f => ({ name: f, size: fs.statSync(path.join(dir, f)).size }));
+}
+
+/**
+ * Add Supabase Storage items directly to the queue.
+ * Called by the admin dashboard after uploading to stream-media bucket.
+ *
+ * @param {Array<{name: string, storagePath: string, signedUrl?: string}>} items
+ */
+function addSupabaseItemsToQueue(items) {
+  return addToQueue(items);
 }
 
 // ─── Run if called directly ───────────────────────────────
@@ -442,6 +496,7 @@ module.exports = {
   getStatus,
   getQueue,
   addToQueue,
+  addSupabaseItemsToQueue,
   removeFromQueue,
   reorderQueue,
   clearQueue,

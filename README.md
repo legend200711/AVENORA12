@@ -46,7 +46,7 @@ legend-universe/
 │   │   ├── models/           # 18 Mongoose models
 │   │   ├── services/         # Business logic, Socket.io, notifications
 │   │   └── utils/            # Winston logger
-│   ├── uploads/              # Dev file storage (use R2/S3 in production)
+│   ├── uploads/              # Dev file fallback (use Supabase Storage in production)
 │   └── .env.example          # Copy to .env and fill in secrets
 │
 ├── frontend/                 # Vanilla JS SPA (no build tools required)
@@ -112,14 +112,11 @@ cd frontend && npx serve .
 | `JWT_REFRESH_SECRET`    | **Yes**  | —                 | Refresh token secret (different from above)  |
 | `JWT_REFRESH_EXPIRES_IN`| No       | `30d`             | Refresh token lifetime                       |
 | `MONGODB_URI`           | No       | —                 | MongoDB connection string (atlas or local)   |
-| `UPLOAD_DIR`            | No       | `./uploads`       | Local file upload directory                  |
+| `UPLOAD_DIR`            | No       | `./uploads`       | Local file upload fallback directory         |
 | `MUSIC_MAX_FILE_MB`     | No       | `100`             | Max audio file size in MB                    |
-| `STORAGE_PROVIDER`      | No       | —                 | `cloudflare_r2` or `aws_s3` for production   |
-| `STORAGE_BUCKET`        | No       | —                 | R2/S3 bucket name                            |
-| `STORAGE_KEY`           | No       | —                 | R2/S3 access key                             |
-| `STORAGE_SECRET`        | No       | —                 | R2/S3 secret key                             |
-| `STORAGE_ENDPOINT`      | No       | —                 | R2/S3 endpoint URL                           |
-| `STORAGE_CDN_URL`       | No       | —                 | CDN prefix for uploaded files                |
+| `SUPABASE_URL`          | **Yes** (storage) | — | Supabase project URL                    |
+| `SUPABASE_SERVICE_ROLE_KEY` | **Yes** (storage) | — | Supabase service-role key (server only) |
+| `SUPABASE_ANON_KEY`     | No       | —                 | Supabase anon key (optional public reads)    |
 | `RESEND_API_KEY`        | No       | —                 | Email delivery (for real password reset)     |
 | `RATE_LIMIT_MAX_REQUESTS`| No      | `100`             | API rate limit per 15 min window             |
 | `AUTH_RATE_LIMIT_MAX`   | No       | `10`              | Auth endpoint rate limit per 15 min          |
@@ -131,10 +128,10 @@ cd frontend && npx serve .
 | Feature                     | Requirement                                               |
 |-----------------------------|-----------------------------------------------------------|
 | All persistence (posts, users, etc.) | `MONGODB_URI` — set to MongoDB Atlas or local   |
-| Audio/video file uploads     | Local dev: works automatically. Production: set `STORAGE_PROVIDER` + R2/S3 vars |
+| Audio/video file uploads     | Set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env`. See `SUPABASE_SETUP.md` |
 | Password reset emails        | `RESEND_API_KEY` — otherwise dev-mode returns token in API response |
-| Real-time RTMP live streaming | Mux or Cloudflare Stream account + integration in `streams.js` |
-| 24/7 server-side broadcast   | ffmpeg on server + `RTMP_OUTPUT_URL` (see `cloudStreamService.js`) |
+| Real-time RTMP live streaming | MediaMTX server + `MEDIAMTX_URL` in `backend/.env` |
+| 24/7 server-side broadcast   | ffmpeg on server + `CLOUD_STREAM_RTMP_TARGETS` (see `cloudStreamService.js`) |
 | Push notifications           | `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` (web-push package) |
 
 ---
@@ -245,7 +242,7 @@ cd frontend && npx serve .
 | Password reset email         | In dev mode, `_devResetToken` is returned in the API response for testing. In production, configure `RESEND_API_KEY` and implement the email send in `auth.js`. |
 | BPM detection in DJ System   | Real-time BPM analysis requires a dedicated audio analysis library (Essentia.js). The current implementation shows a placeholder; BPM sync button shows a tooltip explaining the dependency. |
 | Online presence accuracy     | Online status uses Socket.io in-memory presence. With multiple server instances, use Redis adapter. |
-| File storage                 | In dev, all uploads go to `backend/uploads/`. In production, configure `STORAGE_PROVIDER=cloudflare_r2` or `aws_s3` with the corresponding vars. |
+| File storage                 | In dev, uploads fall back to `backend/uploads/`. In production, set `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`. See `SUPABASE_SETUP.md`. |
 | High scores                  | Arcade high scores are stored in browser `localStorage` only — they are not synchronized to a server or shared between devices. |
 
 ---
@@ -280,11 +277,11 @@ docker run -p 3001:3001 --env-file .env legend-universe-api
 ### Frontend (Static)
 ```bash
 # Deploy the frontend/ directory to any static host:
-# - Cloudflare Pages
 # - Netlify
 # - Vercel (static)
 # - GitHub Pages
 # - AWS S3 + CloudFront
+# - Any static file server
 
 # Set LU_CONFIG in a <script> before app.js:
 # window.LU_CONFIG = { apiUrl: 'https://api.legenduniverse.com/api', socketUrl: 'https://api.legenduniverse.com' };

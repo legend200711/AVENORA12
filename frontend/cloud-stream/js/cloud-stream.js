@@ -84,22 +84,15 @@ setPersistence(_auth, browserLocalPersistence).catch(() => {});
 
 /* ── Avenora Backend URL ─────────────────────────────────────────────── */
 // Resolved from runtime config (set by index.html or the page that hosts this).
-// If not configured, cloud stream API calls will log a clear error.
+// NOTE: The Cloudflare Worker is no longer used. Stream control goes through Firestore
+// directly from the frontend, with the backend handling media and RTMP (if configured).
 const _BACKEND_BASE_URL =
   (typeof window !== 'undefined' && window.LU_CONFIG && window.LU_CONFIG.apiUrl)
     ? window.LU_CONFIG.apiUrl.replace(/\/api\/?$/, '')
     : null;
 
-const WORKER_URL = _BACKEND_BASE_URL
-  ? _BACKEND_BASE_URL
-  : (() => {
-      console.error(
-        '[AVENORA] ⚠️  Cloud Stream: backend URL is not configured.\n' +
-        '  Set window.LU_CONFIG = { apiUrl: "https://your-backend/api" } in the page.\n' +
-        '  Cloud Stream API calls will fail until this is resolved.'
-      );
-      return null;
-    })();
+// WORKER_URL kept for backward compat — now points to the Avenora backend, not Cloudflare.
+const WORKER_URL = _BACKEND_BASE_URL;
 
 /* ═══════════════════════════════════════════════════════
    STATE
@@ -595,42 +588,19 @@ window.csrStartBroadcast = async function() {
     _renderHandoffStep(1, 'Saving broadcast configuration…');
     await _sleep(400);
 
-    // 7. Start cloud worker
-    _renderHandoffStep(2, 'Starting cloud broadcast worker…');
+    // 7. Build music queue — no longer calls Cloudflare Worker
+    _renderHandoffStep(2, 'Configuring broadcast…');
     const musicQueue = validTracks.map(t => ({
       id:       t.id,
       title:    t.title    || t.name   || 'Untitled',
       artist:   t.artist   || t.artist_name || '',
       url:      t.url      || t.downloadURL || t.musicUrl || '',
+      storagePath: t.storagePath || null,
       duration: t.duration || t.durationSecs || 0
     }));
-
-    const idToken = await _user.getIdToken(true);
-    const startRes = await fetch(WORKER_URL + '/api/stream/start', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
-      body:    JSON.stringify({
-        streamId, uid: _user.uid,
-        displayName:    _userData?.displayName || '',
-        streamName:     title,
-        theme:          'avenora',
-        scenePlaylist:  [],
-        durationMinutes,
-        musicQueue,
-        musicShuffle:   shuffle,
-        musicRepeat:    repeat,
-        musicCrossfade: 3,
-        musicVolume:    80,
-        musicPlaylistId: _creator.selectedPl.id
-      })
-    });
-    if (!startRes.ok) {
-      const errData = await startRes.json().catch(() => ({}));
-      throw new Error(errData.error || 'Cloud worker failed to start (HTTP ' + startRes.status + '). Check your internet connection.');
-    }
-    await startRes.json();
-    _renderHandoffStep(3, 'Verifying cloud worker…');
-    await _sleep(600);
+    // Stream is managed entirely via Firestore + AVENORA backend (no Cloudflare Worker)
+    _renderHandoffStep(3, 'Broadcast configured…');
+    await _sleep(400);
 
     // 8. Mark active + publish to liveRooms feed
     const expiresAt = Date.now() + durationMinutes * 60 * 1000;
@@ -671,13 +641,15 @@ window.csrStartBroadcast = async function() {
       displayName: _userData?.displayName || ''
     };
 
-    // 9. Write initial Now Playing to Firestore (worker will overwrite)
+    // 9. Write initial Now Playing to Firestore (includes full queue for auto-advance)
     if (musicQueue.length) {
       const first = musicQueue[0];
       await setDoc(doc(_db, 'studioCloudStreamMusic', streamId), {
         cloudStreamId:  streamId,
         uid:            _user.uid,
         playlistId:     _creator.selectedPl.id,
+        // Full queue — required for client-side auto-advance (no Durable Object)
+        queue:          musicQueue,
         currentTrackId: first.id,
         currentTitle:   first.title,
         currentArtist:  first.artist,
@@ -723,8 +695,8 @@ function _renderHandoffStep(step, label) {
   const steps = [
     'Preparing broadcast…',
     'Saving broadcast configuration…',
-    'Starting cloud broadcast worker…',
-    'Verifying cloud worker…',
+    'Configuring broadcast…',
+    'Broadcast configured…',
     'Broadcast is LIVE!',
   ];
   el.innerHTML = steps.map((s, i) => {
@@ -755,12 +727,12 @@ async function _stopBroadcast() {
   _stopHealthMonitor();
 
   try {
-    const idToken = await _user.getIdToken(true);
-    await fetch(WORKER_URL + '/api/stream/stop', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
-      body:    JSON.stringify({ streamId: _streamId, uid: _user.uid })
-    });
+    // Update Firestore directly — no Cloudflare Worker call needed
+    if (_streamId) {
+      await updateDoc(doc(_db, 'cloudStreams', _streamId), {
+        status: 'stopped', stoppedAt: serverTimestamp(), stoppedBy: 'creator'
+      }).catch(() => {});
+    }
   } catch(_) {}
 
   try {
@@ -795,15 +767,27 @@ async function _stopBroadcast() {
 window.csrSkipTrack = async function() {
   if (!_streamId || !_user) return;
   try {
-    const idToken = await _user.getIdToken(true);
-    await fetch(WORKER_URL + '/api/stream/music/control', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + idToken },
-      body:    JSON.stringify({ streamId: _streamId, uid: _user.uid, action: 'next' })
+    // Advance queueIndex in Firestore — listeners pick it up via onSnapshot
+    const musicSnap = await getDoc(doc(_db, 'studioCloudStreamMusic', _streamId));
+    if (!musicSnap.exists()) { _toast('No active music state found.', 'error'); return; }
+    const ms = musicSnap.data();
+    const queue = ms.queue || [];
+    if (!queue.length) { _toast('Queue is empty.', 'info'); return; }
+    const nextIndex = ((ms.queueIndex || 0) + 1) % queue.length;
+    const nextTrack = queue[nextIndex] || {};
+    await updateDoc(doc(_db, 'studioCloudStreamMusic', _streamId), {
+      queueIndex:      nextIndex,
+      currentTrackId:  nextTrack.id        || '',
+      currentTitle:    nextTrack.title     || '',
+      currentArtist:   nextTrack.artist    || '',
+      currentTrackUrl: nextTrack.url       || '',
+      currentDuration: nextTrack.duration  || 0,
+      nextTitle:       (queue[(nextIndex + 1) % queue.length] || {}).title || '',
+      nextArtist:      (queue[(nextIndex + 1) % queue.length] || {}).artist || '',
+      status:          'playing',
+      updatedAt:       serverTimestamp()
     });
     _toast('Skipping to next track…', 'info');
-    // Refresh now playing after a short delay
-    setTimeout(_checkHealth, 1500);
   } catch (e) {
     _toast('Could not skip: ' + e.message, 'error');
   }
@@ -840,19 +824,21 @@ window.csrOpenExistingStream = function() {
 
 /* ═══════════════════════════════════════════════════════
    LISTENER MODE (URL ?id=STREAMID)
-   Uses the worker sync API (public endpoint) so a regular listener
-   doesn't need Firestore read access to the creator's cloudStreams doc.
+   Reads stream state from Firestore directly.
+   No Cloudflare Worker dependency.
 ═══════════════════════════════════════════════════════ */
 async function _initListenerMode(streamId) {
   try {
-    // Worker sync endpoint is public — returns metadata + current track
-    const r    = await fetch(WORKER_URL + '/api/stream/sync/' + streamId);
-    const data = await r.json();
+    // Load stream record from Firestore (cloudStreams collection)
+    const streamSnap = await getDoc(doc(_db, 'cloudStreams', streamId));
 
-    if (!r.ok || !data.success) {
-      _showPlayerOffline(data.error || 'Broadcast not found or stream worker offline.');
+    if (!streamSnap.exists()) {
+      _showPlayerOffline('Broadcast not found.');
       return;
     }
+
+    const data = streamSnap.data();
+
     if (data.status !== 'active' && data.status !== 'recovering' && data.status !== 'starting') {
       _showPlayerOffline('This broadcast has ended.');
       return;
@@ -863,33 +849,17 @@ async function _initListenerMode(streamId) {
       displayName: data.displayName || '',
       category:    data.category    || '',
       viewerCount: data.viewerCount || 0,
-      startedAt:   data.startedAt   || 0,
-      expiresAt:   data.endsAt      || 0,
+      startedAt:   data.startedAt?.toMillis?.() || Date.now(),
+      expiresAt:   data.expiresAt   || 0,
       status:      data.status
     };
 
-    // Prime the track start timestamp for seek synchronisation
-    _player.trackStartedAt = data.lastAdvancedAt || data.startedAt || Date.now();
-
+    _player.trackStartedAt = Date.now();
+    _show('csrListenerPanel', true);
     await _initListenerForStream(streamId, streamData);
 
-    // Pre-populate Now Playing from worker sync response immediately
-    if (data.currentMusicUrl) {
-      _syncListenerToNowPlaying({
-        currentTitle:    data.currentMusicTitle    || '',
-        currentArtist:   data.currentMusicArtist   || '',
-        currentTrackUrl: data.currentMusicUrl,
-        currentTrackId:  data.currentMusicId       || '',
-        currentDuration: data.currentMusicDuration || 0,
-        nextTitle:       data.nextMusicTitle       || '',
-        nextArtist:      data.nextMusicArtist      || '',
-        status:          data.musicStatus          || 'playing',
-        updatedAt:       { toMillis: () => data.lastAdvancedAt || Date.now() }
-      });
-    }
   } catch (e) {
-    // Worker temporarily down — fall back to Firestore subscription only
-    console.warn('[CSR] Worker sync failed, using Firestore only:', e.message);
+    console.warn('[CSR] Firestore stream load failed:', e.message);
     _show('csrListenerPanel', true);
     await _initListenerForStream(streamId, { streamName: 'Avenora Cloud Radio', displayName: '' });
   }
@@ -1003,11 +973,58 @@ function _loadAndPlayTrack(url, dur) {
 }
 
 function _onTrackEnded() {
-  // The Durable Object alarm will advance the track and write the new Now Playing.
-  // The Firestore snapshot listener (_syncListenerToNowPlaying) will pick it up.
-  // Nothing to do here — just wait for the next snapshot update.
+  // Track has finished playing. Auto-advance:
+  // If this client is the creator (owns _streamId), advance the queue in Firestore
+  // so all listeners get the next track. Non-creator listeners just wait for the
+  // Firestore snapshot to update (driven by the creator's client or the backend).
   _stopProgressRaf();
   _setPlayBtn(false);
+  _autoAdvanceQueue();
+}
+
+/**
+ * Advance the Now Playing queue by one track.
+ * Only the creator's client writes to studioCloudStreamMusic.
+ * If this is a listener-only session (_streamId is null / different user), this
+ * is a no-op — the creator's client (or backend) will update the doc.
+ */
+async function _autoAdvanceQueue() {
+  if (!_streamId || !_user) return;
+
+  // Only the stream owner auto-advances.
+  if (_streamData && _streamData.uid && _streamData.uid !== _user.uid) return;
+
+  try {
+    const musicRef = doc(_db, 'studioCloudStreamMusic', _streamId);
+    const musicSnap = await getDoc(musicRef);
+    if (!musicSnap.exists()) return;
+
+    const ms = musicSnap.data();
+    if (ms.status === 'stopped' || ms.status === 'ended') return;
+
+    const queue = ms.queue || [];
+    if (!queue.length) return;
+
+    const currentIndex = typeof ms.queueIndex === 'number' ? ms.queueIndex : 0;
+    const nextIndex    = (currentIndex + 1) % queue.length;
+    const nextTrack    = queue[nextIndex] || {};
+    const afterNext    = queue[(nextIndex + 1) % queue.length] || {};
+
+    await updateDoc(musicRef, {
+      queueIndex:       nextIndex,
+      currentTrackId:   nextTrack.id        || '',
+      currentTitle:     nextTrack.title     || '',
+      currentArtist:    nextTrack.artist    || '',
+      currentTrackUrl:  nextTrack.url       || '',
+      currentDuration:  nextTrack.duration  || 0,
+      nextTitle:        afterNext.title     || '',
+      nextArtist:       afterNext.artist    || '',
+      status:           'playing',
+      updatedAt:        serverTimestamp(),
+    });
+  } catch (e) {
+    console.warn('[CSR] auto-advance failed:', e.message);
+  }
 }
 
 function _updatePlayerProgress() {

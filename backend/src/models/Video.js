@@ -12,7 +12,8 @@ const videoSchema = new mongoose.Schema({
 
   // File references
   originalFileUrl: { type: String, select: false }, // Internal, not exposed
-  hlsUrl: { type: String }, // HLS stream URL (Mux/Cloudflare Stream)
+  hlsUrl: { type: String }, // HLS stream URL (MediaMTX/WHIP → HLS)
+  storagePath:     { type: String },   // Supabase Storage path (videos bucket)
   thumbnailUrl: { type: String },
   previewGifUrl: { type: String },
 
@@ -52,10 +53,9 @@ const videoSchema = new mongoose.Schema({
   isFlagged: { type: Boolean, default: false },
   isFeatured: { type: Boolean, default: false },
 
-  // External integrations
+  // External integrations (legacy — kept for schema compatibility)
   muxAssetId: { type: String },
   muxPlaybackId: { type: String },
-  cloudflareStreamId: { type: String },
 }, {
   timestamps: true,
 });

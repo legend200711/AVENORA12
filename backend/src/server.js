@@ -152,7 +152,16 @@ const PORT = process.env.PORT || 3001;
 async function start() {
   try {
     await connectDatabase();
-    
+
+    // Ensure Supabase Storage buckets exist
+    try {
+      const { ensureBuckets } = require('./services/storage/supabaseStorage');
+      await ensureBuckets();
+      logger.info('✅ Supabase Storage buckets verified');
+    } catch (storageErr) {
+      logger.warn('⚠️  Supabase Storage not configured — uploads will fail until SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set');
+    }
+
     // Initialize Socket.io for real-time features
     initializeSocketServer(server);
 

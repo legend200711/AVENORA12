@@ -8,8 +8,9 @@
  *   - 24-Hour Cloud Stream
  *
  * All methods return plain objects or arrays — no Express/HTTP coupling.
- * Audio file hosting requires object storage (Cloudflare R2 / AWS S3).
- * Until storage is configured, track.fileUrl will be null and methods note it.
+ * Audio files are stored in Supabase Storage (music bucket).
+ * Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.
+ * For private tracks, refresh the signed URL via GET /api/music/tracks/:id/url.
  */
 
 'use strict';
@@ -349,8 +350,8 @@ async function getRecentlyPlayed(userId, limit = 20) {
 
 /**
  * Global music search across tracks, albums, artists, playlists.
- * Uses MongoDB text index — requires STORAGE_PROVIDER to be configured for
- * audio files; metadata search works independently.
+ * Uses MongoDB text index — audio files served from Supabase Storage;
+ * metadata search works independently.
  */
 async function search(query, { limit = 20 } = {}) {
   const q = query.trim();

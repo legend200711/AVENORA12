@@ -20,12 +20,11 @@
  * GET  /api/music/favorites           — get favorites (auth required)
  * GET  /api/music/recently-played     — recently played (auth required)
  * GET  /api/music/search              — search across all entities
- * POST /api/music/upload              — upload track (auth, storage required)
+ * POST /api/music/upload              — upload track (auth, Supabase Storage required)
  * GET  /api/music/genres              — list available genres
  *
- * NOTE: Audio file upload requires STORAGE_PROVIDER (Cloudflare R2 / AWS S3).
- *       Until configured, upload returns 501 with a clear message.
- *       All other routes work as soon as MongoDB is connected.
+ * Audio files are stored in Supabase Storage (music bucket).
+ * Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.
  */
 
 'use strict';
@@ -249,39 +248,20 @@ router.get('/search', optionalAuth, async (req, res, next) => {
 
 // ─── Upload ──────────────────────────────────────────────────
 /**
- * Music upload — local dev mode (disk storage) when STORAGE_PROVIDER is not set.
- *
- * In production: set STORAGE_PROVIDER=cloudflare_r2 (or aws_s3) plus the
- * STORAGE_BUCKET, STORAGE_KEY, STORAGE_SECRET, STORAGE_ENDPOINT, STORAGE_CDN_URL
- * env vars. Replace the multer.diskStorage below with your cloud upload logic.
- *
- * Dev mode: files saved to uploads/music/ and served at /uploads/music/<filename>.
+ * Music upload — stores audio files in Supabase Storage (music bucket).
+ * Requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in .env.
  */
 
-const multerMusic = (() => {
+const multerMusicMemory = (() => {
   const multer = require('multer');
-  const path   = require('path');
-  const crypto = require('crypto');
-  const fs     = require('fs');
-
-  const MUSIC_DIR = path.join(process.env.UPLOAD_DIR || './uploads', 'music');
-  if (!fs.existsSync(MUSIC_DIR)) fs.mkdirSync(MUSIC_DIR, { recursive: true });
-
   const ALLOWED_AUDIO = new Set([
     'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/wave', 'audio/x-wav',
     'audio/ogg', 'audio/flac', 'audio/x-flac', 'audio/aac', 'audio/x-m4a',
     'audio/mp4', 'audio/opus', 'audio/webm',
   ]);
   const MAX_AUDIO_MB = parseInt(process.env.MUSIC_MAX_FILE_MB) || 100;
-
   return multer({
-    storage: multer.diskStorage({
-      destination: MUSIC_DIR,
-      filename: (req, file, cb) => {
-        const ext = path.extname(file.originalname).toLowerCase();
-        cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`);
-      },
-    }),
+    storage: multer.memoryStorage(),
     limits: { fileSize: MAX_AUDIO_MB * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
       if (!ALLOWED_AUDIO.has(file.mimetype)) {
@@ -293,8 +273,7 @@ const multerMusic = (() => {
 })();
 
 router.post('/upload', authenticate, (req, res, next) => {
-  // Route through multer first (supports both local dev and cloud providers)
-  multerMusic.single('file')(req, res, async (err) => {
+  multerMusicMemory.single('file')(req, res, async (err) => {
     if (err) {
       if (err.code === 'LIMIT_FILE_SIZE') {
         return res.status(413).json({ success: false, message: `Audio file too large (max ${process.env.MUSIC_MAX_FILE_MB || 100} MB)` });
@@ -306,28 +285,30 @@ router.post('/upload', authenticate, (req, res, next) => {
     }
 
     try {
-      const path = require('path');
+      const path   = require('path');
+      const storageSvc = require('../../services/storage/supabaseStorage');
       const { title, artistName, albumTitle, genre } = req.body;
 
-      // Use cloud CDN URL if configured, else local URL
-      let fileUrl;
-      if (process.env.STORAGE_PROVIDER && process.env.STORAGE_CDN_URL) {
-        // TODO: Upload req.file to cloud storage here, then set fileUrl to CDN URL
-        // This is where you'd integrate Cloudflare R2 or AWS S3
-        fileUrl = `${process.env.STORAGE_CDN_URL}/music/${req.file.filename}`;
-      } else {
-        // Dev mode — local disk
-        fileUrl = `/uploads/music/${req.file.filename}`;
-      }
+      const storagePath = storageSvc.uploadFilePath('music', req.user.id, req.file.originalname);
+      const result = await storageSvc.uploadBuffer({
+        bucket:      'music',
+        storagePath,
+        buffer:      req.file.buffer,
+        mimetype:    req.file.mimetype,
+      });
+
+      // Use signed URL for private bucket — refresh on playback via GET /api/music/tracks/:id/url
+      const fileUrl = result.signedUrl || result.publicUrl;
 
       const track = await musicSvc.createTrack({
-        title: (title || path.basename(req.file.originalname, path.extname(req.file.originalname))).slice(0, 200),
+        title:      (title || path.basename(req.file.originalname, path.extname(req.file.originalname))).slice(0, 200),
         artistName: (artistName || '').slice(0, 200),
         albumTitle: (albumTitle || '').slice(0, 200),
-        genre: (genre || 'Other').slice(0, 100),
+        genre:      (genre || 'Other').slice(0, 100),
         fileUrl,
-        fileSize: req.file.size,
-        uploader: req.user.id,
+        storagePath,
+        fileSize:   req.file.size,
+        uploader:   req.user.id,
         visibility: 'public',
         isPublished: true,
       });
@@ -337,6 +318,19 @@ router.post('/upload', authenticate, (req, res, next) => {
       next(err2);
     }
   });
+});
+
+// GET /api/music/tracks/:id/url — refresh signed URL for private audio
+router.get('/tracks/:id/url', authenticate, async (req, res, next) => {
+  try {
+    const track = await musicSvc.getTrack(req.params.id);
+    if (!track) return res.status(404).json({ success: false, message: 'Track not found' });
+    if (!track.storagePath) return res.json({ success: true, url: track.fileUrl });
+
+    const storageSvc = require('../../services/storage/supabaseStorage');
+    const signedUrl = await storageSvc.getSignedUrl('music', track.storagePath, 3600);
+    res.json({ success: true, url: signedUrl });
+  } catch (err) { next(err); }
 });
 
 // ─── DJ System bridge ─────────────────────────────────────────

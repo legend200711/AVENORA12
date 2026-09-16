@@ -10,13 +10,11 @@
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
-const path = require('path');
-const crypto = require('crypto');
-const fs = require('fs');
 const mongoose = require('mongoose');
 const { authenticate, optionalAuth, requireModerator } = require('../middleware/auth');
 const { uploadRateLimiter } = require('../middleware/rateLimiter');
 const { AppError, NotFoundError, ForbiddenError } = require('../middleware/errorHandler');
+const storageSvc = require('../../services/storage/supabaseStorage');
 
 // ─── Gallery Image model (inline schema — kept in this file for simplicity) ──
 let GalleryImage;
@@ -24,17 +22,18 @@ try {
   GalleryImage = mongoose.model('GalleryImage');
 } catch {
   const schema = new mongoose.Schema({
-    uploader: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    url: { type: String, required: true },
-    title: { type: String, maxlength: 200, default: 'Untitled' },
-    caption: { type: String, maxlength: 500 },
+    uploader:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    url:         { type: String, required: true },
+    storagePath: { type: String },   // Supabase Storage path (gallery bucket)
+    title:       { type: String, maxlength: 200, default: 'Untitled' },
+    caption:     { type: String, maxlength: 500 },
     category: {
       type: String,
       enum: ['artwork', 'wallpapers', 'album-art', 'promotional', 'community'],
       default: 'artwork',
     },
-    tags: [{ type: String, maxlength: 50 }],
-    likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    tags:      [{ type: String, maxlength: 50 }],
+    likes:     [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
     isDeleted: { type: Boolean, default: false },
   }, { timestamps: true });
 
@@ -45,23 +44,12 @@ try {
   GalleryImage = mongoose.model('GalleryImage', schema);
 }
 
-// ─── Multer setup ─────────────────────────────────────────────
-const GALLERY_DIR = path.join(process.env.UPLOAD_DIR || './uploads', 'gallery');
-if (!fs.existsSync(GALLERY_DIR)) fs.mkdirSync(GALLERY_DIR, { recursive: true });
-
+// ─── Multer setup (memory storage — files go to Supabase) ─────
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
 
-const storage = multer.diskStorage({
-  destination: GALLERY_DIR,
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname).toLowerCase();
-    cb(null, `${Date.now()}-${crypto.randomBytes(8).toString('hex')}${ext}`);
-  },
-});
-
 const upload = multer({
-  storage,
+  storage: multer.memoryStorage(),
   limits: { fileSize: MAX_FILE_BYTES },
   fileFilter: (req, file, cb) => {
     if (!ALLOWED_MIME.has(file.mimetype)) {
@@ -134,16 +122,26 @@ router.post(
       const { title, caption, category } = req.body;
       const safeCategory = CATEGORIES.includes(category) ? category : 'artwork';
 
+      // Upload each file to Supabase Storage (gallery bucket — public)
       const docs = await Promise.all(
-        req.files.map(f =>
-          GalleryImage.create({
-            uploader: req.user.id,
-            url: `/uploads/gallery/${f.filename}`,
-            title: (title || 'Untitled').slice(0, 200),
-            caption: (caption || '').slice(0, 500),
-            category: safeCategory,
-          })
-        )
+        req.files.map(async (f) => {
+          const storagePath = storageSvc.uploadFilePath('gallery', req.user.id, f.originalname);
+          const result = await storageSvc.uploadBuffer({
+            bucket:      'gallery',
+            storagePath,
+            buffer:      f.buffer,
+            mimetype:    f.mimetype,
+          });
+          const url = result.publicUrl || result.signedUrl;
+          return GalleryImage.create({
+            uploader:    req.user.id,
+            url,
+            storagePath,
+            title:       (title || 'Untitled').slice(0, 200),
+            caption:     (caption || '').slice(0, 500),
+            category:    safeCategory,
+          });
+        })
       );
 
       const populated = await GalleryImage.find({ _id: { $in: docs.map(d => d._id) } })
@@ -188,8 +186,14 @@ router.delete('/:id', authenticate, async (req, res, next) => {
     const isMod = ['moderator', 'founder', 'admin'].includes(req.user.role);
     if (!isOwner && !isMod) return next(new ForbiddenError());
 
+    // Soft-delete the record
     img.isDeleted = true;
     await img.save();
+
+    // Best-effort delete from Supabase Storage
+    if (img.storagePath) {
+      storageSvc.deleteFile('gallery', img.storagePath).catch(() => {});
+    }
 
     res.json({ success: true, message: 'Image deleted' });
   } catch (err) {
