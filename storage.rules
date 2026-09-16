@@ -12,7 +12,18 @@ service firebase.storage {
         && request.resource.size < 5 * 1024 * 1024; // 5 MB
     }
 
-    // ── Images (posts, gallery) ────────────────────────────
+    // ── Avatars — subdirectory form avatars/{uid}/filename ──
+    // Catches uploadAvatar() paths that include a subdirectory.
+    match /avatars/{uid}/{filename} {
+      allow read: if true;
+      allow write: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.contentType.matches('image/.*')
+        && request.resource.size < 5 * 1024 * 1024; // 5 MB
+    }
+
+    // ── Images (posts, gallery, stories) ──────────────────
+    // Flat path images/{filename} — used by uploadImage() / gallery / feed
     match /images/{filename} {
       allow read: if true;
       allow write: if request.auth != null
@@ -20,8 +31,19 @@ service firebase.storage {
         && request.resource.size < 20 * 1024 * 1024; // 20 MB
     }
 
+    // ── Thumbnails — nested under images/ ─────────────────
+    // Path: images/thumbnails/{uid}/{filename}
+    // Used by video upload thumbnail phase.
+    match /images/thumbnails/{uid}/{filename} {
+      allow read: if true;
+      allow write: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.contentType.matches('image/.*')
+        && request.resource.size < 5 * 1024 * 1024; // 5 MB
+    }
+
     // ── Audio (music uploads) ──────────────────────────────
-    // Top-level audio/ path (legacy)
+    // Top-level audio/{filename} — legacy / StorageService.uploadAudio()
     match /audio/{filename} {
       allow read: if true;
       allow write: if request.auth != null
@@ -30,7 +52,7 @@ service firebase.storage {
     }
 
     // Per-user audio path: audio/{uid}/{filename}
-    // Used by Music Hub cloud upload; allows all authenticated owners.
+    // Used by Music Hub cloud upload (musicUploadSubmit).
     match /audio/{uid}/{filename} {
       allow read: if true;
       allow write: if request.auth != null
@@ -46,21 +68,12 @@ service firebase.storage {
     }
 
     // ── Videos per-user path: videos/{uid}/{filename} ──────
-    // Used by the Video page Firebase Storage direct upload.
+    // Used by the Video page Firebase Storage direct upload (initUploadForm).
     match /videos/{uid}/{filename} {
       allow read: if true;
       allow write: if request.auth != null
         && request.auth.uid == uid
         && request.resource.size < 2 * 1024 * 1024 * 1024; // 2 GB
-    }
-
-    // ── Thumbnails ─────────────────────────────────────────
-    match /images/thumbnails/{uid}/{filename} {
-      allow read: if true;
-      allow write: if request.auth != null
-        && request.auth.uid == uid
-        && request.resource.contentType.matches('image/.*')
-        && request.resource.size < 5 * 1024 * 1024; // 5 MB
     }
   }
 }

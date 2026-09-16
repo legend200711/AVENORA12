@@ -290,19 +290,56 @@ function renderPlaylistCards() {
 // ─── LIBRARY TAB ─────────────────────────────────────────────
 async function renderLibrary(genre = null) {
   let backendTracks = [];
+  let cloudTracks   = [];   // Firestore-backed uploads (cloudStreamTracks/{uid}/tracks)
   let genres = [];
 
+  // ── 1. Try MongoDB backend (admin-uploaded / shared catalogue) ──
   try {
     const [tracksData, genreData] = await Promise.all([
       LegendAPI.music.tracks({ limit: 50, genre: genre || undefined }),
-      fetch('/api/music/genres').then(r => r.json()).catch(() => ({ genres: [] })),
+      LegendAPI.request('GET', '/music/genres').catch(() => ({ genres: [] })),
     ]);
     backendTracks = tracksData.tracks || [];
     genres = genreData.genres || [];
-  } catch { /* backend offline */ }
+  } catch { /* backend offline — skip silently */ }
+
+  // ── 2. Load the signed-in user's own cloud-uploaded tracks from Firestore ──
+  const firebaseUser = window.AvenoraFirebase?.Auth?.getUser?.();
+  if (firebaseUser && window.AvenoraFirebase?.getFirestore) {
+    try {
+      const uid = firebaseUser.uid || firebaseUser.id;
+      const fsDb = await window.AvenoraFirebase.getFirestore();
+      const { collection, query, orderBy, limit, getDocs } =
+        await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+      const snap = await getDocs(query(
+        collection(fsDb, 'cloudStreamTracks', uid, 'tracks'),
+        orderBy('createdAt', 'desc'),
+        limit(200)
+      ));
+      cloudTracks = snap.docs.map(d => {
+        const data = d.data();
+        // Apply genre filter client-side if requested
+        if (genre && data.genre !== genre) return null;
+        return {
+          id:         d.id,
+          title:      data.title      || 'Untitled',
+          artistName: data.artist     || '',
+          album:      data.album      || '',
+          genre:      data.genre      || '',
+          fileUrl:    data.url        || data.downloadURL || '',
+          coverUrl:   data.coverUrl   || null,
+          duration:   data.duration   || 0,
+          visibility: data.visibility || 'private',
+          _isFirestore: true,
+        };
+      }).filter(Boolean);
+    } catch (fsErr) {
+      console.warn('[AVN] Could not load cloud tracks from Firestore:', fsErr.message);
+    }
+  }
 
   const localTracks = MP.queue;
-  const hasAny = backendTracks.length > 0 || localTracks.length > 0;
+  const hasAny = backendTracks.length > 0 || cloudTracks.length > 0 || localTracks.length > 0;
 
   return `
     <div>
@@ -320,8 +357,11 @@ async function renderLibrary(genre = null) {
         <div class="music-empty">
           <span class="music-empty-icon">🎵</span>
           <p>No music available yet.</p>
-          <p style="font-size:0.82rem;color:var(--text-muted)">Import audio files or connect backend storage.</p>
-          <button class="btn btn-green" style="margin-top:var(--space-md)" onclick="mpImport()">Import Files</button>
+          <p style="font-size:0.82rem;color:var(--text-muted)">Upload tracks via the Upload tab, import local files, or sign in to see your cloud library.</p>
+          <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center;margin-top:var(--space-md)">
+            <button class="btn btn-green" onclick="musicTabSwitch('upload')">⬆ Upload Music</button>
+            <button class="btn btn-outline" onclick="mpImport()">📂 Import Files</button>
+          </div>
         </div>` : ''}
 
       ${localTracks.length > 0 ? `
@@ -331,6 +371,15 @@ async function renderLibrary(genre = null) {
         </div>
         <div class="music-track-list" style="margin-bottom:var(--space-xl)">
           ${localTracks.map((t, i) => renderLocalTrackRow(t, i)).join('')}
+        </div>` : ''}
+
+      ${cloudTracks.length > 0 ? `
+        <div class="section-header">
+          <h3 class="section-title">MY CLOUD UPLOADS</h3>
+          <span style="font-size:0.8rem;color:var(--text-muted)">${cloudTracks.length} track${cloudTracks.length!==1?'s':''}</span>
+        </div>
+        <div class="music-track-list" style="margin-bottom:var(--space-xl)">
+          ${cloudTracks.map((t, i) => renderTrackRow(t, i, cloudTracks, 'cloud')).join('')}
         </div>` : ''}
 
       ${backendTracks.length > 0 ? `
