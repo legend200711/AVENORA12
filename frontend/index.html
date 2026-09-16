@@ -305,6 +305,8 @@
   <!-- Firebase must load before api.js so the auth shim is available -->
   <script src="src/services/firebase.js"></script>
   <script src="src/services/api.js"></script>
+  <!-- Supabase Storage client — must load after api.js so LU_CONFIG is set -->
+  <script src="src/services/supabase.js"></script>
   <!-- Founder theme token service — applies published theme CSS vars on every page load -->
   <script src="src/services/themeService.js"></script>
   <script src="src/services/musicService.js"></script>

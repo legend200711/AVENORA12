@@ -26,24 +26,41 @@ const logger = require('../../utils/logger');
 // ─── Supabase client (service-role — backend only) ─────────────────────────
 let _supabase = null;
 
+// Sentinel: set to the config-missing error message on first failed getClient()
+// so subsequent calls return a 503 AppError instead of a generic 500.
+let _configError = null;
+
 function getClient() {
   if (_supabase) return _supabase;
 
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  if (_configError) {
+    // Already logged — re-throw with a 503 so the frontend gets a clear message
+    const err = new Error(_configError);
+    err.statusCode = 503;
+    err.code = 'STORAGE_NOT_CONFIGURED';
+    throw err;
+  }
 
-  if (!url || !key) {
-    const msg =
-      '[SupabaseStorage] SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set in .env. ' +
-      'File uploads will fail until these are configured.';
-    logger.error(msg);
-    throw new Error(msg);
+  const url  = process.env.SUPABASE_URL;
+  const key  = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key || url === 'https://your-project-id.supabase.co' || key === 'your-service-role-key-here') {
+    _configError =
+      'Storage service is not configured. ' +
+      'Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the backend .env file. ' +
+      'See SUPABASE_SETUP.md for instructions.';
+    logger.error('[SupabaseStorage] ' + _configError);
+    const err = new Error(_configError);
+    err.statusCode = 503;
+    err.code = 'STORAGE_NOT_CONFIGURED';
+    throw err;
   }
 
   _supabase = createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  logger.info('[SupabaseStorage] Supabase client initialised successfully.');
   return _supabase;
 }
 

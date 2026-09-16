@@ -25,12 +25,18 @@
   'use strict';
 
   // ─── Resolve API base URL ─────────────────────────────────
+  // Returns a URL that ends with /api (no trailing slash).
+  // Handles both:
+  //   'https://api.avenora.app'      -> 'https://api.avenora.app/api'
+  //   'https://api.avenora.app/api'  -> 'https://api.avenora.app/api'  (no double /api)
   function _apiBase() {
     const raw =
       (window.LU_CONFIG && window.LU_CONFIG.apiUrl) || null;
     if (!raw) return null;
+    // Strip trailing slash
     let url = String(raw).replace(/\/$/, '');
-    if (!url.endsWith('/api') && !url.match(/\/api\//)) url += '/api';
+    // If the URL already ends with /api or contains /api/, don't append again
+    if (!url.endsWith('/api') && !url.includes('/api/')) url += '/api';
     return url;
   }
 
@@ -68,12 +74,25 @@
         if (xhr.status >= 200 && xhr.status < 300) {
           resolve(data);
         } else {
-          const err = new Error(data?.message || `Upload failed (HTTP ${xhr.status})`);
+          // Map HTTP status codes to actionable error messages
+          const serverMsg = data?.message || '';
+          const message =
+            xhr.status === 0   ? 'Upload failed: could not reach the server. Check your connection and that the backend is running.' :
+            xhr.status === 401 ? 'Upload failed: your session has expired. Please sign in again.' :
+            xhr.status === 403 ? 'Upload failed: you do not have permission to upload.' :
+            xhr.status === 413 ? 'Upload failed: file too large. Maximum sizes — images: 20 MB, videos: 2 GB, avatars: 5 MB.' :
+            xhr.status === 415 ? `Upload failed: unsupported file type. ${serverMsg}` :
+            xhr.status === 503 ? 'Upload failed: storage service unavailable. The Supabase configuration may be missing on the server.' :
+            serverMsg || `Upload failed (HTTP ${xhr.status})`;
+          const err = new Error(message);
           err.status = xhr.status;
           reject(err);
         }
       };
-      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.onerror = () => reject(new Error(
+        'Upload failed: could not reach the server. ' +
+        'Check your internet connection and that the backend is running at the configured URL.'
+      ));
       xhr.onabort = () => reject(new Error('Upload cancelled'));
       xhr.send(formData);
     });

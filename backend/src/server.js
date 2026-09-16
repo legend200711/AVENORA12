@@ -54,8 +54,37 @@ app.use(helmet({
   contentSecurityPolicy: false, // Configure per environment
 }));
 
+// Build allowed-origins list from environment variables.
+// FRONTEND_URL  — primary deployed frontend (e.g. https://legend200711.github.io)
+// FRONTEND_URL_2 — optional secondary origin (e.g. a custom domain)
+// Always include localhost:3000 and localhost:5173 for local development.
+const _buildAllowedOrigins = () => {
+  const set = new Set(['http://localhost:3000', 'http://localhost:5173']);
+  const add = (v) => {
+    if (v && v !== 'null' && v !== 'undefined') {
+      // Strip trailing slash and add
+      const clean = String(v).replace(/\/$/, '');
+      if (clean) set.add(clean);
+    }
+  };
+  add(process.env.FRONTEND_URL);
+  add(process.env.FRONTEND_URL_2);
+  return [...set];
+};
+
+const _allowedOrigins = _buildAllowedOrigins();
+logger.info(`[CORS] Allowed origins: ${_allowedOrigins.join(', ')}`);
+
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+  origin: (origin, callback) => {
+    // Allow requests with no origin (curl, Postman, mobile apps, same-host)
+    if (!origin) return callback(null, true);
+    if (_allowedOrigins.includes(origin)) return callback(null, true);
+    // Also accept any github.io subdomain (covers preview deployments)
+    if (/^https:\/\/[^.]+\.github\.io$/.test(origin)) return callback(null, true);
+    logger.warn(`[CORS] Blocked origin: ${origin}`);
+    callback(new Error(`CORS: origin '${origin}' not allowed`));
+  },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],

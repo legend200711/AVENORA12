@@ -189,16 +189,46 @@
       console.error('[AVENORA] Upload blocked — API endpoint not configured', { path });
       throw new Error('[AVENORA] Avenora API endpoint is not configured.');
     }
-    const token = TokenStore.getAccess();
+
+    // Prefer a fresh Firebase ID token — the backend authenticate middleware
+    // requires an RS256 Firebase JWT or a local HS256 JWT.  TokenStore.getAccess()
+    // stores the Firebase UID (not a token), so we must ask Firebase for a real
+    // ID token first.
+    let token = null;
+    if (window.AvenoraFirebase?.Auth) {
+      token = await window.AvenoraFirebase.Auth.getIdToken().catch(() => null);
+    }
+    if (!token) token = TokenStore.getAccess();
+
     const headers = {};
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
     const fullUrl = `${BASE_URL}${path}`;
-    const res = await fetch(fullUrl, { method: 'POST', headers, body: formData });
-    const data = await res.json();
+    let res;
+    try {
+      res = await fetch(fullUrl, { method: 'POST', headers, body: formData });
+    } catch (networkErr) {
+      console.error(`[AVENORA] Network error — upload to ${fullUrl}:`, networkErr.message);
+      throw new Error(
+        'Upload failed: could not reach the server. ' +
+        'Check your internet connection and that the backend is running.'
+      );
+    }
+
+    let data;
+    try { data = await res.json(); } catch { data = { message: `HTTP ${res.status}` }; }
+
     if (!res.ok) {
-      const err = new Error(data?.message || 'Upload failed');
+      const message =
+        res.status === 401 ? 'Upload failed: authentication expired. Please sign in again.' :
+        res.status === 403 ? 'Upload failed: you do not have permission to upload.' :
+        res.status === 413 ? 'Upload failed: file too large.' :
+        res.status === 415 ? `Upload failed: unsupported file type. ${data?.message || ''}` :
+        res.status === 503 ? 'Upload failed: storage service unavailable. Check Supabase configuration.' :
+        data?.message || `Upload failed (HTTP ${res.status})`;
+      const err = new Error(message);
       err.status = res.status;
+      console.error(`[AVENORA] Upload error — ${path}:`, { status: res.status, body: data });
       throw err;
     }
     return data;

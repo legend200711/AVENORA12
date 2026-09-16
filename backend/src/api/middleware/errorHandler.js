@@ -11,12 +11,16 @@ function errorHandler(err, req, res, next) {
   // Determine status code
   const statusCode = err.statusCode || err.status || 500;
 
-  // Never expose stack traces or internal details to the client
+  // Safe client messages for known operational errors
+  // (503 = config/service issue — safe to surface; other 5xx = internal, hide details)
+  const SAFE_CODES = new Set(['STORAGE_NOT_CONFIGURED', 'SERVICE_UNAVAILABLE']);
+  const isSafeToSurface = statusCode < 500 || SAFE_CODES.has(err.code);
+
   const response = {
     error: true,
-    message: statusCode >= 500
-      ? 'An internal server error occurred. Please try again later.'
-      : err.message || 'Request failed',
+    message: isSafeToSurface
+      ? err.message || 'Request failed'
+      : 'An internal server error occurred. Please try again later.',
     code: err.code || 'SERVER_ERROR',
   };
 

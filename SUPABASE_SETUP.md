@@ -213,7 +213,7 @@ To migrate existing files:
 # Server
 PORT=3001
 NODE_ENV=development
-FRONTEND_URL=http://localhost:3000
+FRONTEND_URL=https://legend200711.github.io   # your GitHub Pages / production frontend URL
 
 # Firebase (authentication + Firestore — NOT storage)
 FIREBASE_PROJECT_ID=avenora-6e147
