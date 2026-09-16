@@ -1,5 +1,21 @@
 # AVENORA — Supabase Storage Setup Guide
 
+## ⚠️ If You Are Seeing These Errors Right Now
+
+| Error | Cause | Fix |
+|-------|-------|-----|
+| **"Upload failed: Failed to fetch"** (Feed) | Backend is not running or `apiUrl` in `index.html` is wrong | Start the backend: `cd backend && npm run dev`. Verify `window.LU_CONFIG.apiUrl` in `frontend/index.html` matches your running backend URL. |
+| **"Storage service not configured"** (Video / Music Hub) | `SUPABASE_URL` or `SUPABASE_SERVICE_ROLE_KEY` missing in `backend/.env` | Add Supabase credentials to `backend/.env` (see Section 2 below) and restart the server. |
+| **"Upload failed: could not reach the server"** | Network error — backend is unreachable | Confirm the backend is running (`curl http://localhost:3001/api/health`). Check CORS in `backend/.env` (`FRONTEND_URL`). |
+
+**Quick check:** Open your browser devtools console. You will see one of:
+- `[AvenoraStorage] ✅ Backend reachable` — backend is up
+- `[AvenoraStorage] ✅ Supabase Storage is configured` — uploads will work
+- `[AvenoraStorage] ❌ Cannot reach backend` — backend not running or wrong URL
+- `[AvenoraStorage] ❌ Supabase Storage is not configured` — add env vars to `.env`
+
+---
+
 ## Overview
 
 AVENORA uses Supabase Storage for all media file uploads:

@@ -705,7 +705,8 @@ window.musicSearch = function (q) {
     // Search backend
     let backendResults = { tracks: [], albums: [], artists: [] };
     try {
-      const res = await fetch(`/api/music/search?q=${encodeURIComponent(query)}`);
+      const _musicApiBase = (window.LU_CONFIG?.apiUrl || '').replace(/\/$/, '');
+      const res = await fetch(`${_musicApiBase}/music/search?q=${encodeURIComponent(query)}`);
       const data = await res.json();
       if (data.success) backendResults = data;
     } catch { /* not connected */ }
@@ -959,7 +960,10 @@ window.musicUploadSubmit = async function (e) {
   const visibility = form.querySelector('[name="visibility"]')?.value || 'private';
 
   try {
-    if (!window.AvenoraStorage) throw new Error('Storage service not loaded. Refresh the page and try again.');
+    if (!window.AvenoraStorage) {
+      console.error('[AVENORA] AvenoraStorage not found. Check that frontend/src/services/supabase.js loaded correctly.');
+      throw new Error('Storage service not loaded. Check your browser console for details and refresh the page.');
+    }
 
     // 1. Upload file + metadata to backend → Supabase Storage (music bucket)
     if (status) status.textContent = 'Uploading to Supabase Storage…';
@@ -1226,7 +1230,8 @@ window.musicOpenArtist = async function (id) {
   try {
     const data = await LegendAPI.music.artists(id);
     // artist detail endpoint
-    const res = await fetch(`/api/music/artists/${encodeURIComponent(id)}`);
+    const _musicApiBase = (window.LU_CONFIG?.apiUrl || '').replace(/\/$/, '');
+    const res = await fetch(`${_musicApiBase}/music/artists/${encodeURIComponent(id)}`);
     const json = await res.json();
     const a = json.artist || {};
     el.innerHTML = `

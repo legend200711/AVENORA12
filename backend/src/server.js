@@ -178,6 +178,53 @@ app.use(errorHandler);
 // ─── Startup ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 3001;
 
+// ─── Supabase config validation ─────────────────────────────
+// Run immediately on startup (before routes) so the developer gets
+// a clear, actionable error in the console rather than a silent 503.
+function _checkSupabaseConfig() {
+  const url  = process.env.SUPABASE_URL;
+  const key  = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const placeholder = v => {
+    if (!v) return true;
+    const lc = String(v).toLowerCase();
+    return lc.startsWith('replace_me') ||
+      lc.startsWith('your_') ||
+      lc.startsWith('your-') ||
+      lc === 'https://your-project-id.supabase.co' ||
+      lc.includes('your_project_id') ||
+      lc.includes('your-project-id') ||
+      lc === 'your-service-role-key-here' ||
+      lc.includes('your_service_role') ||
+      lc.includes('your-service-role');
+  };
+
+  if (placeholder(url) || placeholder(key)) {
+    logger.warn('');
+    logger.warn('══════════════════════════════════════════════════════════');
+    logger.warn('⚠️  AVENORA STORAGE NOT CONFIGURED — uploads will fail');
+    logger.warn('══════════════════════════════════════════════════════════');
+    logger.warn('  SUPABASE_URL and/or SUPABASE_SERVICE_ROLE_KEY are missing');
+    logger.warn('  from backend/.env. All upload endpoints will return HTTP 503.');
+    logger.warn('');
+    logger.warn('  To fix:');
+    logger.warn('    1. Go to https://supabase.com/dashboard');
+    logger.warn('    2. Create a project (or open an existing one)');
+    logger.warn('    3. Go to Project Settings → API');
+    logger.warn('    4. Copy "Project URL" → SUPABASE_URL');
+    logger.warn('    5. Copy "service_role" key → SUPABASE_SERVICE_ROLE_KEY');
+    logger.warn('    6. Copy "anon public" key → SUPABASE_ANON_KEY');
+    logger.warn('    7. Save backend/.env and restart the server');
+    logger.warn('    8. See SUPABASE_SETUP.md for bucket policy instructions');
+    logger.warn('');
+    logger.warn('  Firebase auth (login/register) still works without Supabase.');
+    logger.warn('══════════════════════════════════════════════════════════');
+    logger.warn('');
+  } else {
+    logger.info('[Supabase] ✅ Supabase credentials detected in environment');
+  }
+}
+_checkSupabaseConfig();
+
 async function start() {
   try {
     await connectDatabase();
@@ -188,7 +235,8 @@ async function start() {
       await ensureBuckets();
       logger.info('✅ Supabase Storage buckets verified');
     } catch (storageErr) {
-      logger.warn('⚠️  Supabase Storage not configured — uploads will fail until SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set');
+      logger.warn(`⚠️  Supabase Storage bucket setup failed: ${storageErr.message}`);
+      logger.warn('   Uploads will return HTTP 503 until SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set in backend/.env');
     }
 
     // Initialize Socket.io for real-time features

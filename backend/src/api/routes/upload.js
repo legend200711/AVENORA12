@@ -152,6 +152,28 @@ router.post('/thumbnail', authenticate, uploadRateLimiter, createUploader('image
   } catch (err) { next(err); }
 });
 
+// GET /api/upload/status — returns whether Supabase Storage is configured.
+// Does NOT expose any credentials. Safe to call without auth.
+router.get('/status', (req, res) => {
+  const url  = process.env.SUPABASE_URL;
+  const key  = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const isPlaceholder = v => {
+    if (!v) return true;
+    const lc = String(v).toLowerCase();
+    return lc.startsWith('replace_me') || lc.startsWith('your_') || lc.startsWith('your-') ||
+      lc.includes('your_project_id') || lc.includes('your-project-id') ||
+      lc.includes('your_service_role') || lc.includes('your-service-role');
+  };
+  const isConfigured = !isPlaceholder(url) && !isPlaceholder(key);
+  res.json({
+    success: true,
+    storageAvailable: isConfigured,
+    message: isConfigured
+      ? 'Supabase Storage is configured and ready.'
+      : 'Supabase Storage is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in backend/.env. See SUPABASE_SETUP.md.',
+  });
+});
+
 // GET /api/upload/signed-url?bucket=music&path=uid/file.mp3
 // Refresh a signed URL for a private file — never exposes service-role key.
 router.get('/signed-url', authenticate, async (req, res, next) => {

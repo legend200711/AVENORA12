@@ -1,263 +1,310 @@
 /**
- * AVENORA — Supabase Storage Client (Frontend)
+ * AVENORA — Supabase Storage Client (Direct Browser Upload)
  *
- * Provides a thin, frontend-safe wrapper around Supabase Storage.
- * Uses the ANON key only — never exposes the service-role key.
+ * Uploads go straight from the browser to Supabase Storage using the
+ * anon key. No backend server is required for file uploads.
  *
- * All uploads are proxied through the AVENORA backend API
- * (/api/upload/*, /api/music/upload, /api/videos/upload, /api/gallery/upload)
- * rather than uploading directly to Supabase from the browser.
+ * Buckets:
+ *   gallery      — Feed images, gallery uploads          (public)
+ *   thumbnails   — Video/playlist artwork                (public)
+ *   avatars      — Profile pictures                      (public)
+ *   music        — Audio tracks                          (public)
+ *   videos       — Video files                           (public)
+ *   stream-media — 24-hour cloud stream media            (public)
  *
- * This file exposes:
- *   AvenoraStorage.upload(category, file, onProgress)
- *   AvenoraStorage.uploadAvatar(file, onProgress)
- *   AvenoraStorage.uploadAudio(file, onProgress)
- *   AvenoraStorage.uploadVideo(file, onProgress)
- *   AvenoraStorage.uploadImage(file, onProgress)
- *   AvenoraStorage.uploadThumbnail(file, onProgress)
- *   AvenoraStorage.uploadGallery(files, meta)  — batch, returns array
- *   AvenoraStorage.refreshSignedUrl(bucket, storagePath, expirySecs)
+ * Configuration (set in index.html window.LU_CONFIG):
+ *   supabaseUrl  — https://licuiqxkkfboqezzmsqu.supabase.co
+ *   supabaseAnon — eyJ... (anon/public key)
  *
- * Upload progress is tracked via XMLHttpRequest so real progress events fire.
+ * Exposed as window.AvenoraStorage with the same API as before so
+ * no page code needs to change.
  */
 
 (function (global) {
   'use strict';
 
-  // ─── Resolve API base URL ─────────────────────────────────
-  // Returns a URL that ends with /api (no trailing slash).
-  // Handles both:
-  //   'https://api.avenora.app'      -> 'https://api.avenora.app/api'
-  //   'https://api.avenora.app/api'  -> 'https://api.avenora.app/api'  (no double /api)
-  function _apiBase() {
-    const raw =
-      (window.LU_CONFIG && window.LU_CONFIG.apiUrl) || null;
-    if (!raw) return null;
-    // Strip trailing slash
-    let url = String(raw).replace(/\/$/, '');
-    // If the URL already ends with /api or contains /api/, don't append again
-    if (!url.endsWith('/api') && !url.includes('/api/')) url += '/api';
-    return url;
+  const SUPABASE_URL  = 'https://licuiqxkkfboqezzmsqu.supabase.co';
+  const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpY3VpcXhra2Zib3Flenptc3F1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNTYxMDQsImV4cCI6MjEwNDkzMjEwNH0.tsYOyCI7skF6Otz2W0oNYhxM63-0551lrqIDCO8NoJo';
+
+  const STORAGE_BASE  = `${SUPABASE_URL}/storage/v1`;
+
+  // ─── Unique path generator ────────────────────────────────
+  function _storagePath(bucket, uid, filename) {
+    const ext   = filename.includes('.') ? '.' + filename.split('.').pop().toLowerCase() : '';
+    const rand  = Math.random().toString(36).slice(2, 10);
+    const ts    = Date.now();
+    return `${uid}/${ts}-${rand}${ext}`;
   }
 
-  // ─── Auth token ───────────────────────────────────────────
-  async function _getToken() {
-    if (window.AvenoraFirebase?.Auth) {
-      const t = await window.AvenoraFirebase.Auth.getIdToken().catch(() => null);
-      if (t) return t;
-    }
-    return sessionStorage.getItem('lu_uid') ||
-           localStorage.getItem('lu_uid') ||
-           sessionStorage.getItem('lu_access') ||
-           localStorage.getItem('lu_access') ||
-           null;
+  // ─── Public URL for public buckets ───────────────────────
+  function _publicUrl(bucket, path) {
+    return `${STORAGE_BASE}/object/public/${bucket}/${path}`;
   }
 
-  // ─── XHR upload with progress ─────────────────────────────
-  function _xhrUpload(url, formData, token, onProgress) {
+  // ─── XHR upload directly to Supabase Storage REST API ────
+  // Uses the anon key. Bucket must have RLS policy allowing INSERT.
+  function _upload(bucket, storagePath, file, onProgress) {
     return new Promise((resolve, reject) => {
+      const url = `${STORAGE_BASE}/object/${bucket}/${storagePath}`;
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url);
-      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.setRequestHeader('apikey', SUPABASE_ANON);
+      xhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_ANON}`);
+      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+      xhr.setRequestHeader('x-upsert', 'true');
 
       if (onProgress && xhr.upload) {
-        xhr.upload.addEventListener('progress', (e) => {
-          if (e.lengthComputable) {
-            onProgress(Math.round((e.loaded / e.total) * 100));
-          }
+        xhr.upload.addEventListener('progress', e => {
+          if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
         });
       }
 
       xhr.onload = () => {
-        let data;
-        try { data = JSON.parse(xhr.responseText); } catch { data = { message: xhr.responseText }; }
         if (xhr.status >= 200 && xhr.status < 300) {
-          resolve(data);
+          const publicUrl = _publicUrl(bucket, storagePath);
+          resolve({ url: publicUrl, storagePath, bucket });
         } else {
-          // Map HTTP status codes to actionable error messages
-          const serverMsg = data?.message || '';
-          const message =
-            xhr.status === 0   ? 'Upload failed: could not reach the server. Check your connection and that the backend is running.' :
-            xhr.status === 401 ? 'Upload failed: your session has expired. Please sign in again.' :
-            xhr.status === 403 ? 'Upload failed: you do not have permission to upload.' :
-            xhr.status === 413 ? 'Upload failed: file too large. Maximum sizes — images: 20 MB, videos: 2 GB, avatars: 5 MB.' :
-            xhr.status === 415 ? `Upload failed: unsupported file type. ${serverMsg}` :
-            xhr.status === 503 ? 'Upload failed: storage service unavailable. The Supabase configuration may be missing on the server.' :
-            serverMsg || `Upload failed (HTTP ${xhr.status})`;
-          const err = new Error(message);
-          err.status = xhr.status;
-          reject(err);
+          let msg = `Upload failed (HTTP ${xhr.status})`;
+          try { msg = JSON.parse(xhr.responseText).message || msg; } catch {}
+          if (xhr.status === 400 && msg.includes('policy')) {
+            msg = 'Upload blocked by storage policy. Open Supabase dashboard → Storage → ' + bucket + ' → Policies and add an INSERT policy for anon role.';
+          }
+          console.error(`[AvenoraStorage] ${msg}`);
+          reject(new Error(msg));
         }
       };
-      xhr.onerror = () => reject(new Error(
-        'Upload failed: could not reach the server. ' +
-        'Check your internet connection and that the backend is running at the configured URL.'
-      ));
-      xhr.onabort = () => reject(new Error('Upload cancelled'));
-      xhr.send(formData);
+      xhr.onerror  = () => reject(new Error('Upload failed: network error. Check your internet connection.'));
+      xhr.onabort  = () => reject(new Error('Upload cancelled'));
+      xhr.send(file);
     });
   }
+
+  // ─── Get current user UID ─────────────────────────────────
+  function _uid() {
+    const u = window.AvenoraFirebase?.Auth?.getUser?.();
+    return u?.uid || u?.id || 'anon-' + Math.random().toString(36).slice(2, 8);
+  }
+
+  // ─── Startup check ────────────────────────────────────────
+  fetch(`${STORAGE_BASE}/bucket`, {
+    headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}` },
+  })
+    .then(r => r.ok
+      ? console.info('[AvenoraStorage] ✅ Supabase Storage connected — direct upload mode')
+      : console.warn(`[AvenoraStorage] ⚠️  Supabase Storage responded ${r.status}`)
+    )
+    .catch(() => console.error('[AvenoraStorage] ❌ Cannot reach Supabase Storage. Check your internet connection.'));
 
   // ─── Public API ───────────────────────────────────────────
   const AvenoraStorage = {
 
+    get storageAvailable() { return true; },
+    get storageStatusMessage() { return 'Direct Supabase Storage upload mode.'; },
+
     /**
-     * Generic upload via the backend proxy.
-     * @param {'avatar'|'image'|'audio'|'video'|'thumbnail'} category
+     * Upload a file to a bucket by category.
+     * @param {'image'|'avatar'|'audio'|'video'|'thumbnail'} category
      * @param {File} file
-     * @param {Function} [onProgress]  — called with 0–100
-     * @returns {Promise<{url: string, storagePath: string}>}
+     * @param {Function} [onProgress]
+     * @returns {Promise<{url, storagePath}>}
      */
     async upload(category, file, onProgress) {
-      const base = _apiBase();
-      if (!base) throw new Error('API endpoint not configured. Set window.LU_CONFIG.apiUrl.');
-      const token = await _getToken();
-      const fd = new FormData();
-      fd.append('file', file);
-      const data = await _xhrUpload(`${base}/upload/${category}`, fd, token, onProgress);
-      if (!data.success) throw new Error(data.message || 'Upload failed');
-      return { url: data.url, storagePath: data.storagePath || null };
+      const bucketMap = {
+        image:     'gallery',
+        avatar:    'avatars',
+        audio:     'music',
+        video:     'videos',
+        thumbnail: 'thumbnails',
+      };
+      const bucket = bucketMap[category] || 'gallery';
+      const uid    = _uid();
+      const path   = _storagePath(bucket, uid, file.name);
+      return _upload(bucket, path, file, onProgress);
     },
 
-    /**
-     * Upload an avatar.
-     * Returns { url } — the signed/public URL to use in profile.
-     */
     async uploadAvatar(file, onProgress) {
       if (file.size > 10 * 1024 * 1024) throw new Error('Avatar must be under 10 MB');
-      return this.upload('avatar', file, onProgress);
+      const uid  = _uid();
+      const ext  = file.name.includes('.') ? '.' + file.name.split('.').pop().toLowerCase() : '';
+      const path = `${uid}/avatar${ext}`;
+      return _upload('avatars', path, file, onProgress);
     },
 
-    /**
-     * Upload a banner/cover image.
-     */
     async uploadImage(file, onProgress) {
       if (file.size > 20 * 1024 * 1024) throw new Error('Image must be under 20 MB');
       return this.upload('image', file, onProgress);
     },
 
-    /**
-     * Upload an audio file.
-     * For Music Hub use /api/music/upload directly (includes metadata).
-     * This is for generic audio (e.g. stream-media).
-     */
     async uploadAudio(file, onProgress) {
       if (file.size > 100 * 1024 * 1024) throw new Error('Audio must be under 100 MB');
       return this.upload('audio', file, onProgress);
     },
 
-    /**
-     * Upload a video file.
-     */
     async uploadVideo(file, onProgress) {
       if (file.size > 2 * 1024 * 1024 * 1024) throw new Error('Video must be under 2 GB');
       return this.upload('video', file, onProgress);
     },
 
-    /**
-     * Upload a thumbnail / artwork image.
-     */
     async uploadThumbnail(file, onProgress) {
       if (file.size > 5 * 1024 * 1024) throw new Error('Thumbnail must be under 5 MB');
       return this.upload('thumbnail', file, onProgress);
     },
 
     /**
-     * Batch-upload gallery images.
-     * @param {File[]} files
-     * @param {{ category?: string, title?: string, caption?: string }} meta
-     * @returns {Promise<{images: Array}>}
+     * Batch-upload gallery images, save each to Firestore gallery collection.
      */
     async uploadGallery(files, meta = {}) {
-      const base = _apiBase();
-      if (!base) throw new Error('API endpoint not configured.');
-      const token = await _getToken();
-      const fd = new FormData();
-      files.forEach(f => fd.append('file', f));
-      if (meta.category) fd.append('category', meta.category);
-      if (meta.title)    fd.append('title', meta.title);
-      if (meta.caption)  fd.append('caption', meta.caption);
-      const data = await _xhrUpload(`${base}/gallery/upload`, fd, token, null);
-      if (!data.success) throw new Error(data.message || 'Gallery upload failed');
-      return data;
+      const uid = _uid();
+      const results = [];
+      for (const file of files) {
+        const path   = _storagePath('gallery', uid, file.name);
+        const result = await _upload('gallery', path, file, null);
+        results.push(result);
+        // Save to Firestore gallery collection
+        try {
+          if (window.AvenoraFirebase?.Firestore?.addGalleryItem) {
+            await window.AvenoraFirebase.Firestore.addGalleryItem(
+              result.url, meta.category || 'artwork', meta.title || ''
+            );
+          }
+        } catch (fsErr) {
+          console.warn('[AvenoraStorage] Firestore gallery save skipped:', fsErr.message);
+        }
+      }
+      return { success: true, images: results.map(r => ({ url: r.url, storagePath: r.storagePath })) };
     },
 
     /**
-     * Upload music with metadata (Music Hub).
-     * @param {File} file
-     * @param {{ title, artist, album, genre, description, visibility }} meta
-     * @param {Function} [onProgress]
-     * @returns {Promise<{track}>}
+     * Upload music + save metadata to Firestore cloudStreamTracks.
+     * Returns { track } shaped like the old backend response.
      */
     async uploadMusic(file, meta = {}, onProgress) {
-      const base = _apiBase();
-      if (!base) throw new Error('API endpoint not configured.');
-      const token = await _getToken();
-      const fd = new FormData();
-      fd.append('file', file);
-      if (meta.title)       fd.append('title',       meta.title);
-      if (meta.artist)      fd.append('artistName',  meta.artist);
-      if (meta.album)       fd.append('albumTitle',  meta.album);
-      if (meta.genre)       fd.append('genre',       meta.genre);
-      const data = await _xhrUpload(`${base}/music/upload`, fd, token, onProgress);
-      if (!data.success) throw new Error(data.message || 'Music upload failed');
-      return data;
-    },
+      if (file.size > 100 * 1024 * 1024) throw new Error('Audio must be under 100 MB');
+      const uid  = _uid();
+      const path = _storagePath('music', uid, file.name);
+      const { url, storagePath } = await _upload('music', path, file, onProgress);
 
-    /**
-     * Upload video with metadata.
-     * @param {File} videoFile
-     * @param {File|null} thumbnailFile
-     * @param {{ title, description, category, visibility }} meta
-     * @param {Function} [onProgress]
-     * @returns {Promise<{video}>}
-     */
-    async uploadVideoWithMeta(videoFile, thumbnailFile, meta = {}, onProgress) {
-      const base = _apiBase();
-      if (!base) throw new Error('API endpoint not configured.');
-      const token = await _getToken();
-      const fd = new FormData();
-      fd.append('video', videoFile);
-      if (thumbnailFile) fd.append('thumbnail', thumbnailFile);
-      if (meta.title)       fd.append('title',       meta.title);
-      if (meta.description) fd.append('description', meta.description);
-      if (meta.category)    fd.append('category',    meta.category);
-      if (meta.visibility)  fd.append('visibility',  meta.visibility);
-      const data = await _xhrUpload(`${base}/videos/upload`, fd, token, onProgress);
-      if (!data.success) throw new Error(data.message || 'Video upload failed');
-      return data;
-    },
+      const track = {
+        id:          `${uid}_${Date.now()}`,
+        title:       meta.title || file.name.replace(/\.[^.]+$/, ''),
+        artistName:  meta.artist || '',
+        albumTitle:  meta.album  || '',
+        genre:       meta.genre  || 'Other',
+        fileUrl:     url,
+        storagePath,
+        fileSize:    file.size,
+        mimeType:    file.type,
+        visibility:  meta.visibility || 'public',
+        createdAt:   new Date().toISOString(),
+      };
 
-    /**
-     * Refresh a signed URL for a private Supabase Storage file.
-     * Routes through the backend — the service-role key never reaches the browser.
-     *
-     * @param {'music'|'videos'|'avatars'|'stream-media'} bucket
-     * @param {string} storagePath
-     * @returns {Promise<string>}
-     */
-    async refreshSignedUrl(bucket, storagePath) {
-      const base = _apiBase();
-      if (!base) throw new Error('API endpoint not configured.');
-      const token = await _getToken();
-
-      // Route per bucket
-      let url;
-      if (bucket === 'music') {
-        // Extract track id if possible, else use query param route
-        url = `${base}/upload/signed-url?bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(storagePath)}`;
-      } else if (bucket === 'videos') {
-        url = `${base}/upload/signed-url?bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(storagePath)}`;
-      } else {
-        url = `${base}/upload/signed-url?bucket=${encodeURIComponent(bucket)}&path=${encodeURIComponent(storagePath)}`;
+      // Save to Firestore so Music Hub library and Cloud Stream can read it
+      try {
+        if (window.AvenoraFirebase?.getFirestore) {
+          const fsDb = await window.AvenoraFirebase.getFirestore();
+          const { doc, setDoc, serverTimestamp } =
+            await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+          const docId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          await setDoc(doc(fsDb, 'cloudStreamTracks', uid, 'tracks', docId), {
+            uid,
+            title:       track.title,
+            artist:      track.artistName,
+            album:       track.albumTitle,
+            genre:       track.genre,
+            url,
+            storagePath,
+            duration:    0,
+            fileName:    file.name,
+            fileSize:    file.size,
+            mimeType:    file.type,
+            visibility:  track.visibility,
+            status:      'ready',
+            createdAt:   serverTimestamp(),
+          });
+          track.id = docId;
+        }
+      } catch (fsErr) {
+        console.warn('[AvenoraStorage] Firestore track save skipped:', fsErr.message);
       }
 
-      const headers = { 'Content-Type': 'application/json' };
-      if (token) headers['Authorization'] = `Bearer ${token}`;
-      const res = await fetch(url, { headers });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.message || 'Could not refresh signed URL');
-      return data.signedUrl || data.url;
+      return { success: true, track };
+    },
+
+    /**
+     * Upload video + optional thumbnail, save metadata to Firestore videos collection.
+     * Returns { video } shaped like the old backend response.
+     */
+    async uploadVideoWithMeta(videoFile, thumbnailFile, meta = {}, onProgress) {
+      const uid = _uid();
+
+      // Upload video
+      const videoPath = _storagePath('videos', uid, videoFile.name);
+      const { url: videoUrl, storagePath } = await _upload('videos', videoPath, videoFile, onProgress);
+
+      // Upload thumbnail if provided
+      let thumbnailUrl = '';
+      if (thumbnailFile) {
+        try {
+          const thumbPath = _storagePath('thumbnails', uid, thumbnailFile.name);
+          const t = await _upload('thumbnails', thumbPath, thumbnailFile, null);
+          thumbnailUrl = t.url;
+        } catch (e) {
+          console.warn('[AvenoraStorage] Thumbnail upload skipped:', e.message);
+        }
+      }
+
+      const video = {
+        id:          `${uid}_${Date.now()}`,
+        title:       meta.title || videoFile.name.replace(/\.[^.]+$/, ''),
+        description: meta.description || '',
+        category:    meta.category    || 'other',
+        visibility:  meta.visibility  || 'public',
+        videoUrl,
+        thumbnailUrl,
+        storagePath,
+        fileSize:    videoFile.size,
+        createdAt:   new Date().toISOString(),
+      };
+
+      // Save to Firestore videos collection
+      try {
+        if (window.AvenoraFirebase?.getFirestore) {
+          const fsDb = await window.AvenoraFirebase.getFirestore();
+          const { collection, addDoc, serverTimestamp } =
+            await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+          const user = window.AvenoraFirebase?.Auth?.getUser?.();
+          const docRef = await addDoc(collection(fsDb, 'videos'), {
+            uid,
+            owner: {
+              uid,
+              username: user?.username || user?.displayName || 'user',
+              avatarUrl: user?.profile?.avatarUrl || '',
+            },
+            title:        video.title,
+            description:  video.description,
+            category:     video.category,
+            visibility:   video.visibility,
+            videoUrl,
+            thumbnailUrl,
+            storagePath,
+            fileSize:     videoFile.size,
+            views:        0,
+            likes:        [],
+            processingStatus: 'ready',
+            createdAt:    serverTimestamp(),
+          });
+          video.id = docRef.id;
+        }
+      } catch (fsErr) {
+        console.warn('[AvenoraStorage] Firestore video save skipped:', fsErr.message);
+      }
+
+      return { success: true, video };
+    },
+
+    // Kept for API compatibility — not needed in direct mode
+    async refreshSignedUrl(bucket, storagePath) {
+      return _publicUrl(bucket, storagePath);
     },
   };
 

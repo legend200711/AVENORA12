@@ -47,12 +47,40 @@ if [ ! -f "$BACKEND_DIR/.env" ]; then
   cp "$BACKEND_DIR/.env.example" "$BACKEND_DIR/.env"
   warn ".env created from .env.example"
   warn "IMPORTANT: Edit backend/.env and fill in your real values:"
-  warn "  - JWT_SECRET (required — use a long random string)"
-  warn "  - JWT_REFRESH_SECRET (required — different from JWT_SECRET)"
-  warn "  - MONGODB_URI (optional — omit to run without database)"
+  warn "  - SUPABASE_URL              (required for uploads)"
+  warn "  - SUPABASE_SERVICE_ROLE_KEY (required for uploads)"
+  warn "  - SUPABASE_ANON_KEY         (required for uploads)"
+  warn "  - MONGODB_URI               (optional — omit to run without database)"
+  warn "  - FIREBASE_PROJECT_ID       (avenora-6e147)"
+  warn "  - FIREBASE_WEB_API_KEY      (for Firebase auth token verification)"
+  warn "  - JWT_SECRET                (long random string)"
+  warn "  - JWT_REFRESH_SECRET        (different long random string)"
+  warn "  - FOUNDER_EMAIL             (your account email)"
+  echo ""
+  echo ""
+  warn "  See SUPABASE_SETUP.md for step-by-step Supabase bucket setup."
   echo ""
 else
-  success ".env already exists — skipping"
+  success ".env already exists — checking for required Supabase variables..."
+  # Check if Supabase is configured (not the placeholder values)
+  if grep -q 'SUPABASE_URL=https://your-project' "$BACKEND_DIR/.env" || \
+     grep -q 'SUPABASE_URL=$' "$BACKEND_DIR/.env" || \
+     ! grep -q 'SUPABASE_URL=' "$BACKEND_DIR/.env"; then
+    echo ""
+    warn "⚠️  Supabase is NOT configured in backend/.env"
+    warn "   All file uploads (Feed images, Video, Music, Gallery) will return HTTP 503."
+    warn "   To fix:"
+    warn "     1. Go to https://supabase.com/dashboard and create a project"
+    warn "     2. Go to Project Settings → API"
+    warn "     3. Copy Project URL → SUPABASE_URL"
+    warn "     4. Copy service_role key → SUPABASE_SERVICE_ROLE_KEY"
+    warn "     5. Copy anon key → SUPABASE_ANON_KEY"
+    warn "     6. Add these to backend/.env"
+    warn "     7. See SUPABASE_SETUP.md for full instructions"
+    echo ""
+  else
+    success "Supabase is configured in backend/.env"
+  fi
 fi
 
 # ── Create upload directories ────────────────────────────────
@@ -66,7 +94,7 @@ success "Upload directories created"
 # ── Done ─────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}╔══════════════════════════════════════════╗${RESET}"
-echo -e "${GREEN}${BOLD}║   LEGEND UNIVERSE — Setup Complete! 🌌   ║${RESET}"
+echo -e "${GREEN}${BOLD}║       AVENORA — Setup Complete! 🌅       ║${RESET}"
 echo -e "${GREEN}${BOLD}╚══════════════════════════════════════════╝${RESET}"
 echo ""
 echo -e "  ${BOLD}Start the backend:${RESET}"
@@ -79,5 +107,7 @@ echo ""
 echo -e "  ${BOLD}Backend API:${RESET}  http://localhost:3001"
 echo -e "  ${BOLD}Health check:${RESET} http://localhost:3001/api/health"
 echo ""
-echo -e "  ${YELLOW}Remember to edit backend/.env with real JWT secrets before production!${RESET}"
+echo -e "  ${YELLOW}⚠  For uploads to work, you MUST set these in backend/.env:${RESET}"
+echo -e "     SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, SUPABASE_ANON_KEY"
+echo -e "     See SUPABASE_SETUP.md for full instructions."
 echo ""

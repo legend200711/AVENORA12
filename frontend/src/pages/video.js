@@ -1621,7 +1621,10 @@ function initUploadForm() {
     try {
       const user = LegendState.get('user');
       if (!user) throw new Error('You must be signed in to upload videos.');
-      if (!window.AvenoraStorage) throw new Error('Storage service not loaded. Refresh the page and try again.');
+      if (!window.AvenoraStorage) {
+        console.error('[AVENORA] AvenoraStorage not found. Check that frontend/src/services/supabase.js loaded correctly.');
+        throw new Error('Storage service not loaded. Check your browser console for details and refresh the page.');
+      }
 
       // ── Upload video + thumbnail via backend → Supabase Storage ──
       progressLabel.textContent = 'Uploading video…';

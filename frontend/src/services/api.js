@@ -28,9 +28,18 @@
   if (_rawApiUrl) {
     // Strip trailing slash
     let _url = String(_rawApiUrl).replace(/\/$/, '');
-    // If it's a relative path that doesn't end with /api, append it
-    if (!_url.endsWith('/api') && !_url.match(/\/api\//)) {
-      _url = _url + '/api';
+    // Check path only (not hostname) — avoids false match on hostnames like api.avenora.app
+    try {
+      const _parsed = new URL(_url);
+      const _path = _parsed.pathname;
+      if (!_path.endsWith('/api') && !_path.startsWith('/api/')) {
+        _url = _url + '/api';
+      }
+    } catch {
+      // Relative URL (e.g. '/api') — check path directly
+      if (!_url.endsWith('/api') && !_url.startsWith('/api/')) {
+        _url = _url + '/api';
+      }
     }
     BASE_URL = _url;
   } else {

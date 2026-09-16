@@ -211,16 +211,19 @@ async function ensureBuckets() {
   for (const [key, cfg] of Object.entries(BUCKETS)) {
     const { data: existing } = await client.storage.getBucket(cfg.name);
     if (!existing) {
+      // No fileSizeLimit set here — let Supabase use the project/plan default.
+      // File-size validation is enforced at the route level (multer limits).
       const { error } = await client.storage.createBucket(cfg.name, {
         public: cfg.public,
-        fileSizeLimit: key === 'videos' ? 2147483648 : 524288000, // 2 GB for videos, 500 MB else
-        allowedMimeTypes: null, // validated at the route level
+        allowedMimeTypes: null,
       });
       if (error && error.message !== 'Bucket already exists') {
         logger.warn(`[SupabaseStorage] Could not create bucket "${cfg.name}": ${error.message}`);
       } else {
         logger.info(`[SupabaseStorage] Bucket ready: ${cfg.name} (public=${cfg.public})`);
       }
+    } else {
+      logger.info(`[SupabaseStorage] Bucket already exists: ${cfg.name} (public=${cfg.public})`);
     }
   }
 }
