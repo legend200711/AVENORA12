@@ -1,0 +1,33 @@
+services:
+  - type: web
+    name: avenora-backend
+    runtime: node
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "10000"
+      - key: FIREBASE_PROJECT_ID
+        value: avenora-6e147
+      - key: FIREBASE_WEB_API_KEY
+        value: AIzaSyDnEEYamIVYfn7l6sPPS1Dp2fWJE34OXlI
+      - key: FRONTEND_URL
+        value: https://legend200711.github.io
+      - key: FOUNDER_EMAIL
+        value: christijerina46@gmail.com
+      - key: SUPABASE_URL
+        value: https://licuiqxkkfboqezzmsqu.supabase.co
+      - key: JWT_EXPIRES_IN
+        value: 7d
+      - key: JWT_REFRESH_EXPIRES_IN
+        value: 30d
+      # Set these secrets in the Render dashboard — do NOT commit real values here:
+      # MONGODB_URI         — MongoDB Atlas connection string
+      # JWT_SECRET          — Long random string (min 64 chars)
+      # JWT_REFRESH_SECRET  — Different long random string
+      # SUPABASE_SERVICE_ROLE_KEY — From Supabase dashboard → Project Settings → API
+      # SUPABASE_ANON_KEY   — From Supabase dashboard → Project Settings → API
