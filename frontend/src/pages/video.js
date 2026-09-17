@@ -218,7 +218,8 @@ async function loadHomeTab(container) {
     featured  = f.videos || [];
     trending  = t.videos || [];
   } catch (err) {
-    apiError = err.message;
+    apiError = err.message || String(err);
+    console.error('[AVN] Video home tab error:', err);
   }
 
   const hasContent = featured.length > 0 || trending.length > 0;
@@ -279,15 +280,17 @@ async function loadVideoListTab({ category, sort = 'new', heading } = {}) {
       const data = await LegendAPI.videos.list(params);
       videos = data.videos || [];
       total  = data.total || 0;
-    } catch (err) { error = err.message; }
+    } catch (err) {
+      error = err.message || String(err);
+      console.error('[AVN] Video list error:', err);
+    }
 
     const grid = document.getElementById('som-list-grid');
     if (!grid) return;
 
     if (error) {
-      console.warn('[AVN] Video list error:', error);
       if (page === 1) {
-        grid.innerHTML = `<div style="grid-column:1/-1">${renderEmptyVideoSection('Videos are temporarily unavailable. Please try again later.')}</div>`;
+        grid.innerHTML = `<div style="grid-column:1/-1">${renderEmptyVideoSection('Failed to load videos: ' + escapeHtml(error))}</div>`;
       }
       return;
     }

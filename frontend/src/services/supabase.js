@@ -248,6 +248,8 @@
     /**
      * Upload music + save metadata to Firestore cloudStreamTracks.
      * Returns { track } shaped like the old backend response.
+     * Throws if the Firestore save fails — the track URL is only discoverable
+     * via the database record so a silent failure means the track is unplayable.
      */
     async uploadMusic(file, meta = {}, onProgress) {
       if (!file.type.startsWith('audio/')) throw new Error('File must be an audio file (MP3, WAV, OGG, FLAC, AAC, M4A, OPUS).');
@@ -270,34 +272,34 @@
         createdAt:   new Date().toISOString(),
       };
 
-      // Save to Firestore so Music Hub library and Cloud Stream can read it
-      try {
-        if (global.AvenoraFirebase?.getFirestore) {
-          const fsDb = await global.AvenoraFirebase.getFirestore();
-          const { doc, setDoc, serverTimestamp } =
-            await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
-          const docId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-          await setDoc(doc(fsDb, 'cloudStreamTracks', uid, 'tracks', docId), {
-            uid,
-            title:       track.title,
-            artist:      track.artistName,
-            album:       track.albumTitle,
-            genre:       track.genre,
-            url,
-            storagePath,
-            duration:    0,
-            fileName:    file.name,
-            fileSize:    file.size,
-            mimeType:    file.type,
-            visibility:  track.visibility,
-            status:      'ready',
-            createdAt:   serverTimestamp(),
-          });
-          track.id = docId;
-        }
-      } catch (fsErr) {
-        console.warn('[AvenoraStorage] Firestore track save skipped:', fsErr.message);
+      // Save to Firestore — required. Without this the track cannot appear in the library.
+      if (!global.AvenoraFirebase?.getFirestore) {
+        throw new Error(
+          'Firebase is not available. The audio file was uploaded to storage but ' +
+          'the track record could not be saved. Refresh the page and try again.'
+        );
       }
+      const fsDb = await global.AvenoraFirebase.getFirestore();
+      const { doc, setDoc, serverTimestamp } =
+        await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+      const docId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      await setDoc(doc(fsDb, 'cloudStreamTracks', uid, 'tracks', docId), {
+        uid,
+        title:       track.title,
+        artist:      track.artistName,
+        album:       track.albumTitle,
+        genre:       track.genre,
+        url,
+        storagePath,
+        duration:    0,
+        fileName:    file.name,
+        fileSize:    file.size,
+        mimeType:    file.type,
+        visibility:  track.visibility,
+        status:      'ready',
+        createdAt:   serverTimestamp(),
+      });
+      track.id = docId;
 
       return { success: true, track };
     },
@@ -305,6 +307,8 @@
     /**
      * Upload video + optional thumbnail, save metadata to Firestore videos collection.
      * Returns { video } shaped like the old backend response.
+     * Throws if the Firestore save fails — without the database record the video
+     * cannot be discovered on the Video page.
      */
     async uploadVideoWithMeta(videoFile, thumbnailFile, meta = {}, onProgress) {
       if (!videoFile.type.startsWith('video/')) throw new Error('File must be a video file (MP4, WebM, MOV, AVI).');
@@ -346,38 +350,59 @@
         createdAt:   new Date().toISOString(),
       };
 
-      // Save to Firestore videos collection
-      try {
-        if (global.AvenoraFirebase?.getFirestore) {
-          const fsDb = await global.AvenoraFirebase.getFirestore();
-          const { collection, addDoc, serverTimestamp } =
-            await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
-          const user = global.AvenoraFirebase?.Auth?.getUser?.();
-          const docRef = await addDoc(collection(fsDb, 'videos'), {
-            uid,
-            owner: {
-              uid,
-              username: user?.username || user?.displayName || 'user',
-              avatarUrl: user?.profile?.avatarUrl || '',
-            },
-            title:        video.title,
-            description:  video.description,
-            category:     video.category,
-            visibility:   video.visibility,
-            videoUrl,
-            thumbnailUrl,
-            storagePath,
-            fileSize:     videoFile.size,
-            views:        0,
-            likes:        [],
-            processingStatus: 'ready',
-            createdAt:    serverTimestamp(),
-          });
-          video.id = docRef.id;
-        }
-      } catch (fsErr) {
-        console.warn('[AvenoraStorage] Firestore video save skipped:', fsErr.message);
+      // Save to Firestore — required. Without this the video cannot appear on the Video page.
+      if (!global.AvenoraFirebase?.getFirestore) {
+        throw new Error(
+          'Firebase is not available. The video file was uploaded to storage but ' +
+          'the video record could not be saved. Refresh the page and try again.'
+        );
       }
+      const fsDb = await global.AvenoraFirebase.getFirestore();
+      const { collection, addDoc, serverTimestamp } =
+        await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+      const user = global.AvenoraFirebase?.Auth?.getUser?.();
+      const displayName = user?.profile?.displayName || user?.username || user?.displayName || 'user';
+      let docRef;
+      try {
+        docRef = await addDoc(collection(fsDb, 'videos'), {
+          uid,
+          owner: {
+            uid,
+            username:   user?.username   || displayName,
+            displayName,
+            avatarUrl:  user?.profile?.avatarUrl || user?.avatarUrl || '',
+            profile: {
+              displayName,
+              avatarUrl: user?.profile?.avatarUrl || user?.avatarUrl || '',
+            },
+          },
+          title:        video.title,
+          description:  video.description,
+          category:     video.category,
+          visibility:   video.visibility,
+          videoUrl,
+          thumbnailUrl,
+          storagePath,
+          fileSize:     videoFile.size,
+          views:        0,
+          likes:        [],
+          processingStatus: 'ready',
+          createdAt:    serverTimestamp(),
+        });
+      } catch (fsErr) {
+        // Surface the real error — "permission-denied" means Firestore rules blocked the write.
+        const errCode = fsErr.code || '';
+        if (errCode === 'permission-denied') {
+          throw new Error(
+            'Video metadata save failed: Firestore permission denied. ' +
+            'Make sure you are signed in with a Firebase account and that the ' +
+            '"videos" collection allows authenticated writes. ' +
+            'Check firestore.rules and ensure the "owner.uid" field matches your Firebase UID.'
+          );
+        }
+        throw new Error(`Video metadata save failed: ${fsErr.message || fsErr.code || 'unknown Firestore error'}`);
+      }
+      video.id = docRef.id;
 
       return { success: true, video };
     },

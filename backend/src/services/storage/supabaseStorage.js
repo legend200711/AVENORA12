@@ -7,10 +7,10 @@
  * Buckets used:
  *   avatars      — user profile pictures (private, signed URLs)
  *   gallery      — gallery images (public)
- *   music        — uploaded audio files (private, signed URLs)
- *   videos       — uploaded videos (private, signed URLs)
+ *   music        — uploaded audio files (public)
+ *   videos       — uploaded videos (public)
  *   thumbnails   — video/playlist cover art (public)
- *   stream-media — media for the 24-hour cloud stream (private, signed URLs)
+ *   stream-media — media for the 24-hour cloud stream (public)
  *
  * Configuration (in .env):
  *   SUPABASE_URL              — https://your-project.supabase.co
@@ -68,10 +68,10 @@ function getClient() {
 const BUCKETS = {
   avatars:       { name: 'avatars',      public: false },
   gallery:       { name: 'gallery',      public: true  },
-  music:         { name: 'music',        public: false },
-  videos:        { name: 'videos',       public: false },
+  music:         { name: 'music',        public: true  },
+  videos:        { name: 'videos',       public: true  },
   thumbnails:    { name: 'thumbnails',   public: true  },
-  'stream-media':{ name: 'stream-media', public: false },
+  'stream-media':{ name: 'stream-media', public: true  },
 };
 
 const SIGNED_URL_EXPIRY_SECS = 60 * 60 * 24 * 7; // 7 days
@@ -223,7 +223,21 @@ async function ensureBuckets() {
         logger.info(`[SupabaseStorage] Bucket ready: ${cfg.name} (public=${cfg.public})`);
       }
     } else {
-      logger.info(`[SupabaseStorage] Bucket already exists: ${cfg.name} (public=${cfg.public})`);
+      // Bucket exists — ensure its public setting matches the current config.
+      // This corrects buckets that were previously created with the wrong setting
+      // (e.g. music/videos that were accidentally created as private).
+      if (existing.public !== cfg.public) {
+        const { error: updateErr } = await client.storage.updateBucket(cfg.name, {
+          public: cfg.public,
+        });
+        if (updateErr) {
+          logger.warn(`[SupabaseStorage] Could not update bucket "${cfg.name}" public=${cfg.public}: ${updateErr.message}`);
+        } else {
+          logger.info(`[SupabaseStorage] Bucket "${cfg.name}" updated to public=${cfg.public}`);
+        }
+      } else {
+        logger.info(`[SupabaseStorage] Bucket already exists: ${cfg.name} (public=${cfg.public})`);
+      }
     }
   }
 }

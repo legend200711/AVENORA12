@@ -361,16 +361,15 @@
 
   // ─── Videos API ───────────────────────────────────────────
   // Reads from Firestore first (where our direct-upload metadata lives).
-  // Falls back to the REST API if Firestore is unavailable.
+  // Falls back to the REST API only when Firebase is completely unavailable.
   const VideosAPI = {
     async list(params = {}) {
       if (window.AvenoraFirebase) {
-        try {
-          const videos = await _listVideosFromFirestore(params);
-          return { videos, total: videos.length };
-        } catch (fsErr) {
-          console.warn('[AVN] Firestore video list failed, falling back to API:', fsErr.message);
-        }
+        // Surface the actual Firestore error instead of silently falling back.
+        // A silent fallback to the REST API returns an empty list and hides
+        // real problems (permission denied, missing index, quota exceeded, etc.).
+        const videos = await _listVideosFromFirestore(params);
+        return { videos, total: videos.length };
       }
       const q = new URLSearchParams(params).toString();
       return get(`/videos?${q}`);
@@ -439,6 +438,29 @@
   };
 
   // ── Firestore helpers for video CRUD ────────────────────────
+  function _mapVideoDoc(id, data) {
+    return {
+      id:          id,
+      _id:         id,
+      title:       data.title       || 'Untitled',
+      description: data.description || '',
+      category:    data.category    || 'other',
+      visibility:  data.visibility  || 'public',
+      videoUrl:    data.videoUrl    || '',
+      thumbnailUrl: data.thumbnailUrl || null,
+      storagePath: data.storagePath || null,
+      uid:         data.uid         || null,
+      views:       data.views       || 0,
+      likes:       data.likes       || [],
+      likeCount:   (data.likes      || []).length,
+      commentCount: data.commentCount || 0,
+      processingStatus: data.processingStatus || 'ready',
+      uploader:    data.owner       || {},
+      owner:       data.owner       || {},
+      createdAt:   data.createdAt,
+    };
+  }
+
   async function _listVideosFromFirestore({ sort = 'new', limit: lim = 24, category } = {}) {
     const db = await window.AvenoraFirebase.getFirestore();
     const SDK_VER = '10.12.2';
@@ -454,27 +476,7 @@
     // (private requires owner filter which we don't do at list level)
     const q = query(collection(db, 'videos'), ...constraints);
     const snap = await getDocs(q);
-    return snap.docs.map(d => {
-      const data = d.data();
-      return {
-        id:          d.id,
-        _id:         d.id,
-        title:       data.title || 'Untitled',
-        description: data.description || '',
-        category:    data.category || 'other',
-        visibility:  data.visibility || 'public',
-        videoUrl:    data.videoUrl || '',
-        thumbnailUrl: data.thumbnailUrl || null,
-        views:       data.views || 0,
-        likes:       data.likes || [],
-        likeCount:   (data.likes || []).length,
-        commentCount: data.commentCount || 0,
-        processingStatus: data.processingStatus || 'ready',
-        uploader:    data.owner || {},
-        owner:       data.owner || {},
-        createdAt:   data.createdAt,
-      };
-    });
+    return snap.docs.map(d => _mapVideoDoc(d.id, d.data()));
   }
 
   async function _getVideoFromFirestore(id) {
@@ -484,19 +486,7 @@
       await import(`https://www.gstatic.com/firebasejs/${SDK_VER}/firebase-firestore.js`);
     const snap = await getDoc(doc(db, 'videos', id));
     if (!snap.exists()) return null;
-    const data = snap.data();
-    return {
-      id: snap.id, _id: snap.id,
-      title: data.title, description: data.description,
-      category: data.category, visibility: data.visibility,
-      videoUrl: data.videoUrl, thumbnailUrl: data.thumbnailUrl,
-      views: data.views || 0, likes: data.likes || [],
-      likeCount: (data.likes || []).length,
-      commentCount: data.commentCount || 0,
-      processingStatus: data.processingStatus || 'ready',
-      uploader: data.owner || {}, owner: data.owner || {},
-      createdAt: data.createdAt,
-    };
+    return _mapVideoDoc(snap.id, snap.data());
   }
 
   async function _likeVideoInFirestore(id) {

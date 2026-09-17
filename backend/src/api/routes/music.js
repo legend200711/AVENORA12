@@ -297,8 +297,8 @@ router.post('/upload', authenticate, (req, res, next) => {
         mimetype:    req.file.mimetype,
       });
 
-      // Use signed URL for private bucket — refresh on playback via GET /api/music/tracks/:id/url
-      const fileUrl = result.signedUrl || result.publicUrl;
+      // music bucket is public — prefer publicUrl; fall back to signedUrl if present
+      const fileUrl = result.publicUrl || result.signedUrl;
 
       const track = await musicSvc.createTrack({
         title:      (title || path.basename(req.file.originalname, path.extname(req.file.originalname))).slice(0, 200),

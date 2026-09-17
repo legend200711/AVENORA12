@@ -321,15 +321,16 @@ async function renderLibrary(genre = null) {
         // Apply genre filter client-side if requested
         if (genre && data.genre !== genre) return null;
         return {
-          id:         d.id,
-          title:      data.title      || 'Untitled',
-          artistName: data.artist     || '',
-          album:      data.album      || '',
-          genre:      data.genre      || '',
-          fileUrl:    data.url        || data.downloadURL || '',
-          coverUrl:   data.coverUrl   || null,
-          duration:   data.duration   || 0,
-          visibility: data.visibility || 'private',
+          id:          d.id,
+          title:       data.title       || 'Untitled',
+          artistName:  data.artist      || '',
+          albumTitle:  data.album       || '',
+          genre:       data.genre       || '',
+          fileUrl:     data.url         || data.downloadURL || '',
+          storagePath: data.storagePath || null,
+          coverUrl:    data.coverUrl    || null,
+          duration:    data.duration    || 0,
+          visibility:  data.visibility  || 'private',
           _isFirestore: true,
         };
       }).filter(Boolean);
@@ -1617,18 +1618,25 @@ window.mpLoadBackendTrack = async function (track, index, context) {
     return;
   }
   MP.backendQueue = context;
+  MP.currentIndex = index;
 
   const audio = document.getElementById('mp-audio');
   if (!audio) return;
 
-  // If the track has a storagePath (private bucket), always refresh the signed URL
-  // before playing so an expired URL does not cause a 403 on the audio element.
+  // For Firestore-backed cloud tracks the music bucket is public — use fileUrl directly.
+  // For MongoDB backend tracks with a storagePath, refresh the signed URL so an expired
+  // URL does not cause a 403 on the audio element.
   let playUrl = track.fileUrl;
-  if (track.storagePath && track.id) {
+  if (track.storagePath && track.id && !track._isFirestore) {
     try {
       const refreshed = await LegendAPI.request('GET', `/music/tracks/${track.id}/url`).catch(() => null);
       if (refreshed?.url) playUrl = refreshed.url;
     } catch (_) {}
+  }
+
+  if (!playUrl) {
+    Toast.error('This track has no audio URL.');
+    return;
   }
 
   audio.src = playUrl;
@@ -1653,8 +1661,8 @@ window.mpLoadBackendTrack = async function (track, index, context) {
     mpUpdatePlayBtn();
   });
 
-  // Record server-side play (non-critical; silent on failure)
-  if (track.id) {
+  // Record server-side play for MongoDB-backed tracks only (non-critical)
+  if (track.id && !track._isFirestore) {
     LegendAPI.request('POST', `/music/tracks/${track.id}/play`).catch(() => {});
   }
 
