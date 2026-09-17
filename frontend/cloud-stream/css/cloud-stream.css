@@ -765,3 +765,203 @@ main { padding: 16px 16px 80px; max-width: 700px; margin: 0 auto; }
   .csr-form-row { grid-template-columns: 1fr; }
   .csr-title { font-size: 13px; letter-spacing: 1px; }
 }
+
+/* ═══════════════════════════════════════════════════════
+   MOBILE — screens up to 479px (phones)
+   Overrides layouts that overflow on small screens.
+═══════════════════════════════════════════════════════ */
+@media (max-width: 479px) {
+  /* Header: collapse multi-item flex row to prevent overflow */
+  .csr-header {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .csr-header-center {
+    flex: 1 1 100%;
+    min-width: 0;
+    order: 2;
+  }
+  .csr-back-btn {
+    order: 1;
+    font-size: 12px;
+    padding: 4px 8px;
+  }
+  .csr-auth-badge {
+    order: 3;
+    font-size: 10px;
+    padding: 3px 7px;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Main content — tighter padding so cards don't crowd the edges */
+  main {
+    padding: 10px 10px 72px;
+  }
+
+  /* Cards — reduce internal padding */
+  .csr-card {
+    padding: 14px 12px;
+    border-radius: 10px;
+  }
+
+  /* Info grid — single column on very small phones */
+  .csr-info-grid {
+    grid-template-columns: 1fr;
+  }
+
+  /* Form rows — stack vertically */
+  .csr-form-row {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+
+  /* Buttons — full-width stacked, comfortable tap target */
+  .csr-btn {
+    width: 100%;
+    padding: 13px 14px;
+    font-size: 12px;
+  }
+  .csr-btn-sm {
+    width: auto;
+    padding: 5px 10px;
+    font-size: 11px;
+  }
+
+  /* Controls row — always stacked on mobile */
+  .csr-controls-row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* Playlist selector — wrap onto two columns max */
+  .csr-playlist-selector {
+    gap: 6px;
+  }
+  .csr-pl-btn {
+    flex: 1 1 calc(50% - 3px);
+    min-width: 0;
+    padding: 7px 10px;
+    font-size: 11px;
+  }
+
+  /* Player artwork — smaller on phones */
+  .csr-player-artwork {
+    width: 96px;
+    height: 96px;
+    font-size: 32px;
+  }
+  .csr-player-broadcast-title {
+    font-size: 14px;
+  }
+  .csr-player-track-title {
+    font-size: 15px;
+  }
+
+  /* Player controls — tighter layout */
+  .csr-player-btn {
+    width: 48px;
+    height: 48px;
+    font-size: 18px;
+  }
+  .csr-player-play {
+    width: 56px;
+    height: 56px;
+    font-size: 22px;
+  }
+
+  /* Volume row — full width */
+  .csr-player-vol-row {
+    max-width: 100%;
+  }
+
+  /* Now playing strip — smaller text */
+  .csr-np-title {
+    font-size: 13px;
+  }
+
+  /* Queue items — prevent title overflow */
+  .csr-queue-title {
+    font-size: 11px;
+  }
+
+  /* Status badge — smaller */
+  .csr-status-badge {
+    font-size: 10px;
+    padding: 4px 8px;
+    letter-spacing: 0.5px;
+  }
+
+  /* Live header — wrap so badge goes below title */
+  .csr-live-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  /* Confirm dialog — full-width on small screens */
+  .csr-confirm-dialog {
+    padding: 18px 14px;
+  }
+  .csr-confirm-actions {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* Toast — tighter on phones */
+  .csr-toast {
+    font-size: 12px;
+    padding: 10px 14px;
+    bottom: 16px;
+    max-width: calc(100vw - 24px);
+  }
+
+  /* Card title — prevent overflow */
+  .csr-card-title {
+    font-size: 12px;
+    letter-spacing: 0.5px;
+  }
+
+  /* Title text in header */
+  .csr-title {
+    font-size: 13px;
+    letter-spacing: 1px;
+  }
+  .csr-subtitle {
+    display: none; /* hide subtitle on smallest screens to prevent wrap */
+  }
+}
+
+/* ═══════════════════════════════════════════════════════
+   MOBILE — screens 320–374px (iPhone SE, older Androids)
+   Extra-tight overrides for the narrowest common viewport.
+═══════════════════════════════════════════════════════ */
+@media (max-width: 374px) {
+  main {
+    padding: 8px 8px 64px;
+  }
+  .csr-card {
+    padding: 12px 10px;
+  }
+  .csr-btn {
+    font-size: 11px;
+    padding: 12px 10px;
+  }
+  .csr-pl-btn {
+    flex: 1 1 100%;
+  }
+  .csr-player-artwork {
+    width: 80px;
+    height: 80px;
+    font-size: 28px;
+  }
+  .csr-player-track-title {
+    font-size: 14px;
+  }
+  .csr-info-val {
+    font-size: 12px;
+  }
+}

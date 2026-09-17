@@ -138,7 +138,32 @@ async function renderAdminDashboard(container) {
     `;
   } catch (err) {
     console.error('[AVN] Admin dashboard error:', err);
-    container.innerHTML = `<div class="error-state"><div class="error-icon">⚠️</div><h3>Could not load dashboard</h3><p>Could not retrieve system data. Check your connection and try again.</p><button class="btn btn-outline" onclick="adminSection('dashboard')">Retry</button></div>`;
+    // Provide actionable guidance based on the HTTP status code.
+    const status = err.status || 0;
+    let heading = 'Could not load dashboard';
+    let detail  = 'Could not retrieve system data. Check your connection and try again.';
+    if (status === 401) {
+      heading = 'Not signed in';
+      detail  = 'Your session has expired. Please sign in again.';
+    } else if (status === 403) {
+      heading = 'Access denied';
+      detail  = 'The server rejected the request. Possible reasons: <ul style="margin:8px 0 0 16px;text-align:left">' +
+                '<li>The <code>FOUNDER_EMAIL</code> environment variable is not set on the backend.</li>' +
+                '<li>Your account email does not match <code>FOUNDER_EMAIL</code>.</li>' +
+                '<li>Your account role has not been promoted to <code>founder</code>.</li>' +
+                '</ul>' +
+                '<p style="margin-top:8px">Set <code>FOUNDER_EMAIL=your@email.com</code> in <code>backend/.env</code> and restart the server.</p>';
+    } else if (err.code === 'API_NOT_CONFIGURED') {
+      heading = 'API not configured';
+      detail  = 'The backend API URL is not set. Add <code>window.LU_CONFIG = { apiUrl: "https://your-backend/api" }</code> to <code>index.html</code>.';
+    }
+    container.innerHTML = `
+      <div class="error-state">
+        <div class="error-icon">⚠️</div>
+        <h3>${heading}</h3>
+        <div style="color:var(--text-muted);font-size:0.9rem;max-width:480px;margin:0 auto">${detail}</div>
+        <button class="btn btn-outline" style="margin-top:var(--space-md)" onclick="adminSection('dashboard')">Retry</button>
+      </div>`;
   }
 }
 

@@ -364,32 +364,38 @@
   // Falls back to the REST API only when Firebase is completely unavailable.
   const VideosAPI = {
     async list(params = {}) {
-      if (window.AvenoraFirebase) {
-        // Surface the actual Firestore error instead of silently falling back.
-        // A silent fallback to the REST API returns an empty list and hides
-        // real problems (permission denied, missing index, quota exceeded, etc.).
-        const videos = await _listVideosFromFirestore(params);
-        return { videos, total: videos.length };
-      }
+      // Always use the backend REST API — videos are stored in MongoDB, not Firestore.
+      // Firestore video reads are kept only as a legacy fallback for the old migration path.
       const q = new URLSearchParams(params).toString();
-      return get(`/videos?${q}`);
+      try {
+        return await get(`/videos?${q}`);
+      } catch (apiErr) {
+        // If the backend is unreachable, attempt a Firestore fallback so the page
+        // is not completely blank when the server is temporarily down.
+        if (window.AvenoraFirebase && apiErr.code !== 'API_NOT_CONFIGURED') {
+          try {
+            const videos = await _listVideosFromFirestore(params);
+            return { videos, total: videos.length };
+          } catch (_) {}
+        }
+        throw apiErr;
+      }
     },
     async get(id) {
-      if (window.AvenoraFirebase) {
-        try {
-          const video = await _getVideoFromFirestore(id);
-          if (video) return { video };
-        } catch (_) {}
+      // Prefer backend; fall back to Firestore for pre-migration videos.
+      try {
+        return await get(`/videos/${id}`);
+      } catch (apiErr) {
+        if (window.AvenoraFirebase && apiErr.status === 404) {
+          try {
+            const video = await _getVideoFromFirestore(id);
+            if (video) return { video };
+          } catch (_) {}
+        }
+        throw apiErr;
       }
-      return get(`/videos/${id}`);
     },
-    like: (id) => {
-      // Like in Firestore if available
-      if (window.AvenoraFirebase?.Firestore) {
-        return _likeVideoInFirestore(id);
-      }
-      return post(`/videos/${id}/like`, {});
-    },
+    like: (id) => post(`/videos/${id}/like`, {}),
 
     // Comments — Firestore sub-collection
     async comments(videoId, page = 1) {
@@ -435,6 +441,10 @@
     featureVideo: (id, featured = true) => put(`/videos/${id}/feature`, { featured }),
     suspendChannel: (id, reason) => put(`/videos/channel/${id}/suspend`, { reason }),
     unsuspendChannel: (id) => put(`/videos/channel/${id}/unsuspend`, {}),
+
+    // Save metadata for a video already uploaded directly to Supabase Storage from the browser.
+    // POST /api/videos/save-meta — requires authentication.
+    saveMeta: (data) => post('/videos/save-meta', data),
   };
 
   // ── Firestore helpers for video CRUD ────────────────────────

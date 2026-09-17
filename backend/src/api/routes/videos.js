@@ -173,6 +173,59 @@ router.post('/upload', authenticate, (req, res, next) => {
   });
 });
 
+// POST /api/videos/save-meta
+// Saves metadata for a video that was already uploaded directly to Supabase Storage
+// from the browser. No file buffers are sent here — only JSON metadata + URLs.
+router.post('/save-meta', authenticate, async (req, res, next) => {
+  try {
+    const {
+      title, description, category, visibility,
+      videoUrl, thumbnailUrl, storagePath, fileSize, mimeType,
+    } = req.body;
+
+    if (!title?.trim()) {
+      return res.status(422).json({ error: true, message: 'Title is required.' });
+    }
+    if (!videoUrl || !storagePath) {
+      return res.status(422).json({ error: true, message: 'videoUrl and storagePath are required.' });
+    }
+
+    const uid = req.user.id;
+
+    // Create or find the uploader's channel
+    let channel = await Channel.findOne({ owner: uid });
+    if (!channel) {
+      channel = await Channel.create({
+        owner:       uid,
+        name:        req.user.profile?.displayName || req.user.username,
+        description: '',
+      });
+    }
+
+    const video = await Video.create({
+      title:            title.trim().slice(0, 200),
+      description:      (description || '').trim().slice(0, 5000),
+      uploader:         uid,
+      channelId:        channel._id,
+      originalFileUrl:  videoUrl,
+      storagePath,
+      thumbnailUrl:     thumbnailUrl || null,
+      fileSize:         fileSize     || 0,
+      mimeType:         mimeType     || 'video/mp4',
+      category:         ['movies','shows','music','short','gaming','education','comedy','other'].includes(category) ? category : 'other',
+      visibility:       ['public','unlisted','private'].includes(visibility) ? visibility : 'public',
+      isPublished:      true,
+      processingStatus: 'ready',
+      hlsUrl:           videoUrl,
+    });
+
+    await video.populate('uploader', 'username profile.displayName profile.avatarUrl');
+
+    const videoObj = video.toObject({ virtuals: true });
+    res.status(201).json({ success: true, video: videoObj });
+  } catch (err) { next(err); }
+});
+
 // GET /api/videos/:id/url — refresh signed URL for a private video
 router.get('/:id/url', authenticate, async (req, res, next) => {
   try {

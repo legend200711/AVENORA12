@@ -350,32 +350,17 @@
         createdAt:   new Date().toISOString(),
       };
 
-      // Save to Firestore — required. Without this the video cannot appear on the Video page.
-      if (!global.AvenoraFirebase?.getFirestore) {
+      // Save metadata to the backend (MongoDB) via POST /api/videos/save-meta.
+      // This replaces the old Firestore write which was blocked by permission-denied errors.
+      if (!global.LegendAPI?.videos?.saveMeta) {
         throw new Error(
-          'Firebase is not available. The video file was uploaded to storage but ' +
+          'LegendAPI is not available. The video file was uploaded to storage but ' +
           'the video record could not be saved. Refresh the page and try again.'
         );
       }
-      const fsDb = await global.AvenoraFirebase.getFirestore();
-      const { collection, addDoc, serverTimestamp } =
-        await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
-      const user = global.AvenoraFirebase?.Auth?.getUser?.();
-      const displayName = user?.profile?.displayName || user?.username || user?.displayName || 'user';
-      let docRef;
+      let savedVideo;
       try {
-        docRef = await addDoc(collection(fsDb, 'videos'), {
-          uid,
-          owner: {
-            uid,
-            username:   user?.username   || displayName,
-            displayName,
-            avatarUrl:  user?.profile?.avatarUrl || user?.avatarUrl || '',
-            profile: {
-              displayName,
-              avatarUrl: user?.profile?.avatarUrl || user?.avatarUrl || '',
-            },
-          },
+        const result = await global.LegendAPI.videos.saveMeta({
           title:        video.title,
           description:  video.description,
           category:     video.category,
@@ -384,27 +369,28 @@
           thumbnailUrl,
           storagePath,
           fileSize:     videoFile.size,
-          views:        0,
-          likes:        [],
-          processingStatus: 'ready',
-          createdAt:    serverTimestamp(),
+          mimeType:     videoFile.type,
         });
-      } catch (fsErr) {
-        // Surface the real error — "permission-denied" means Firestore rules blocked the write.
-        const errCode = fsErr.code || '';
-        if (errCode === 'permission-denied') {
+        savedVideo = result.video;
+      } catch (apiErr) {
+        const status = apiErr.status;
+        if (status === 401 || status === 403) {
           throw new Error(
-            'Video metadata save failed: Firestore permission denied. ' +
-            'Make sure you are signed in with a Firebase account and that the ' +
-            '"videos" collection allows authenticated writes. ' +
-            'Check firestore.rules and ensure the "owner.uid" field matches your Firebase UID.'
+            'Video metadata save failed: you must be signed in to save videos. ' +
+            'Please sign in and try again.'
           );
         }
-        throw new Error(`Video metadata save failed: ${fsErr.message || fsErr.code || 'unknown Firestore error'}`);
+        if (status === 422) {
+          throw new Error(`Video metadata save failed: ${apiErr.message}`);
+        }
+        throw new Error(
+          `Video metadata save failed: ${apiErr.message || 'unknown error'}. ` +
+          'The video file was uploaded to storage. Reload the page and try again.'
+        );
       }
-      video.id = docRef.id;
+      video.id = savedVideo?._id || savedVideo?.id || video.id;
 
-      return { success: true, video };
+      return { success: true, video: { ...video, ...savedVideo } };
     },
 
     // Kept for API compatibility — all buckets in this client are public
