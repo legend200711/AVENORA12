@@ -17,8 +17,13 @@
 
   // ─── Central API base URL ─────────────────────────────────
   // Priority: runtime config → build-time env var → error
-  // Accepts relative URLs (e.g. '/api') for same-host deployments,
-  // or absolute URLs (e.g. 'https://api.avenora.app/api') for cross-host.
+  //
+  // window.LU_CONFIG.apiUrl should be the BACKEND BASE URL only
+  // (e.g. 'https://avenora-backend.onrender.com' or 'http://localhost:3001').
+  // This module always appends '/api' to produce the full API prefix.
+  //
+  // If the value already contains '/api' (legacy config from old index.html),
+  // it is used as-is to avoid a double '/api/api' path.
   const _rawApiUrl =
     (window.LU_CONFIG && window.LU_CONFIG.apiUrl) ||
     (typeof __VITE_API_BASE_URL__ !== 'undefined' ? __VITE_API_BASE_URL__ : null) ||
@@ -26,27 +31,43 @@
 
   let BASE_URL;
   if (_rawApiUrl) {
-    // Strip trailing slash
-    let _url = String(_rawApiUrl).replace(/\/$/, '');
-    // Check path only (not hostname) — avoids false match on hostnames like api.avenora.app
+    // Strip trailing slash(es)
+    let _url = String(_rawApiUrl).replace(/\/+$/, '');
+
+    // Determine whether '/api' already appears in the path portion of the URL.
+    // We check the pathname of absolute URLs and the string directly for relative URLs.
+    // This prevents the double '/api/api' path when index.html already appended '/api'.
+    let _hasApiSuffix = false;
     try {
       const _parsed = new URL(_url);
       const _path = _parsed.pathname;
-      if (!_path.endsWith('/api') && !_path.startsWith('/api/')) {
-        _url = _url + '/api';
-      }
+      // '/api' at the end, or '/api/' starting a sub-path → already present
+      _hasApiSuffix = /\/api(\/|$)/.test(_path);
     } catch {
-      // Relative URL (e.g. '/api') — check path directly
-      if (!_url.endsWith('/api') && !_url.startsWith('/api/')) {
-        _url = _url + '/api';
-      }
+      // Relative URL — check directly
+      _hasApiSuffix = /\/api(\/|$)/.test(_url);
     }
-    BASE_URL = _url;
+
+    BASE_URL = _hasApiSuffix ? _url : _url + '/api';
+
+    // Safety: warn if the URL looks like the placeholder that ships with the repo.
+    // This fires on every page load in production so the developer can see it in DevTools.
+    try {
+      const _host = new URL(BASE_URL).hostname;
+      if (_host === 'api.avenora.app') {
+        console.warn(
+          '[AVENORA] ⚠️  Backend URL is the placeholder "api.avenora.app".\n' +
+          '  ALL API REQUESTS WILL FAIL.\n' +
+          '  Edit _productionApiUrl in index.html and replace it with your\n' +
+          '  actual deployed backend URL (e.g. https://avenora-backend.onrender.com).'
+        );
+      }
+    } catch {}
   } else {
     BASE_URL = null;
     console.error(
       '[AVENORA] ⚠️  Avenora API endpoint is not configured.\n' +
-      '  Set window.LU_CONFIG = { apiUrl: "https://your-backend/api" } in index.html,\n' +
+      '  Set window.LU_CONFIG = { apiUrl: "https://your-backend" } in index.html,\n' +
       '  or set VITE_API_BASE_URL=https://your-backend in your .env file.\n' +
       '  All API requests will fail until this is resolved.\n' +
       '  See backend/.env.example for configuration reference.'
@@ -74,6 +95,85 @@
   let isRefreshing = false;
   let refreshQueue = [];
 
+  // ─── Firebase auth readiness gate ────────────────────────
+  // Waits up to 6 s for Firebase Auth to determine the current user.
+  // This prevents "Bearer null" tokens when the first request fires
+  // before onAuthStateChanged has resolved.
+  let _authReady = false;
+  let _authReadyCallbacks = [];
+  window.addEventListener('lu:auth-ready', function _onAuthReady() {
+    _authReady = true;
+    _authReadyCallbacks.forEach(fn => fn());
+    _authReadyCallbacks = [];
+    window.removeEventListener('lu:auth-ready', _onAuthReady);
+  });
+  function _waitForAuthReady(timeoutMs) {
+    if (_authReady) return Promise.resolve();
+    return new Promise(resolve => {
+      const timeout = setTimeout(() => {
+        _authReadyCallbacks = _authReadyCallbacks.filter(fn => fn !== resolve);
+        resolve(); // proceed even if auth is slow
+      }, timeoutMs || 6000);
+      _authReadyCallbacks.push(() => {
+        clearTimeout(timeout);
+        resolve();
+      });
+    });
+  }
+
+  // ─── _diagNetworkError: classify "Failed to fetch" ───────
+  // "Failed to fetch" is the browser's generic error for:
+  //   - server not running / wrong URL
+  //   - CORS preflight failure (browser suppresses the response body)
+  //   - no internet connection
+  // We classify the error, log a rich diagnostic, and return a typed Error
+  // so the UI can show a specific message instead of "Failed to fetch".
+  function _diagNetworkError(networkErr, method, fullUrl) {
+    const isLocalhost = fullUrl.includes('localhost') || fullUrl.includes('127.0.0.1');
+    const isPlaceholder = fullUrl.includes('api.avenora.app');
+    const backendHost = (() => {
+      try { return new URL(fullUrl).origin; } catch { return fullUrl; }
+    })();
+    let msg;
+    if (isPlaceholder) {
+      msg = `Backend URL is not configured — ${method} ${fullUrl}. ` +
+            'The URL "api.avenora.app" is a placeholder. ' +
+            'Replace _productionApiUrl in frontend/index.html with your actual deployed backend URL ' +
+            '(e.g. https://avenora-backend.onrender.com).';
+    } else if (isLocalhost) {
+      msg = `Backend unavailable — ${method} ${fullUrl}. ` +
+            'Start the backend server: run "npm start" inside the backend/ folder.';
+    } else {
+      msg = `Cannot reach backend — ${method} ${fullUrl}. ` +
+            'Possible causes: (1) the backend server is not deployed, ' +
+            '(2) the URL "' + backendHost + '" is wrong (edit _productionApiUrl in index.html), ' +
+            '(3) CORS blocked the preflight (check FRONTEND_URL env var on backend), ' +
+            '(4) no internet connection. ' +
+            'Open DevTools → Network tab and check for a failed OPTIONS or ' + method + ' request.';
+    }
+    console.error(
+      '[AVENORA] Network error — ' + method + ' ' + fullUrl,
+      {
+        originalError: networkErr.message,
+        requestUrl:    fullUrl,
+        method,
+        backendHost,
+        isPlaceholder,
+        configuredApiUrl: window.LU_CONFIG?.apiUrl || 'not set',
+        suggestedFix:  isPlaceholder
+          ? 'Replace _productionApiUrl in frontend/index.html with the real backend URL'
+          : isLocalhost
+            ? 'Run: cd backend && npm start'
+            : 'Verify _productionApiUrl in frontend/index.html matches the deployed backend URL',
+        fullMessage: msg,
+      }
+    );
+    const err = new Error(msg);
+    err.code = isPlaceholder ? 'BACKEND_NOT_CONFIGURED' : (isLocalhost ? 'BACKEND_NOT_RUNNING' : 'BACKEND_UNREACHABLE');
+    err.originalError = networkErr.message;
+    return err;
+  }
+
   async function request(method, path, opts = {}) {
     // Guard: fail fast and clearly if the API is not configured
     if (!BASE_URL) {
@@ -81,7 +181,7 @@
       const uid  = user?.uid || user?.id || null;
       const cfgErr = new Error(
         '[AVENORA] Avenora API endpoint is not configured. ' +
-        'Set window.LU_CONFIG = { apiUrl: "https://your-backend/api" } in index.html ' +
+        'Set window.LU_CONFIG = { apiUrl: "https://your-backend" } in index.html ' +
         'or VITE_API_BASE_URL in your .env file.'
       );
       cfgErr.code = 'API_NOT_CONFIGURED';
@@ -92,8 +192,41 @@
       throw cfgErr;
     }
 
+    // Guard: warn loudly if still using the placeholder backend URL.
+    // Requests will always fail with a network error against this host.
+    try {
+      const _host = new URL(BASE_URL).hostname;
+      if (_host === 'api.avenora.app') {
+        console.error(
+          '[AVENORA] ⛔ Blocked API request — backend URL is the placeholder "api.avenora.app".\n' +
+          '  ' + method + ' ' + BASE_URL + path + '\n' +
+          '  This URL is not a real server. Replace _productionApiUrl in index.html with\n' +
+          '  your actual deployed backend URL and redeploy the frontend.'
+        );
+        const phErr = new Error(
+          'Backend URL is not configured. ' +
+          'Replace the _productionApiUrl placeholder in index.html with your actual deployed backend URL ' +
+          '(e.g. https://avenora-backend.onrender.com). ' +
+          'See the comment in index.html for step-by-step instructions.'
+        );
+        phErr.code = 'BACKEND_NOT_CONFIGURED';
+        throw phErr;
+      }
+    } catch (e) {
+      if (e.code === 'BACKEND_NOT_CONFIGURED') throw e;
+      // URL parse error — continue; the network error will surface naturally
+    }
+
     const fullUrl = `${BASE_URL}${path}`;
     const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
+
+    // Wait for Firebase auth state to resolve before attaching a token.
+    // Skip the wait for read-only public endpoints that don't require auth.
+    const isPublicEndpoint = opts._public ||
+      (method === 'GET' && /^\/videos|^\/streams|^\/live|^\/music/.test(path));
+    if (!isPublicEndpoint) {
+      await _waitForAuthReady(4000);
+    }
 
     // Prefer a fresh Firebase ID token; fall back to stored JWT for legacy backend calls
     let token = null;
@@ -103,7 +236,7 @@
     if (!token) token = TokenStore.getAccess();
     if (token) headers['Authorization'] = `Bearer ${token}`;
 
-    // Diagnostic: log the current auth state
+    // Diagnostic: log the current auth state for protected requests
     const _user = window.AvenoraFirebase?.Auth?.getUser?.() || null;
     const _uid  = _user?.uid || _user?.id || null;
 
@@ -118,16 +251,31 @@
     try {
       res = await fetch(fullUrl, config);
     } catch (networkErr) {
-      console.error(
-        `[AVENORA] Network error — ${method} ${fullUrl}`,
-        { firebaseAuthState: !!_uid, uid: _uid, error: networkErr.message }
-      );
-      throw networkErr;
+      throw _diagNetworkError(networkErr, method, fullUrl);
     }
 
-    // Auto-refresh on 401
-    if (res.status === 401 && TokenStore.getRefresh() && !opts._retried) {
-      if (!isRefreshing) {
+    // Auto-refresh on 401 using Firebase token (not legacy refresh token).
+    // The legacy JWT refresh path is kept for backwards compat with the old backend.
+    if (res.status === 401 && !opts._retried) {
+      // First try a Firebase token refresh
+      if (window.AvenoraFirebase?.Auth) {
+        try {
+          // Force a fresh token from Firebase (bypasses the SDK cache)
+          const auth = await window.AvenoraFirebase.getFirebaseAuth?.();
+          if (auth?.currentUser) {
+            const freshToken = await auth.currentUser.getIdToken(/* forceRefresh= */true);
+            if (freshToken) {
+              return request(method, path, {
+                ...opts,
+                _retried: true,
+                headers: { ...opts.headers, Authorization: `Bearer ${freshToken}` },
+              });
+            }
+          }
+        } catch (_) {}
+      }
+      // Legacy JWT refresh fallback
+      if (TokenStore.getRefresh() && !isRefreshing) {
         isRefreshing = true;
         try {
           const refreshRes = await fetch(`${BASE_URL}/auth/refresh`, {
@@ -140,17 +288,20 @@
             TokenStore.setAccess(accessToken);
             refreshQueue.forEach(fn => fn(accessToken));
           } else {
-            TokenStore.clear();
-            LegendState.set('user', null);
-            window.dispatchEvent(new Event('lu:logged-out'));
+            // Legacy JWT expired AND Firebase token unavailable → sign-out only if
+            // Firebase also has no user (avoid unnecessary logouts on backend errors)
+            if (!window.AvenoraFirebase?.Auth?.getUser?.()) {
+              TokenStore.clear();
+              LegendState.set('user', null);
+              window.dispatchEvent(new Event('lu:logged-out'));
+            }
           }
         } finally {
           isRefreshing = false;
           refreshQueue = [];
         }
+        return request(method, path, { ...opts, _retried: true });
       }
-      // Retry once
-      return request(method, path, { ...opts, _retried: true });
     }
 
     // Parse response
@@ -163,7 +314,7 @@
     }
 
     if (!res.ok) {
-      // Detailed diagnostic log — always show in console regardless of page-level error handling
+      // Detailed diagnostic log
       console.error(
         `[AVENORA] API error — ${method} ${fullUrl}`,
         {
@@ -172,6 +323,7 @@
           responseBody:      data,
           firebaseAuthState: !!_uid,
           uid:               _uid,
+          hasAuthHeader:     !!token,
           errorMessage:      data?.message || `HTTP ${res.status}`,
           errorCode:         data?.code,
         }
@@ -180,6 +332,17 @@
       err.status = res.status;
       err.code = data?.code;
       err.details = data?.details;
+      // Classify common errors for better UI messages
+      if (res.status === 401) {
+        err.code = err.code || 'UNAUTHORIZED';
+        err.userMessage = 'Your session has expired. Please sign in again.';
+      } else if (res.status === 403) {
+        err.code = err.code || 'FORBIDDEN';
+        err.userMessage = 'You do not have permission to perform this action.';
+      } else if (res.status === 503) {
+        err.code = err.code || 'SERVICE_UNAVAILABLE';
+        err.userMessage = data?.message || 'Service temporarily unavailable. Check backend configuration.';
+      }
       throw err;
     }
 
@@ -1000,8 +1163,19 @@
   const HealthAPI = {
     check: () => {
       if (!BASE_URL) return Promise.resolve({ status: 'error', error: 'API endpoint not configured' });
+      try {
+        const _host = new URL(BASE_URL).hostname;
+        if (_host === 'api.avenora.app') {
+          return Promise.resolve({
+            status: 'error',
+            error: 'Backend URL is the placeholder "api.avenora.app" — not a real server. Edit _productionApiUrl in index.html.',
+          });
+        }
+      } catch {}
       const healthUrl = BASE_URL.replace(/\/api$/, '') + '/api/health';
-      return fetch(healthUrl).then(r => r.json()).catch(() => ({ status: 'error' }));
+      return fetch(healthUrl)
+        .then(r => r.json())
+        .catch(e => ({ status: 'error', error: e.message }));
     },
   };
 

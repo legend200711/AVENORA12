@@ -1513,6 +1513,63 @@ window.somExpandDesc = function() {
   if (btn) btn.style.display = 'none';
 };
 
+/* ─── Retry metadata without re-uploading the file ──────── */
+window.somRetryMetadata = async function () {
+  const payload = window._somPendingMetaPayload;
+  const resultEl = document.getElementById('som-upload-result');
+  if (!payload) {
+    if (resultEl) {
+      resultEl.innerHTML = '<p style="color:var(--neon-red);font-size:0.82rem">No pending upload to retry. Please start a fresh upload.</p>';
+    }
+    return;
+  }
+
+  if (resultEl) {
+    resultEl.innerHTML = `
+      <div style="background:rgba(0,168,255,0.05);border:1px solid rgba(0,168,255,0.2);border-radius:var(--radius-md);padding:var(--space-md)">
+        <p style="font-size:0.82rem;color:var(--text-secondary)">Retrying metadata save…</p>
+        <div class="spinner" style="margin:8px auto"></div>
+      </div>
+    `;
+  }
+
+  try {
+    if (!window.AvenoraStorage?.retryMetadataOnly) {
+      throw new Error('Storage service not ready. Refresh the page and try again.');
+    }
+    const data = await window.AvenoraStorage.retryMetadataOnly(payload);
+    window._somPendingMetaPayload = null;
+
+    if (resultEl) {
+      resultEl.innerHTML = `
+        <div style="background:rgba(0,232,122,0.07);border:1px solid rgba(0,232,122,0.25);border-radius:var(--radius-md);padding:var(--space-md)">
+          <p style="color:var(--midnight-green,#00e87a);font-weight:700;margin-bottom:6px">✓ Video saved!</p>
+          <p style="font-size:0.82rem;color:var(--text-secondary)">
+            "${escapeHtml(payload.title)}" has been saved and is ready to watch.
+          </p>
+          <button class="btn btn-primary btn-sm" style="margin-top:8px" onclick="loadTab('new')">View Videos</button>
+        </div>
+      `;
+    }
+  } catch (retryErr) {
+    console.warn('[AVN] Metadata retry error:', retryErr);
+    const msg = retryErr.message || 'Retry failed. Please try again.';
+    if (resultEl) {
+      resultEl.innerHTML = `
+        <div style="background:rgba(255,51,68,0.07);border:1px solid rgba(255,51,68,0.25);border-radius:var(--radius-md);padding:var(--space-md)">
+          <p style="color:var(--neon-red);font-weight:700;margin-bottom:6px">⚠ Retry failed</p>
+          <p style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(msg)}</p>
+          <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn btn-primary btn-sm" onclick="somRetryMetadata()">Try Again</button>
+            <button class="btn btn-outline btn-sm"
+                    onclick="document.getElementById('som-upload-result').style.display='none'">Dismiss</button>
+          </div>
+        </div>
+      `;
+    }
+  }
+};
+
 /* ─── Upload Form ────────────────────────────────────────── */
 function initUploadForm() {
   const ALLOWED_VIDEO_TYPES = ['video/mp4','video/webm','video/ogg','video/quicktime','video/x-msvideo'];
@@ -1726,15 +1783,51 @@ function initUploadForm() {
 
       console.warn('[AVN] Video upload error:', err);
 
-      // Show the real error message so the user knows what went wrong
-      const errMsg = err.message || 'Your video could not be uploaded. Please try again.';
+      // Determine user-visible error message and whether a retry is possible.
+      let errMsg = err.message || 'Your video could not be uploaded. Please try again.';
+      let retryHtml = '';
+
+      if (err.code === 'BACKEND_NOT_CONFIGURED') {
+        errMsg = 'Backend URL is not configured. ' +
+                 'Replace _productionApiUrl in index.html with your actual deployed backend URL ' +
+                 '(e.g. https://avenora-backend.onrender.com). See the comment in index.html for instructions.';
+      } else if (err.code === 'BACKEND_NOT_RUNNING' || err.code === 'BACKEND_UNREACHABLE') {
+        errMsg = 'Cannot reach the backend server (' + escapeHtml(String(window.LU_CONFIG?.apiUrl || 'unknown URL')) + '). ' +
+                 'Start the backend (npm start in the backend/ folder) or ' +
+                 'update _productionApiUrl in index.html to point to your deployed server. ' +
+                 'Network error: ' + escapeHtml(err.originalError || '');
+      } else if (err.code === 'API_NOT_CONFIGURED') {
+        errMsg = 'The backend API URL is not configured. ' +
+                 'Edit _productionApiUrl in the window.LU_CONFIG block in index.html.';
+      } else if (err.code === 'UNAUTHORIZED') {
+        errMsg = 'Your session has expired. Please sign in again, then retry your upload.';
+      } else if (err.code === 'FORBIDDEN') {
+        errMsg = 'You do not have permission to upload videos.';
+      }
+
+      // If file uploaded but metadata save failed — offer retry without re-uploading
+      if (err.isOrphanRisk && err.metaPayload) {
+        const _pendingPayload = err.metaPayload;
+        // Store on window temporarily for the retry button
+        window._somPendingMetaPayload = _pendingPayload;
+        retryHtml = `
+          <button class="btn btn-primary btn-sm" style="margin-top:8px;margin-right:8px"
+                  onclick="somRetryMetadata()">
+            Retry Metadata (no re-upload)
+          </button>`;
+        errMsg += ' The video file is safely stored. Use the retry button to save the record without uploading again.';
+      }
 
       resultEl.style.display = 'block';
       resultEl.innerHTML = `
         <div style="background:rgba(255,51,68,0.07);border:1px solid rgba(255,51,68,0.25);border-radius:var(--radius-md);padding:var(--space-md)">
           <p style="color:var(--neon-red);font-weight:700;margin-bottom:6px">⚠ Upload failed</p>
           <p style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(errMsg)}</p>
-          <button class="btn btn-outline btn-sm" style="margin-top:8px" onclick="document.getElementById('som-upload-result').style.display='none'">Dismiss</button>
+          <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+            ${retryHtml}
+            <button class="btn btn-outline btn-sm"
+                    onclick="document.getElementById('som-upload-result').style.display='none'">Dismiss</button>
+          </div>
         </div>
       `;
     }

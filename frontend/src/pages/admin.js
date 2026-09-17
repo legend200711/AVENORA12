@@ -138,31 +138,80 @@ async function renderAdminDashboard(container) {
     `;
   } catch (err) {
     console.error('[AVN] Admin dashboard error:', err);
-    // Provide actionable guidance based on the HTTP status code.
+    // Provide actionable guidance based on the HTTP status code and error code.
     const status = err.status || 0;
     let heading = 'Could not load dashboard';
-    let detail  = 'Could not retrieve system data. Check your connection and try again.';
-    if (status === 401) {
+    let detail  = '';
+
+    if (err.code === 'BACKEND_NOT_CONFIGURED') {
+      heading = 'Backend URL not configured';
+      detail  = 'The backend API URL is still set to the placeholder <code>api.avenora.app</code> in <code>index.html</code>. ' +
+                '<ul style="margin:8px 0 0 16px;text-align:left">' +
+                '<li>Deploy the backend to Render, Railway, or another host.</li>' +
+                '<li>Copy the deployed URL (e.g. <code>https://avenora-backend.onrender.com</code>).</li>' +
+                '<li>Open <code>frontend/index.html</code> and replace <code>_productionApiUrl</code> with that URL.</li>' +
+                '<li>Commit and push — GitHub Pages will serve the updated page.</li>' +
+                '</ul>';
+    } else if (err.code === 'API_NOT_CONFIGURED') {
+      heading = 'API not configured';
+      detail  = 'The backend API URL is not set in <code>index.html</code>. ' +
+                'Edit <code>_productionApiUrl</code> in the <code>window.LU_CONFIG</code> block to point to your deployed backend.';
+    } else if (err.code === 'BACKEND_NOT_RUNNING') {
+      heading = 'Backend not running';
+      detail  = 'The backend server is not reachable at <code>' +
+                escapeHtml(String(window.LU_CONFIG?.apiUrl || 'localhost:3001')) + '</code>. ' +
+                '<ul style="margin:8px 0 0 16px;text-align:left">' +
+                '<li>Run <code>cd backend &amp;&amp; npm start</code> to start the server.</li>' +
+                '<li>Or deploy the backend and update <code>_productionApiUrl</code> in <code>index.html</code>.</li>' +
+                '</ul>';
+    } else if (err.code === 'BACKEND_UNREACHABLE') {
+      heading = 'Backend unreachable';
+      detail  = 'Cannot reach the backend at <code>' +
+                escapeHtml(String(window.LU_CONFIG?.apiUrl || '')) + '</code>. ' +
+                '<ul style="margin:8px 0 0 16px;text-align:left">' +
+                '<li>Check that the backend is deployed and running.</li>' +
+                '<li>Verify <code>_productionApiUrl</code> in <code>index.html</code> is correct.</li>' +
+                '<li>Open DevTools → Network tab and look for a failed <code>OPTIONS</code> or <code>GET</code> request.</li>' +
+                '<li>Check that <code>FRONTEND_URL=https://legend200711.github.io</code> is set on the backend.</li>' +
+                '</ul>' +
+                '<p style="margin-top:6px;font-size:0.8rem;color:var(--text-muted)">Network error: ' + escapeHtml(err.originalError || err.message) + '</p>';
+    } else if (status === 401) {
       heading = 'Not signed in';
-      detail  = 'Your session has expired. Please sign in again.';
+      detail  = 'Your session has expired or the Firebase token could not be verified. ' +
+                '<ul style="margin:8px 0 0 16px;text-align:left">' +
+                '<li>Sign out and sign in again.</li>' +
+                '<li>Confirm <code>FIREBASE_WEB_API_KEY</code> is set correctly in <code>backend/.env</code>.</li>' +
+                '</ul>';
     } else if (status === 403) {
       heading = 'Access denied';
-      detail  = 'The server rejected the request. Possible reasons: <ul style="margin:8px 0 0 16px;text-align:left">' +
+      detail  = 'The server rejected the request. Possible reasons:' +
+                '<ul style="margin:8px 0 0 16px;text-align:left">' +
                 '<li>The <code>FOUNDER_EMAIL</code> environment variable is not set on the backend.</li>' +
                 '<li>Your account email does not match <code>FOUNDER_EMAIL</code>.</li>' +
                 '<li>Your account role has not been promoted to <code>founder</code>.</li>' +
                 '</ul>' +
-                '<p style="margin-top:8px">Set <code>FOUNDER_EMAIL=your@email.com</code> in <code>backend/.env</code> and restart the server.</p>';
-    } else if (err.code === 'API_NOT_CONFIGURED') {
-      heading = 'API not configured';
-      detail  = 'The backend API URL is not set. Add <code>window.LU_CONFIG = { apiUrl: "https://your-backend/api" }</code> to <code>index.html</code>.';
+                '<p style="margin-top:8px">Set <code>FOUNDER_EMAIL=christijerina46@gmail.com</code> in <code>backend/.env</code> and restart the server.</p>';
+    } else if (status === 503) {
+      heading = 'Service unavailable';
+      detail  = (err.userMessage || err.message || 'A required service is not configured on the backend.') +
+                ' Check <code>backend/.env</code> for missing variables.';
+    } else {
+      detail = 'Could not retrieve system data.<br>' +
+               '<strong>Error:</strong> ' + escapeHtml(err.message || 'unknown error') + '<br>' +
+               '<small style="color:var(--text-muted)">Code: ' + escapeHtml(err.code || String(status || 'none')) + ' · ' +
+               'URL: ' + escapeHtml(String(window.LU_CONFIG?.apiUrl || 'not set')) + '</small><br>' +
+               '<span style="font-size:0.85rem">Check your connection, verify the backend is running, and open DevTools → Network to inspect the failed request.</span>';
     }
+
     container.innerHTML = `
       <div class="error-state">
         <div class="error-icon">⚠️</div>
         <h3>${heading}</h3>
-        <div style="color:var(--text-muted);font-size:0.9rem;max-width:480px;margin:0 auto">${detail}</div>
-        <button class="btn btn-outline" style="margin-top:var(--space-md)" onclick="adminSection('dashboard')">Retry</button>
+        <div style="color:var(--text-muted);font-size:0.9rem;max-width:560px;margin:0 auto;text-align:left">${detail}</div>
+        <div style="margin-top:var(--space-md);display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
+          <button class="btn btn-outline" onclick="adminSection('dashboard')">Retry</button>
+          <button class="btn btn-ghost btn-sm" onclick="LegendAPI.health.check().then(r=>alert('Backend health: '+JSON.stringify(r))).catch(e=>alert('Health check failed: '+e.message))">Test Connection</button>
+        </div>
       </div>`;
   }
 }

@@ -69,6 +69,9 @@ const videoSchema = new mongoose.Schema({
     avatarUrl:   { type: String },
   },
 
+  // MIME type of the original file (e.g. 'video/mp4')
+  mimeType: { type: String },
+
   // External integrations (legacy — kept for schema compatibility)
   muxAssetId: { type: String },
   muxPlaybackId: { type: String },

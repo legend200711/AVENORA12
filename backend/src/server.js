@@ -60,10 +60,16 @@ app.use(helmet({
 // FRONTEND_URL_2 — optional secondary origin (e.g. a custom domain)
 // Always include localhost:3000 and localhost:5173 for local development.
 const _buildAllowedOrigins = () => {
-  const set = new Set(['http://localhost:3000', 'http://localhost:5173']);
+  const set = new Set([
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://localhost:3001',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:5173',
+  ]);
   const add = (v) => {
     if (v && v !== 'null' && v !== 'undefined') {
-      // Strip trailing slash and add
+      // Strip trailing slash — origins do not include paths
       const clean = String(v).replace(/\/$/, '');
       if (clean) set.add(clean);
     }
@@ -76,20 +82,37 @@ const _buildAllowedOrigins = () => {
 const _allowedOrigins = _buildAllowedOrigins();
 logger.info(`[CORS] Allowed origins: ${_allowedOrigins.join(', ')}`);
 
-app.use(cors({
+const _corsOptions = {
   origin: (origin, callback) => {
-    // Allow requests with no origin (curl, Postman, mobile apps, same-host)
+    // Allow requests with no origin (curl, Postman, mobile apps, SSR, same-host)
     if (!origin) return callback(null, true);
     if (_allowedOrigins.includes(origin)) return callback(null, true);
-    // Also accept any github.io subdomain (covers preview deployments)
+    // Accept any github.io subdomain (covers all GitHub Pages preview deployments
+    // and the primary https://legend200711.github.io origin)
     if (/^https:\/\/[^.]+\.github\.io$/.test(origin)) return callback(null, true);
+    // Accept any localhost port (useful for local frontend dev servers)
+    if (/^http:\/\/localhost(:\d+)?$/.test(origin)) return callback(null, true);
+    // Accept 127.0.0.1 on any port
+    if (/^http:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)) return callback(null, true);
     logger.warn(`[CORS] Blocked origin: ${origin}`);
-    callback(new Error(`CORS: origin '${origin}' not allowed`));
+    const corsErr = new Error(`CORS: origin '${origin}' not allowed`);
+    corsErr.status = 403;
+    callback(corsErr);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
-}));
+  exposedHeaders: [],
+  // Explicit preflight: OPTIONS is handled before rate-limiting and auth middleware
+  preflightContinue: false,
+  optionsSuccessStatus: 204,
+};
+
+// Apply CORS to all routes.
+// OPTIONS preflight must be handled BEFORE rate limiting and auth middleware
+// so that browsers can confirm the request is allowed without credentials.
+app.use(cors(_corsOptions));
+app.options('*', cors(_corsOptions)); // explicit OPTIONS handler for all routes
 
 // ─── Request Parsing ────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
@@ -166,6 +189,15 @@ app.get('/api/health', (req, res) => {
     service: 'Avenora API',
     version: '1.0.0',
     timestamp: new Date().toISOString(),
+    // Safe diagnostics: presence checks only — no secret values returned
+    config: {
+      mongodbConfigured:    !!(process.env.MONGODB_URI && !process.env.MONGODB_URI.includes('localhost')),
+      firebaseProjectId:    process.env.FIREBASE_PROJECT_ID || null,
+      firebaseApiKeyPresent: !!(process.env.FIREBASE_WEB_API_KEY),
+      founderEmailConfigured: !!(process.env.FOUNDER_EMAIL),
+      supabaseConfigured:   !!(process.env.SUPABASE_URL && !process.env.SUPABASE_URL.includes('your-project')),
+      frontendUrl:          process.env.FRONTEND_URL || null,
+    },
   });
 });
 

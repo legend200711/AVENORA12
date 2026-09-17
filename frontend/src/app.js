@@ -443,6 +443,8 @@
       }
       // Mark auth check done for the legacy path (no Firebase)
       LegendState.set('authLoading', false);
+      // Signal api.js that auth state is known
+      window.dispatchEvent(new CustomEvent('lu:auth-ready'));
     }
 
     // Keep nav in sync with state changes (covers all auth paths)

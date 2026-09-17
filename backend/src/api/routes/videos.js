@@ -195,6 +195,7 @@ router.post('/save-meta', authenticate, async (req, res, next) => {
     const {
       title, description, category, visibility,
       videoUrl, thumbnailUrl, storagePath, fileSize, mimeType,
+      originalFilename,
     } = req.body;
 
     if (!title?.trim()) {
@@ -206,6 +207,23 @@ router.post('/save-meta', authenticate, async (req, res, next) => {
 
     const uid = req.user.id;
 
+    // Guard against duplicate records for the same storagePath (idempotent save-meta).
+    // If a record already exists for this path (e.g. the first save-meta call succeeded
+    // but the browser lost the response), return the existing record instead of a 409.
+    const existing = await Video.findOne({ storagePath, uploader: uid, isDeleted: false }).lean();
+    if (existing) {
+      const existingObj = {
+        ...existing,
+        videoUrl: existing.hlsUrl || existing.originalFileUrl || videoUrl,
+        uploader: {
+          _id:      uid,
+          username: req.user.username || uid,
+          profile:  { displayName: req.user.username || uid, avatarUrl: null },
+        },
+      };
+      return res.status(200).json({ success: true, video: existingObj });
+    }
+
     // Create or find the uploader's channel
     let channel = await Channel.findOne({ owner: uid });
     if (!channel) {
@@ -215,6 +233,11 @@ router.post('/save-meta', authenticate, async (req, res, next) => {
         description: '',
       });
     }
+
+    const VALID_MIME_PREFIXES = ['video/'];
+    const safeMime = (mimeType && VALID_MIME_PREFIXES.some(p => String(mimeType).startsWith(p)))
+      ? String(mimeType)
+      : 'video/mp4';
 
     const video = await Video.create({
       title:            title.trim().slice(0, 200),
@@ -230,8 +253,8 @@ router.post('/save-meta', authenticate, async (req, res, next) => {
       originalFileUrl:  videoUrl,
       storagePath,
       thumbnailUrl:     thumbnailUrl || null,
-      fileSize:         fileSize     || 0,
-      mimeType:         mimeType     || 'video/mp4',
+      fileSize:         Number(fileSize)  || 0,
+      mimeType:         safeMime,
       category:         ['movies','shows','music','short','gaming','education','comedy','other'].includes(category) ? category : 'other',
       visibility:       ['public','unlisted','private'].includes(visibility) ? visibility : 'public',
       isPublished:      true,
@@ -246,6 +269,8 @@ router.post('/save-meta', authenticate, async (req, res, next) => {
       username: req.user.username || uid,
       profile:  { displayName: req.user.username || uid, avatarUrl: null },
     };
+    // Ensure videoUrl is present for frontend compatibility
+    videoObj.videoUrl = videoObj.hlsUrl || videoObj.originalFileUrl || videoUrl;
     res.status(201).json({ success: true, video: videoObj });
   } catch (err) { next(err); }
 });

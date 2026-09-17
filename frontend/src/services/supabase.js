@@ -358,39 +358,126 @@
           'the video record could not be saved. Refresh the page and try again.'
         );
       }
-      let savedVideo;
-      try {
-        const result = await global.LegendAPI.videos.saveMeta({
-          title:        video.title,
-          description:  video.description,
-          category:     video.category,
-          visibility:   video.visibility,
-          videoUrl,
-          thumbnailUrl,
-          storagePath,
-          fileSize:     videoFile.size,
-          mimeType:     videoFile.type,
-        });
-        savedVideo = result.video;
-      } catch (apiErr) {
-        const status = apiErr.status;
-        if (status === 401 || status === 403) {
-          throw new Error(
-            'Video metadata save failed: you must be signed in to save videos. ' +
-            'Please sign in and try again.'
+
+      // Build the metadata payload with consistent field names.
+      const metaPayload = {
+        title:        video.title,
+        description:  video.description,
+        category:     video.category,
+        visibility:   video.visibility,
+        videoUrl,
+        thumbnailUrl: thumbnailUrl || null,
+        storagePath,
+        fileSize:     videoFile.size,
+        mimeType:     videoFile.type,
+      };
+
+      // Attempt metadata save with up to 3 retries (network transience / token refresh).
+      // The file is already in Supabase Storage — do not re-upload it.
+      let savedVideo = null;
+      let lastMetaErr = null;
+      const MAX_META_RETRIES = 3;
+      for (let attempt = 1; attempt <= MAX_META_RETRIES; attempt++) {
+        try {
+          const result = await global.LegendAPI.videos.saveMeta(metaPayload);
+          savedVideo = result.video;
+          lastMetaErr = null;
+          break; // success
+        } catch (apiErr) {
+          lastMetaErr = apiErr;
+          const status = apiErr.status;
+
+          // Non-retryable errors — propagate immediately
+          if (apiErr.code === 'BACKEND_NOT_CONFIGURED' || apiErr.code === 'API_NOT_CONFIGURED') {
+            // Re-throw as-is — these are configuration errors, not transient failures.
+            // The file is uploaded but metadata cannot be saved until the URL is fixed.
+            const metaErr = new Error(
+              'Video metadata save failed: ' + apiErr.message
+            );
+            metaErr.code       = apiErr.code;
+            metaErr.storagePath = storagePath;
+            metaErr.videoUrl    = videoUrl;
+            metaErr.metaPayload = metaPayload;
+            metaErr.isOrphanRisk = true;
+            throw metaErr;
+          }
+          if (status === 401 || status === 403) {
+            const metaErr = new Error(
+              status === 401
+                ? 'Video metadata save failed: your session has expired. Please sign in and try again.'
+                : 'Video metadata save failed: you do not have permission to upload videos.'
+            );
+            metaErr.code = status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN';
+            metaErr.storagePath = storagePath;
+            metaErr.videoUrl    = videoUrl;
+            metaErr.metaPayload = metaPayload; // allow caller to retry with fresh token
+            throw metaErr;
+          }
+          if (status === 422) {
+            const metaErr = new Error('Video metadata save failed: ' + apiErr.message);
+            metaErr.code = 'VALIDATION_ERROR';
+            metaErr.storagePath = storagePath;
+            metaErr.videoUrl    = videoUrl;
+            throw metaErr;
+          }
+          if (status === 409) {
+            // Duplicate — a record already exists for this storagePath, treat as success
+            // by trying to recover the existing video from the error response.
+            savedVideo = apiErr.existingVideo || null;
+            lastMetaErr = null;
+            break;
+          }
+
+          // Network/backend errors — retryable
+          console.warn(
+            `[AvenoraStorage] Metadata save attempt ${attempt}/${MAX_META_RETRIES} failed:`,
+            apiErr.message || apiErr.code || 'unknown'
           );
+
+          if (attempt < MAX_META_RETRIES) {
+            // Exponential back-off: 1 s, 2 s
+            await new Promise(r => setTimeout(r, attempt * 1000));
+          }
         }
-        if (status === 422) {
-          throw new Error(`Video metadata save failed: ${apiErr.message}`);
-        }
-        throw new Error(
-          `Video metadata save failed: ${apiErr.message || 'unknown error'}. ` +
-          'The video file was uploaded to storage. Reload the page and try again.'
-        );
       }
+
+      if (lastMetaErr) {
+        // All retries exhausted. Preserve storagePath so the caller can offer a retry UI.
+        // The file is intact in Supabase Storage and is NOT orphaned yet.
+        const metaErr = new Error(
+          'Video metadata save failed after ' + MAX_META_RETRIES + ' attempts: ' +
+          (lastMetaErr.message || lastMetaErr.originalError || 'unknown error') + '. ' +
+          'The video file was uploaded successfully. ' +
+          'Click "Retry Metadata" to save the record without re-uploading the file.'
+        );
+        metaErr.code          = lastMetaErr.code || 'METADATA_SAVE_FAILED';
+        metaErr.storagePath   = storagePath;
+        metaErr.videoUrl      = videoUrl;
+        metaErr.thumbnailUrl  = thumbnailUrl;
+        metaErr.metaPayload   = metaPayload;  // pass back for retry button
+        metaErr.isOrphanRisk  = true;         // flag for the upload UI
+        throw metaErr;
+      }
+
       video.id = savedVideo?._id || savedVideo?.id || video.id;
 
       return { success: true, video: { ...video, ...savedVideo } };
+    },
+
+    /**
+     * Save video metadata only — does NOT re-upload the file.
+     * Call this after a failed uploadVideoWithMeta() to retry without
+     * uploading the file again. Pass the `metaPayload` from the error object.
+     *
+     * @param {object} metaPayload — the same payload that uploadVideoWithMeta would have sent
+     * @returns {Promise<{success: true, video: object}>}
+     */
+    async retryMetadataOnly(metaPayload) {
+      if (!global.LegendAPI?.videos?.saveMeta) {
+        throw new Error('LegendAPI is not available. Refresh the page and try again.');
+      }
+      const result = await global.LegendAPI.videos.saveMeta(metaPayload);
+      return { success: true, video: result.video };
     },
 
     // Kept for API compatibility — all buckets in this client are public

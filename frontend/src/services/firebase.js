@@ -155,6 +155,9 @@
             firstFired = true;
             LegendState.set('authLoading', false);
             resolve();
+            // Signal api.js that auth state is known — prevents requests
+            // from firing with a missing token before onAuthStateChanged resolves.
+            window.dispatchEvent(new CustomEvent('lu:auth-ready'));
           }
 
           if (fbUser) {
