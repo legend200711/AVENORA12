@@ -388,14 +388,16 @@ async function search(query, { limit = 20 } = {}) {
  * Create a new Track record (used by music upload endpoint).
  * Does NOT handle file storage — caller is responsible for getting a fileUrl first.
  */
-async function createTrack({ title, artistName, albumTitle, genre, fileUrl, fileSize, uploader, visibility = 'public', isPublished = true }) {
+async function createTrack({ title, artistName, albumTitle, genre, fileUrl, storagePath, mimeType, fileSize, uploader, visibility = 'public', isPublished = true }) {
   const doc = await Track.create({
     title,
-    artistName: artistName || null,
-    albumTitle: albumTitle || null,
-    genre: genre || 'Other',
+    artistName:  artistName  || null,
+    albumTitle:  albumTitle  || null,
+    genre:       genre       || 'Other',
     fileUrl,
-    fileSize: fileSize || null,
+    storagePath: storagePath || null,
+    mimeType:    mimeType    || null,
+    fileSize:    fileSize    || null,
     uploader,
     visibility,
     isPublished,

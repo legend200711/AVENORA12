@@ -130,7 +130,13 @@ router.post('/reset-password', authRateLimiter, async (req, res, next) => {
 // POST /api/auth/logout
 router.post('/logout', authenticate, async (req, res, next) => {
   try {
-    await logout(req.user.id);
+    // req.user.id may be a Firebase UID (string) or MongoDB ObjectId string.
+    // Only call the DB-backed logout for MongoDB-registered users; Firebase users
+    // manage their own session via the Firebase SDK and don't have a DB record.
+    const mongoose = require('mongoose');
+    if (mongoose.Types.ObjectId.isValid(req.user.id)) {
+      await logout(req.user.id);
+    }
     res.json({ success: true, message: 'Logged out' });
   } catch (err) {
     next(err);
@@ -141,8 +147,32 @@ router.post('/logout', authenticate, async (req, res, next) => {
 router.get('/me', authenticate, async (req, res, next) => {
   try {
     const User = require('../../models/User');
-    const user = await User.findById(req.user.id);
-    if (!user) return res.status(404).json({ error: true, message: 'User not found' });
+    const mongoose = require('mongoose');
+    let user = null;
+    // For Firebase-authenticated users (UID is not a valid Mongo ObjectId)
+    // try to find by a stable identifier (email) rather than by _id.
+    if (mongoose.Types.ObjectId.isValid(req.user.id)) {
+      user = await User.findById(req.user.id);
+    } else if (req.user.email) {
+      user = await User.findOne({ email: req.user.email.toLowerCase() });
+    }
+    if (!user) {
+      // Firebase-only user — return the JWT payload as a profile stub so
+      // callers that depend on /me don't get a hard 404.
+      return res.json({
+        success: true,
+        user: {
+          id:       req.user.id,
+          uid:      req.user.uid,
+          username: req.user.username,
+          role:     req.user.role || 'user',
+          email:    req.user.email,
+          profile:  {},
+          stats:    {},
+          status:   {},
+        },
+      });
+    }
     res.json({ success: true, user: user.toPublicProfile() });
   } catch (err) {
     next(err);

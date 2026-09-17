@@ -54,6 +54,13 @@ async function connectDatabase() {
   }
 
   // 3. Fallback: mongodb-memory-server (dev only — data resets on restart)
+  // Block this fallback in production — if the database is not available in production,
+  // we must fail fast so the operator knows to fix the MONGODB_URI configuration.
+  if (process.env.NODE_ENV === 'production') {
+    logger.error('❌ Database connection failed in production mode. Server cannot start safely.');
+    logger.error('   Set MONGODB_URI to a valid MongoDB Atlas URI in your deployment environment.');
+    process.exit(1);
+  }
   try {
     const { MongoMemoryServer } = require('mongodb-memory-server');
     const memServer = await MongoMemoryServer.create({ instance: { dbName: 'legend_universe' } });

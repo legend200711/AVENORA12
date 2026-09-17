@@ -148,22 +148,56 @@
         const auth = await getFirebaseAuth();
         const { onAuthStateChanged } = await loadModule('auth');
         let firstFired = false;
-        onAuthStateChanged(auth, (fbUser) => {
-          if (fbUser) {
-            _persistUid(fbUser.uid);
-            const user = _mapFbUser(fbUser);
-            LegendState.set('user', user);
-            callback(user);
-          } else {
-            _clearUid();
-            LegendState.set('user', null);
-            callback(null);
-          }
-          // Mark auth check complete and resolve the startup gate
+        onAuthStateChanged(auth, async (fbUser) => {
+          // Resolve the auth gate synchronously on the first call
+          // (before any async Firestore lookups) so the UI never hangs.
           if (!firstFired) {
             firstFired = true;
             LegendState.set('authLoading', false);
             resolve();
+          }
+
+          if (fbUser) {
+            _persistUid(fbUser.uid);
+            let user = _mapFbUser(fbUser);
+
+            // Set the base user immediately so the nav shows the correct state right away.
+            LegendState.set('user', user);
+            callback(user);
+
+            // Then try to load the Firestore role/profile — this updates the user
+            // object asynchronously without blocking the initial render.
+            try {
+              const db = await getFirestore();
+              const { doc, getDoc } = await loadModule('firestore');
+              const snap = await getDoc(doc(db, 'users', fbUser.uid));
+              if (snap.exists()) {
+                const fsData = snap.data();
+                let updated = { ...user };
+                if (fsData.role && typeof fsData.role === 'string') {
+                  updated.role = fsData.role;
+                }
+                if (fsData.username) updated.username = fsData.username;
+                if (fsData.profile?.displayName || fsData.profile?.avatarUrl) {
+                  updated.profile = {
+                    ...updated.profile,
+                    ...(fsData.profile.displayName ? { displayName: fsData.profile.displayName } : {}),
+                    ...(fsData.profile.avatarUrl   ? { avatarUrl:   fsData.profile.avatarUrl   } : {}),
+                  };
+                }
+                // Only update if role/profile actually changed — avoids unnecessary re-renders
+                if (updated.role !== user.role || updated.username !== user.username) {
+                  LegendState.set('user', updated);
+                  callback(updated);
+                }
+              }
+            } catch (_) {
+              // Firestore role lookup is best-effort — never block auth
+            }
+          } else {
+            _clearUid();
+            LegendState.set('user', null);
+            callback(null);
           }
         });
       });
@@ -185,7 +219,7 @@
       uid:      fbUser.uid,
       email:    fbUser.email,
       username,
-      role:     'member',                // role is managed in Firestore (see below)
+      role:     'user',                  // 'user' is the canonical default role in AVENORA
       profile:  {
         displayName: username,
         avatarUrl:   fbUser.photoURL || null,

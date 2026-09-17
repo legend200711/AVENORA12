@@ -14,6 +14,7 @@ const { NotFoundError, AppError } = require('../middleware/errorHandler');
 // Note: express route matching — this must come BEFORE /:username
 router.put('/profile', authenticate, async (req, res, next) => {
   try {
+    const mongoose = require('mongoose');
     const { displayName, bio, location, website, avatarUrl, bannerUrl } = req.body;
     const update = {};
 
@@ -24,7 +25,14 @@ router.put('/profile', authenticate, async (req, res, next) => {
     if (avatarUrl !== undefined) update['profile.avatarUrl'] = avatarUrl;
     if (bannerUrl !== undefined) update['profile.bannerUrl'] = bannerUrl;
 
-    const user = await User.findByIdAndUpdate(req.user.id, update, { new: true });
+    // For Firebase users (non-ObjectId uid) find by email instead
+    let user;
+    if (mongoose.Types.ObjectId.isValid(req.user.id)) {
+      user = await User.findByIdAndUpdate(req.user.id, update, { new: true });
+    } else if (req.user.email) {
+      user = await User.findOneAndUpdate({ email: req.user.email.toLowerCase() }, update, { new: true });
+    }
+    if (!user) return res.status(404).json({ error: true, message: 'User not found in database. Profile updates require a MongoDB account.' });
     res.json({ success: true, user: user.toPublicProfile() });
   } catch (err) {
     next(err);
@@ -90,7 +98,14 @@ router.get('/:username/posts', optionalAuth, async (req, res, next) => {
 // DELETE /api/users/me/account — self-deletion with confirmation
 router.delete('/me/account', authenticate, async (req, res, next) => {
   try {
+    const mongoose = require('mongoose');
     const userId = req.user.id;
+
+    // Firebase users (non-ObjectId UID) cannot be soft-deleted via this route
+    // — their Firebase account must be deleted via the Firebase Auth SDK.
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(422).json({ error: true, message: 'Firebase accounts must be deleted via the Firebase Auth SDK or Firebase console.' });
+    }
 
     // Soft-delete user account
     await User.findByIdAndUpdate(userId, {

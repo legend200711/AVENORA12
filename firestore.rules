@@ -174,10 +174,11 @@ service cloud.firestore {
       // Owner reads their own library unconditionally.
       // Other authenticated users can read tracks whose visibility != 'private'
       // so the 24-hour cloud stream player can serve them.
+      // resource == null check is moved last; short-circuit evaluation on auth.uid == uid
+      // prevents an error when resource is null and we try to access resource.data.
       allow read: if request.auth != null
         && (request.auth.uid == uid
-            || resource == null
-            || resource.data.visibility != 'private');
+            || (resource != null && resource.data.visibility != 'private'));
     }
 
     // ── Helper functions ───────────────────────────────────

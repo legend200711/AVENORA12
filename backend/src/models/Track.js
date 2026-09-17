@@ -41,7 +41,9 @@ const trackSchema = new mongoose.Schema({
     enum: ['public', 'unlisted', 'private'],
     default: 'public',
   },
-  isPublished: { type: Boolean, default: false },
+  // Default to true so uploaded tracks appear in the library immediately.
+  // Users can set visibility:'private' to hide them instead.
+  isPublished: { type: Boolean, default: true },
   isDeleted:   { type: Boolean, default: false },
 
   // Engagement

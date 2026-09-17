@@ -159,22 +159,26 @@ CREATE POLICY "thumbnails_owner_delete"
 
 ---
 
-### `avatars` — private; backend service-role only (no additional policies needed)
+### `avatars` — required RLS policies for browser avatar uploads
 
-The backend uses the **service-role key** which bypasses RLS completely.
-No additional policies are required for `avatars` — the service-role key always has full access.
-
-If you want to also allow direct browser avatar uploads (via the anon key), add:
+The AVENORA frontend uploads avatars directly from the browser using the anon key.
+The backend uses the **service-role key** which bypasses RLS, but the browser path
+also needs policies. **Run these SQL statements:**
 
 ```sql
--- Optional: allow browser direct avatar uploads (anon key)
+-- Allow browser direct avatar uploads (anon key — required for frontend avatar upload)
 CREATE POLICY "avatars_anon_insert"
   ON storage.objects FOR INSERT
   WITH CHECK (bucket_id = 'avatars');
 
--- Optional: allow public avatar reading
+-- Allow public avatar reading (required to display profile pictures)
 CREATE POLICY "avatars_public_read"
   ON storage.objects FOR SELECT
+  USING (bucket_id = 'avatars');
+
+-- Allow users to update / delete their own avatars
+CREATE POLICY "avatars_owner_delete"
+  ON storage.objects FOR DELETE
   USING (bucket_id = 'avatars');
 ```
 

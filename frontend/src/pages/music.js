@@ -186,6 +186,10 @@ window.musicTabSwitch = async function (tab, clickedBtn) {
 };
 
 // ─── DISCOVER TAB ────────────────────────────────────────────
+// Module-level context registry: maps context string → tracks array.
+// mpLoadBackendTrack can look up the array by context for auto-advance.
+const _mpContextTracks = {};
+
 async function renderDiscover() {
   let trackSection = '';
   let albumSection = '';
@@ -198,6 +202,7 @@ async function renderDiscover() {
     ]);
 
     if (tracksData.tracks && tracksData.tracks.length > 0) {
+      _mpContextTracks['popular'] = tracksData.tracks;
       trackSection = `
         <div class="section-header"><h2 class="section-title">🔥 POPULAR</h2></div>
         <div class="music-track-list" style="margin-bottom:var(--space-xl)">
@@ -1157,9 +1162,15 @@ function renderTrackRow(track, index, queue, context) {
   const favs = new Set(LS.get('lu_mp_favorites', []));
   const isFav = favs.has(String(track.id));
 
+  // Store tracks in the context registry for auto-advance without inline JSON.
+  if (Array.isArray(queue) && queue.length > 0 && context) {
+    _mpContextTracks[context] = queue;
+  }
+
   return `
     <div class="mtrack-row ${isCurrent ? 'playing' : ''}"
          onclick="mpLoadBackendTrack(${JSON.stringify(track).replace(/"/g,'&quot;')}, ${index}, '${context}')"
+         data-track-index="${index}"
          role="button" tabindex="0">
       <div class="mtrack-num">
         ${isCurrent
@@ -1477,6 +1488,7 @@ const MP = {
   shuffle:       false,
   repeat:        false,
   backendQueue:  null,        // context string for backend tracks
+  backendTracks: [],          // full array of backend tracks for auto-advance
   favorites:     [],
   _vizAnim:      null,
   _vizCtx:       null,
@@ -1557,6 +1569,23 @@ function mpHandleAudioError(e) {
 
 function mpHandleEnded() {
   if (MP.repeat) { document.getElementById('mp-audio')?.play().catch(()=>{}); return; }
+
+  // Backend tracks mode: auto-advance through backendTracks array
+  if (MP.backendTracks && MP.backendTracks.length > 0) {
+    const next = MP.currentIndex + 1;
+    if (MP.shuffle) {
+      const randIdx = Math.floor(Math.random() * MP.backendTracks.length);
+      window.mpLoadBackendTrack(MP.backendTracks[randIdx], randIdx, MP.backendQueue);
+      return;
+    }
+    if (next < MP.backendTracks.length) {
+      window.mpLoadBackendTrack(MP.backendTracks[next], next, MP.backendQueue);
+    }
+    // else end of backend queue — stop
+    return;
+  }
+
+  // Local queue mode
   if (MP.shuffle) { mpLoadTrack(Math.floor(Math.random() * MP.queue.length)); return; }
   const next = MP.currentIndex + 1;
   if (next < MP.queue.length) mpLoadTrack(next);
@@ -1612,13 +1641,22 @@ window.mpLoadTrack = function (index) {
   mpInitVisualizer(audio);
 };
 
-window.mpLoadBackendTrack = async function (track, index, context) {
+window.mpLoadBackendTrack = async function (track, index, context, tracksArray) {
   if (!track.fileUrl && !track.storagePath) {
     Toast.error('This track is not available for playback.');
     return;
   }
   MP.backendQueue = context;
   MP.currentIndex = index;
+  // Store the full tracks array for auto-advance.
+  // Priority: explicit tracksArray argument → context registry → keep existing
+  if (Array.isArray(tracksArray) && tracksArray.length > 0) {
+    MP.backendTracks = tracksArray;
+  } else if (context && _mpContextTracks[context] && _mpContextTracks[context].length > 0) {
+    MP.backendTracks = _mpContextTracks[context];
+  }
+  // Note: MP.queue (local imports) is kept separate and unmodified.
+  // mpHandleEnded will use backendTracks when it's populated.
 
   const audio = document.getElementById('mp-audio');
   if (!audio) return;
@@ -1692,11 +1730,28 @@ window.mpPrev = function () {
   const audio = document.getElementById('mp-audio');
   // If more than 3 seconds played — restart current
   if (audio && audio.currentTime > 3) { audio.currentTime = 0; return; }
+
+  // Backend tracks mode
+  if (MP.backendTracks && MP.backendTracks.length > 0) {
+    const prev = MP.currentIndex <= 0 ? MP.backendTracks.length - 1 : MP.currentIndex - 1;
+    window.mpLoadBackendTrack(MP.backendTracks[prev], prev, MP.backendQueue);
+    return;
+  }
+
   if (MP.queue.length === 0) return;
   mpLoadTrack(MP.currentIndex <= 0 ? MP.queue.length - 1 : MP.currentIndex - 1);
 };
 
 window.mpNext = function () {
+  // Backend tracks mode
+  if (MP.backendTracks && MP.backendTracks.length > 0) {
+    const next = MP.shuffle
+      ? Math.floor(Math.random() * MP.backendTracks.length)
+      : (MP.currentIndex + 1) % MP.backendTracks.length;
+    window.mpLoadBackendTrack(MP.backendTracks[next], next, MP.backendQueue);
+    return;
+  }
+
   if (!MP.queue.length) return;
   if (MP.shuffle) { mpLoadTrack(Math.floor(Math.random() * MP.queue.length)); return; }
   const next = (MP.currentIndex + 1) % MP.queue.length;

@@ -468,12 +468,12 @@
       await import(`https://www.gstatic.com/firebasejs/${SDK_VER}/firebase-firestore.js`);
 
     const constraints = [
+      // Only show public and unlisted videos in the public list
+      where('visibility', 'in', ['public', 'unlisted']),
       orderBy('createdAt', 'desc'),
       limit(lim),
     ];
     if (category) constraints.push(where('category', '==', category));
-    // Only show public and unlisted videos
-    // (private requires owner filter which we don't do at list level)
     const q = query(collection(db, 'videos'), ...constraints);
     const snap = await getDocs(q);
     return snap.docs.map(d => _mapVideoDoc(d.id, d.data()));
@@ -641,7 +641,7 @@
             user: {
               id: merged.id || currentUser.id,
               username: merged.username || username,
-              role: merged.role || 'member',
+              role: merged.role || 'user',
               profile: merged.profile || {},
               stats: merged.stats || {},
               createdAt: merged.createdAt || new Date().toISOString(),
@@ -657,7 +657,7 @@
             user: {
               id: fsProfile.id,
               username: fsProfile.username || username,
-              role: fsProfile.role || 'member',
+              role: fsProfile.role || 'user',
               profile: fsProfile.profile || {},
               stats: fsProfile.stats || {},
               createdAt: fsProfile.createdAt || new Date().toISOString(),

@@ -307,6 +307,7 @@ router.post('/upload', authenticate, (req, res, next) => {
         genre:      (genre || 'Other').slice(0, 100),
         fileUrl,
         storagePath,
+        mimeType:   req.file.mimetype,
         fileSize:   req.file.size,
         uploader:   req.user.id,
         visibility: 'public',

@@ -11,8 +11,11 @@ const videoSchema = new mongoose.Schema({
   channelId: { type: mongoose.Schema.Types.ObjectId, ref: 'Channel' },
 
   // File references
-  originalFileUrl: { type: String, select: false }, // Internal, not exposed
-  hlsUrl: { type: String }, // HLS stream URL (MediaMTX/WHIP → HLS)
+  // Note: originalFileUrl is NOT marked select:false — it is the primary playback URL
+  // for Supabase-hosted videos (the public CDN URL). Marking it select:false prevents
+  // it from being returned in .lean() queries, which breaks video playback.
+  originalFileUrl: { type: String },
+  hlsUrl: { type: String }, // HLS stream URL (MediaMTX/WHIP → HLS) or same as originalFileUrl
   storagePath:     { type: String },   // Supabase Storage path (videos bucket)
   thumbnailUrl: { type: String },
   previewGifUrl: { type: String },
@@ -64,6 +67,13 @@ videoSchema.index({ uploader: 1, createdAt: -1 });
 videoSchema.index({ category: 1, createdAt: -1 });
 videoSchema.index({ views: -1 });
 videoSchema.index({ processingStatus: 1 });
+
+// Virtual: expose a consistent `videoUrl` field for frontend compatibility.
+// The Firestore path uses `videoUrl`; the MongoDB path uses `hlsUrl` / `originalFileUrl`.
+// This virtual makes both paths return the same field name.
+videoSchema.virtual('videoUrl').get(function () {
+  return this.hlsUrl || this.originalFileUrl || null;
+});
 
 const Video = mongoose.model('Video', videoSchema);
 module.exports = Video;

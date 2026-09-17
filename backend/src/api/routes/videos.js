@@ -87,12 +87,14 @@ router.get('/', optionalAuth, async (req, res, next) => {
         .sort(sortBy)
         .skip(skip)
         .limit(limitN)
-        .populate('uploader', 'username profile.displayName profile.avatarUrl')
-        .lean(),
+        .populate('uploader', 'username profile.displayName profile.avatarUrl'),
       Video.countDocuments(query),
     ]);
 
-    res.json({ success: true, videos, total, page: parseInt(page), limit: limitN });
+    // Serialize with virtuals so videoUrl is included for frontend compatibility
+    const serialized = videos.map(v => v.toObject({ virtuals: true }));
+
+    res.json({ success: true, videos: serialized, total, page: parseInt(page), limit: limitN });
   } catch (err) { next(err); }
 });
 
@@ -269,7 +271,7 @@ router.get('/channel/:id', optionalAuth, async (req, res, next) => {
       .lean();
     if (!channel || channel.isSuspended) return next(new NotFoundError('Channel'));
 
-    const videos = await Video.find({
+    const videosDocs = await Video.find({
       channelId:        channel._id,
       isDeleted:        false,
       isPublished:      true,
@@ -278,8 +280,9 @@ router.get('/channel/:id', optionalAuth, async (req, res, next) => {
     })
       .sort({ createdAt: -1 })
       .limit(48)
-      .populate('uploader', 'username profile.displayName profile.avatarUrl')
-      .lean();
+      .populate('uploader', 'username profile.displayName profile.avatarUrl');
+
+    const videos = videosDocs.map(v => v.toObject({ virtuals: true }));
 
     res.json({
       success: true,
@@ -318,7 +321,10 @@ router.get('/:id', optionalAuth, async (req, res, next) => {
       if (hist) lastPosition = hist.position;
     }
 
-    res.json({ success: true, video, lastPosition });
+    // Serialize to plain object and inject videoUrl for frontend compatibility
+    const videoObj = video.toObject({ virtuals: true });
+
+    res.json({ success: true, video: videoObj, lastPosition });
   } catch (err) { next(err); }
 });
 
