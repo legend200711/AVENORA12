@@ -143,16 +143,7 @@ async function renderAdminDashboard(container) {
     let heading = 'Could not load dashboard';
     let detail  = '';
 
-    if (err.code === 'BACKEND_NOT_CONFIGURED') {
-      heading = 'Backend URL not configured';
-      detail  = 'The backend API URL is still set to the placeholder <code>api.avenora.app</code> in <code>index.html</code>. ' +
-                '<ul style="margin:8px 0 0 16px;text-align:left">' +
-                '<li>Deploy the backend to Render, Railway, or another host.</li>' +
-                '<li>Copy the deployed URL (e.g. <code>https://avenora-backend.onrender.com</code>).</li>' +
-                '<li>Open <code>frontend/index.html</code> and replace <code>_productionApiUrl</code> with that URL.</li>' +
-                '<li>Commit and push — GitHub Pages will serve the updated page.</li>' +
-                '</ul>';
-    } else if (err.code === 'API_NOT_CONFIGURED') {
+    if (err.code === 'API_NOT_CONFIGURED' || err.code === 'BACKEND_NOT_CONFIGURED') {
       heading = 'API not configured';
       detail  = 'The backend API URL is not set in <code>index.html</code>. ' +
                 'Edit <code>_productionApiUrl</code> in the <code>window.LU_CONFIG</code> block to point to your deployed backend.';

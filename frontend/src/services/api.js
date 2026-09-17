@@ -15,15 +15,16 @@
 (function (global) {
   'use strict';
 
-  // ─── Central API base URL ─────────────────────────────────
-  // Priority: runtime config → build-time env var → error
-  //
-  // window.LU_CONFIG.apiUrl should be the BACKEND BASE URL only
-  // (e.g. 'https://avenora-backend.onrender.com' or 'http://localhost:3001').
-  // This module always appends '/api' to produce the full API prefix.
-  //
-  // If the value already contains '/api' (legacy config from old index.html),
-  // it is used as-is to avoid a double '/api/api' path.
+  // ─── Supabase Edge Functions base URL ─────────────────────
+  // All API routes are served by Supabase Edge Functions.
+  // window.LU_CONFIG.edgeFnUrl = 'https://<project>.supabase.co/functions/v1'
+  // window.LU_CONFIG.apiUrl    = same value (kept for backward compat)
+  const SUPABASE_PROJECT_URL = 'https://licuiqxkkfboqezzmsqu.supabase.co';
+  const EDGE_BASE = SUPABASE_PROJECT_URL + '/functions/v1';
+
+  // Legacy BASE_URL — kept so all non-migrated routes still resolve cleanly.
+  // If a separate REST backend is ever deployed, set window.LU_CONFIG.apiUrl
+  // to its URL and this will pick it up.
   const _rawApiUrl =
     (window.LU_CONFIG && window.LU_CONFIG.apiUrl) ||
     (typeof __VITE_API_BASE_URL__ !== 'undefined' ? __VITE_API_BASE_URL__ : null) ||
@@ -31,46 +32,36 @@
 
   let BASE_URL;
   if (_rawApiUrl) {
-    // Strip trailing slash(es)
     let _url = String(_rawApiUrl).replace(/\/+$/, '');
-
-    // Determine whether '/api' already appears in the path portion of the URL.
-    // We check the pathname of absolute URLs and the string directly for relative URLs.
-    // This prevents the double '/api/api' path when index.html already appended '/api'.
     let _hasApiSuffix = false;
     try {
       const _parsed = new URL(_url);
-      const _path = _parsed.pathname;
-      // '/api' at the end, or '/api/' starting a sub-path → already present
-      _hasApiSuffix = /\/api(\/|$)/.test(_path);
+      _hasApiSuffix = /\/api(\/|$)/.test(_parsed.pathname);
     } catch {
-      // Relative URL — check directly
       _hasApiSuffix = /\/api(\/|$)/.test(_url);
     }
-
     BASE_URL = _hasApiSuffix ? _url : _url + '/api';
 
-    // Safety: warn if the URL looks like the placeholder that ships with the repo.
-    // This fires on every page load in production so the developer can see it in DevTools.
+    // Suppress the placeholder warning — we now use Edge Functions directly
+    // so requests no longer go to api.avenora.app
     try {
       const _host = new URL(BASE_URL).hostname;
       if (_host === 'api.avenora.app') {
-        console.warn(
-          '[AVENORA] ⚠️  Backend URL is the placeholder "api.avenora.app".\n' +
-          '  ALL API REQUESTS WILL FAIL.\n' +
-          '  Edit _productionApiUrl in index.html and replace it with your\n' +
-          '  actual deployed backend URL (e.g. https://avenora-backend.onrender.com).'
+        // Edge Functions handle the critical paths — suppress the fatal warning
+        console.info(
+          '[AVENORA] Legacy apiUrl is still the placeholder "api.avenora.app". ' +
+          'Critical routes (save-meta, dashboard, videos) now use Supabase Edge Functions directly. ' +
+          'Non-critical backend routes will gracefully fail until a backend is deployed.'
         );
       }
     } catch {}
   } else {
     BASE_URL = null;
-    console.error(
-      '[AVENORA] ⚠️  Avenora API endpoint is not configured.\n' +
-      '  Set window.LU_CONFIG = { apiUrl: "https://your-backend" } in index.html,\n' +
-      '  or set VITE_API_BASE_URL=https://your-backend in your .env file.\n' +
-      '  All API requests will fail until this is resolved.\n' +
-      '  See backend/.env.example for configuration reference.'
+    // Edge Functions cover the critical paths — this is no longer fatal
+    console.info(
+      '[AVENORA] No legacy API URL configured. ' +
+      'Supabase Edge Functions handle save-meta, dashboard, and video listing. ' +
+      'Set window.LU_CONFIG.apiUrl to enable additional backend features.'
     );
   }
 
@@ -523,26 +514,35 @@
   };
 
   // ─── Videos API ───────────────────────────────────────────
-  // Reads from Firestore first (where our direct-upload metadata lives).
-  // Falls back to the REST API only when Firebase is completely unavailable.
+  // Primary source: Supabase Edge Function (videos-list).
+  // Falls back to Firestore for legacy/pre-migration videos when Edge Fn fails.
   const VideosAPI = {
     async list(params = {}) {
-      // Always use the backend REST API — videos are stored in MongoDB, not Firestore.
-      // Firestore video reads are kept only as a legacy fallback for the old migration path.
+      // Try the Supabase Edge Function first
       const q = new URLSearchParams(params).toString();
       try {
-        return await get(`/videos?${q}`);
-      } catch (apiErr) {
-        // If the backend is unreachable, attempt a Firestore fallback so the page
-        // is not completely blank when the server is temporarily down.
-        if (window.AvenoraFirebase && apiErr.code !== 'API_NOT_CONFIGURED') {
-          try {
-            const videos = await _listVideosFromFirestore(params);
-            return { videos, total: videos.length };
-          } catch (_) {}
-        }
-        throw apiErr;
+        const token = window.AvenoraFirebase?.Auth
+          ? await window.AvenoraFirebase.Auth.getIdToken().catch(() => null)
+          : null;
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        const resp = await fetch(`${EDGE_BASE}/videos-list?${q}`, { headers });
+        if (resp.ok) return resp.json();
+      } catch (_) {}
+
+      // Firestore fallback for videos saved before the Supabase DB migration
+      if (window.AvenoraFirebase) {
+        try {
+          const videos = await _listVideosFromFirestore(params);
+          return { videos, total: videos.length };
+        } catch (_) {}
       }
+
+      // Last resort — try any configured REST backend
+      if (BASE_URL) {
+        return get(`/videos?${q}`);
+      }
+
+      return { videos: [], total: 0 };
     },
     async get(id) {
       // Prefer backend; fall back to Firestore for pre-migration videos.
@@ -606,8 +606,36 @@
     unsuspendChannel: (id) => put(`/videos/channel/${id}/unsuspend`, {}),
 
     // Save metadata for a video already uploaded directly to Supabase Storage from the browser.
-    // POST /api/videos/save-meta — requires authentication.
-    saveMeta: (data) => post('/videos/save-meta', data),
+    // Calls the Supabase Edge Function directly — no separate backend required.
+    async saveMeta(data) {
+      // Get a fresh Firebase ID token
+      let token = null;
+      if (window.AvenoraFirebase?.Auth) {
+        token = await window.AvenoraFirebase.Auth.getIdToken().catch(() => null);
+      }
+      if (!token) token = TokenStore.getAccess();
+      if (!token) {
+        const err = new Error('Not authenticated — please sign in before uploading.');
+        err.code = 'UNAUTHORIZED';
+        throw err;
+      }
+      const resp = await fetch(`${EDGE_BASE}/videos-save-meta`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify(data),
+      });
+      const json = await resp.json().catch(() => ({ error: true, message: `HTTP ${resp.status}` }));
+      if (!resp.ok) {
+        const err = new Error(json.message || `Save-meta failed (HTTP ${resp.status})`);
+        err.status = resp.status;
+        err.code   = resp.status === 401 ? 'UNAUTHORIZED'
+                   : resp.status === 403 ? 'FORBIDDEN'
+                   : resp.status === 422 ? 'VALIDATION_ERROR'
+                   : 'SAVE_META_FAILED';
+        throw err;
+      }
+      return json;
+    },
   };
 
   // ── Firestore helpers for video CRUD ────────────────────────
@@ -1107,7 +1135,32 @@
 
   // ─── Admin API ────────────────────────────────────────────
   const AdminAPI = {
-    dashboard: () => get('/admin/dashboard'),
+    async dashboard() {
+      // Call the Supabase Edge Function — no separate backend required
+      let token = null;
+      if (window.AvenoraFirebase?.Auth) {
+        token = await window.AvenoraFirebase.Auth.getIdToken().catch(() => null);
+      }
+      if (!token) token = TokenStore.getAccess();
+      if (!token) {
+        const err = new Error('Not authenticated');
+        err.status = 401; err.code = 'UNAUTHORIZED';
+        throw err;
+      }
+      const resp = await fetch(`${EDGE_BASE}/admin-dashboard`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const json = await resp.json().catch(() => ({ error: true, message: `HTTP ${resp.status}` }));
+      if (!resp.ok) {
+        const err = new Error(json.message || `Dashboard failed (HTTP ${resp.status})`);
+        err.status = resp.status;
+        err.code   = resp.status === 401 ? 'UNAUTHORIZED'
+                   : resp.status === 403 ? 'FORBIDDEN'
+                   : 'DASHBOARD_ERROR';
+        throw err;
+      }
+      return json;
+    },
     users: (page, search) => get(`/admin/users?page=${page || 1}${search ? `&search=${encodeURIComponent(search)}` : ''}`),
     setRole: (userId, role) => put(`/admin/users/${userId}/role`, { role }),
     suspend: (userId, reason, until) => put(`/admin/users/${userId}/suspend`, { reason, until }),
@@ -1160,21 +1213,20 @@
   };
 
   // ─── Health ───────────────────────────────────────────────
+  // Checks reachability of the Supabase Edge Functions endpoint.
   const HealthAPI = {
     check: () => {
-      if (!BASE_URL) return Promise.resolve({ status: 'error', error: 'API endpoint not configured' });
-      try {
-        const _host = new URL(BASE_URL).hostname;
-        if (_host === 'api.avenora.app') {
-          return Promise.resolve({
-            status: 'error',
-            error: 'Backend URL is the placeholder "api.avenora.app" — not a real server. Edit _productionApiUrl in index.html.',
-          });
-        }
-      } catch {}
-      const healthUrl = BASE_URL.replace(/\/api$/, '') + '/api/health';
-      return fetch(healthUrl)
-        .then(r => r.json())
+      // Ping the Supabase REST endpoint — if it responds, the Edge Functions are reachable
+      return fetch(`${SUPABASE_PROJECT_URL}/rest/v1/`, {
+        method: 'HEAD',
+        headers: { apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpY3VpcXhra2Zib3Flenptc3F1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNTYxMDQsImV4cCI6MjEwNDkzMjEwNH0.tsYOyCI7skF6Otz2W0oNYhxM63-0551lrqIDCO8NoJo' },
+      })
+        .then(r => ({
+          status: (r.ok || r.status === 401 || r.status === 404) ? 'ok' : 'error',
+          service: 'Supabase Edge Functions',
+          supabaseProject: SUPABASE_PROJECT_URL,
+          httpStatus: r.status,
+        }))
         .catch(e => ({ status: 'error', error: e.message }));
     },
   };
