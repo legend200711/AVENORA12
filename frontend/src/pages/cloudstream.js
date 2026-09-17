@@ -44,38 +44,69 @@ registerPage('cloudstream', {
             style="width:100%;height:calc(100svh - 130px);min-height:600px;border:none;display:block"
             allow="camera; microphone; autoplay; clipboard-write"
             title="Avenora 24-Hour Cloud Stream"
-            loading="lazy"
           ></iframe>
         </div>
       </div>
     `;
 
-    // After the iframe loads, forward two things to the cloud-stream iframe:
-    //   1. AVN_CONFIG  — the runtime API URL (window.LU_CONFIG) so the iframe
-    //                    can reach the AVENORA backend (its own window.LU_CONFIG
-    //                    is undefined because iframes have an isolated window).
-    //   2. AVN_AUTH_TOKEN — the current Firebase ID token so the iframe can
-    //                    confirm the user is already signed in before its own
-    //                    onAuthStateChanged fires (eliminates auth-gate flash).
+    // ── Auth + config bridge to the cloud-stream iframe ─────────────────────
+    //
+    // The iframe has an isolated window so it cannot access window.LU_CONFIG
+    // or the parent's Firebase Auth instance.  We bridge both via postMessage.
+    //
+    // Problem this solves:
+    //   Firebase browserLocalPersistence writes auth state to localStorage.
+    //   The iframe shares the same localStorage (same origin) so it WILL
+    //   resolve auth automatically — but it is async.  On slow/cold loads
+    //   the iframe's onAuthStateChanged fires null first, and a naive timeout
+    //   shows the auth gate before persistence hydration finishes.
+    //
+    //   The previous code used loading="lazy" which means the iframe only
+    //   starts loading when it enters the viewport.  The parent sent the
+    //   postMessage on the iframe's load event, but with lazy loading the
+    //   load event fires late — sometimes after the 6s gate timer already
+    //   expired inside the iframe.  The messages arrived too late and were
+    //   effectively missed.
+    //
+    // Solution:
+    //   1. Remove loading="lazy" — iframe loads immediately so the load
+    //      event fires promptly and messages arrive before the gate timer.
+    //   2. Send both AVN_CONFIG and AVN_AUTH_TOKEN on the iframe's load event.
+    //   3. Retry sending AVN_AUTH_TOKEN every 500 ms for up to 8 s so that
+    //      token refresh races are covered and the iframe always gets the
+    //      message even if it initialises slowly.
+    //   4. Stop retrying once the iframe acknowledges (AVN_AUTH_ACK).
+    //
     const frame = document.getElementById('csr-frame');
     if (frame) {
-      const sendConfig = () => {
+      let _retryTimer = null;
+      let _ackReceived = false;
+
+      // Listen for acknowledgement from the iframe so we can stop retrying.
+      const _ackHandler = (evt) => {
+        if (evt.data && evt.data.type === 'AVN_AUTH_ACK') {
+          _ackReceived = true;
+          if (_retryTimer) { clearInterval(_retryTimer); _retryTimer = null; }
+          window.removeEventListener('message', _ackHandler);
+        }
+      };
+      window.addEventListener('message', _ackHandler);
+
+      const _sendBoth = async () => {
         try {
-          if (frame.contentWindow && window.LU_CONFIG) {
+          if (!frame.contentWindow) return;
+          // 1. Runtime config
+          if (window.LU_CONFIG) {
             frame.contentWindow.postMessage(
               { type: 'AVN_CONFIG', apiUrl: window.LU_CONFIG.apiUrl || '', socketUrl: window.LU_CONFIG.socketUrl || '' },
               '*'
             );
           }
-        } catch (_) {}
-      };
-
-      const sendToken = async () => {
-        try {
+          // 2. Auth token
           if (window.AvenoraFirebase && window.AvenoraFirebase.Auth) {
             const token = await window.AvenoraFirebase.Auth.getIdToken();
             const user  = window.AvenoraFirebase.Auth.getUser();
-            if (token && user && frame.contentWindow) {
+            if (token && user) {
               frame.contentWindow.postMessage(
                 { type: 'AVN_AUTH_TOKEN', idToken: token, uid: user.uid || user.id },
                 '*'
@@ -86,8 +117,18 @@ registerPage('cloudstream', {
       };
 
       frame.addEventListener('load', () => {
-        sendConfig();
-        sendToken();
+        _sendBoth();
+        // Retry every 500 ms for up to 8 s in case the iframe SDK is slow to init.
+        let _retryCount = 0;
+        _retryTimer = setInterval(() => {
+          if (_ackReceived || _retryCount >= 16) {
+            clearInterval(_retryTimer);
+            _retryTimer = null;
+            return;
+          }
+          _retryCount++;
+          _sendBoth();
+        }, 500);
       });
     }
 

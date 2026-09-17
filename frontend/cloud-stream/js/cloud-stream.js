@@ -168,6 +168,10 @@ let _confirmCallback = null;
 // postMessage auth path doesn't double-initialise.
 let _appInitialised = false;
 
+// Set to true when the parent SPA sends AVN_AUTH_TOKEN, meaning the user IS
+// signed in — we must never show the auth gate while this is true.
+let _parentConfirmedAuth = false;
+
 async function _startApp(user) {
   if (_appInitialised) return;
   _appInitialised = true;
@@ -208,26 +212,54 @@ onAuthStateChanged(_auth, async user => {
   } else if (!_appInitialised) {
     // Firebase persistence is async — the first `null` callback can mean
     // "still checking localStorage" rather than "definitely logged out".
-    // Wait 6 s for the parent SPA's postMessage token to arrive, or for a
-    // subsequent onAuthStateChanged(user) to fire, before showing the auth gate.
+    //
+    // Wait before showing the auth gate:
+    //   • If the parent SPA confirmed auth via AVN_AUTH_TOKEN (_parentConfirmedAuth),
+    //     wait indefinitely — onAuthStateChanged WILL fire with the user once
+    //     Firebase finishes hydrating from localStorage.
+    //   • Otherwise wait 10 s (covers slow network / cold Firebase SDK load).
+    //
+    const gateDelay = _parentConfirmedAuth ? 30000 : 10000;
     _authGateTimer = setTimeout(() => {
       _authGateTimer = null;
-      if (!_appInitialised) {
+      // Only show the gate if auth STILL hasn't resolved AND the parent has
+      // not confirmed that the user is signed in.
+      if (!_appInitialised && !_parentConfirmedAuth) {
         _show('csrLoading', false);
         _show('csrAuthGate', true);
         _show('csrApp', false);
         _setAuthBadge('Sign In');
       }
-    }, 6000);
+      // If _parentConfirmedAuth but onAuthStateChanged still hasn't fired,
+      // keep the loading spinner — the SDK is still hydrating.
+    }, gateDelay);
   }
 });
 
-// If this page is embedded as an iframe inside the AVENORA SPA, the parent
-// sends two messages immediately after the iframe loads:
-//   1. { type: 'AVN_CONFIG', apiUrl, socketUrl } — runtime backend URL that
-//      this iframe cannot access from window.LU_CONFIG (isolated iframe window).
-//   2. { type: 'AVN_AUTH_TOKEN', idToken, uid } — Firebase ID token so the
-//      iframe can skip the auth-gate if Firebase SDK hasn't resolved yet.
+// ─────────────────────────────────────────────────────────────────────────────
+// Parent SPA → iframe postMessage bridge
+//
+// The parent SPA sends two messages immediately after the iframe loads:
+//   1. { type: 'AVN_CONFIG', apiUrl, socketUrl }
+//      Runtime backend URL.  The iframe's window is isolated so it cannot
+//      read window.LU_CONFIG from the parent frame.
+//   2. { type: 'AVN_AUTH_TOKEN', idToken, uid }
+//      The Firebase ID token of the currently signed-in user.  This is the
+//      auth bridge: it tells the iframe the user IS signed in, preventing a
+//      false auth-gate flash while Firebase hydrates from localStorage.
+//
+// The iframe sends back { type: 'AVN_AUTH_ACK' } so the parent stops retrying.
+//
+// Why this works:
+//   - Both pages are on the same origin and share the same localStorage.
+//   - Firebase SDK stores auth state in localStorage under a deterministic key.
+//   - The iframe's onAuthStateChanged WILL fire with the user once hydration
+//     completes (typically < 2 s).
+//   - AVN_AUTH_TOKEN is a signal to keep showing the loading state instead of
+//     the gate during that hydration window.
+//   - We do NOT attempt signInWithCustomToken here — the existing Firebase
+//     session already exists in localStorage; we just need to wait for it.
+// ─────────────────────────────────────────────────────────────────────────────
 window.addEventListener('message', async (event) => {
   try {
     if (!event.data) return;
@@ -239,19 +271,35 @@ window.addEventListener('message', async (event) => {
         // Strip trailing /api if present, then re-add — normalise the base URL.
         _API_BASE = apiUrl.replace(/\/api\/?$/, '') + '/api';
       }
+      // No ACK needed for config — only auth triggers the retry loop.
       return;
     }
 
     // ── Auth token confirmation ───────────────────────────────────
     if (event.data.type !== 'AVN_AUTH_TOKEN') return;
-    // Parent confirmed the user is signed in.
-    // Cancel the gate timer — onAuthStateChanged will fire with the user shortly.
+
+    // Acknowledge immediately so the parent stops retrying.
+    if (event.source) {
+      try { event.source.postMessage({ type: 'AVN_AUTH_ACK' }, '*'); } catch(_) {}
+    }
+
+    // Mark that the parent has confirmed the user is signed in.
+    _parentConfirmedAuth = true;
+
+    // Cancel any pending gate timer — we must not show the gate.
     if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
-    // If auth still hasn't resolved but we trust the parent's token,
-    // extend the loading window rather than showing the auth gate.
+
+    // Keep showing the loading state while Firebase hydrates.
     if (!_appInitialised) {
       _show('csrLoading', true);
       _show('csrAuthGate', false);
+
+      // If Firebase Auth has already resolved (auth.currentUser is available
+      // synchronously after hydration) start the app now without waiting for
+      // another onAuthStateChanged callback.
+      if (_auth.currentUser && !_appInitialised) {
+        await _startApp(_auth.currentUser);
+      }
     }
   } catch (_) {}
 });

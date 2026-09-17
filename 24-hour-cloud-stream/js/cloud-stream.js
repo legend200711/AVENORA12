@@ -99,6 +99,11 @@ let _artworkDataUrl = null; // base64 cover artwork
 // auto-advance queue writer knows the server engine is managing the queue.
 let _engineRunning = false;
 
+// Set to true when the parent SPA sends AVN_AUTH_TOKEN confirming sign-in.
+let _parentConfirmedAuth = false;
+// Set to true once we have called _startApp (prevents double-init).
+let _appInitialised = false;
+
 /* Listener player state */
 let _player = {
   audio:       null,      // HTMLAudioElement
@@ -132,33 +137,13 @@ let _confirmCallback = null;
 /* ═══════════════════════════════════════════════════════
    BOOT
 ═══════════════════════════════════════════════════════ */
-// Listen for postMessage from the parent SPA:
-//   AVN_CONFIG — runtime API URL (iframes can't access parent window.LU_CONFIG)
-//   AVN_AUTH_TOKEN — Firebase ID token (avoids auth gate flash when in iframe)
-window.addEventListener('message', async (event) => {
-  try {
-    if (!event.data) return;
-    if (event.data.type === 'AVN_CONFIG') {
-      const apiUrl = event.data.apiUrl || '';
-      if (apiUrl && !_API_BASE) {
-        _API_BASE = apiUrl.replace(/\/api\/?$/, '') + '/api';
-      }
-      return;
-    }
-    // AVN_AUTH_TOKEN is informational here (standalone page uses onAuthStateChanged directly)
-  } catch (_) {}
-});
 
-onAuthStateChanged(_auth, async user => {
+async function _startApp(user) {
+  if (_appInitialised) return;
+  _appInitialised = true;
+
   _show('csrLoading', false);
-
-  if (!user) {
-    _show('csrAuthGate', true);
-    _show('csrApp', false);
-    _setAuthBadge('Sign In');
-    return;
-  }
-
+  _show('csrAuthGate', false);
   _user = user;
   try {
     const snap = await getDoc(doc(_db, 'users', user.uid));
@@ -167,19 +152,69 @@ onAuthStateChanged(_auth, async user => {
 
   _setAuthBadge(_userData ? (_userData.displayName || _userData.username || 'You') : 'You');
 
-  // Check URL params — are we in listener mode?
   const params = new URLSearchParams(window.location.search);
   const watchId = params.get('id') || params.get('watch') || params.get('stream');
 
   if (watchId) {
-    // Listener mode: open a specific broadcast
     _show('csrApp', true);
     _show('csrListenerPanel', true);
     await _initListenerMode(watchId);
   } else {
-    // Creator mode: check for own active stream
     _show('csrApp', true);
     await _initCreatorMode();
+  }
+}
+
+let _authGateTimer = null;
+
+// Parent SPA → iframe postMessage bridge (same as frontend/cloud-stream version).
+// Also handles standalone open (no parent frame) where AVN_AUTH_TOKEN never arrives.
+window.addEventListener('message', async (event) => {
+  try {
+    if (!event.data) return;
+
+    if (event.data.type === 'AVN_CONFIG') {
+      const apiUrl = event.data.apiUrl || '';
+      if (apiUrl && !_API_BASE) {
+        _API_BASE = apiUrl.replace(/\/api\/?$/, '') + '/api';
+      }
+      return;
+    }
+
+    if (event.data.type === 'AVN_AUTH_TOKEN') {
+      // Acknowledge so the parent stops retrying.
+      if (event.source) {
+        try { event.source.postMessage({ type: 'AVN_AUTH_ACK' }, '*'); } catch(_) {}
+      }
+      _parentConfirmedAuth = true;
+      if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
+      if (!_appInitialised) {
+        _show('csrLoading', true);
+        _show('csrAuthGate', false);
+        if (_auth.currentUser) await _startApp(_auth.currentUser);
+      }
+    }
+  } catch (_) {}
+});
+
+onAuthStateChanged(_auth, async user => {
+  if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
+
+  if (user) {
+    await _startApp(user);
+  } else if (!_appInitialised) {
+    // Standalone page: show loading, then gate after delay.
+    // When embedded in the SPA, _parentConfirmedAuth prevents the gate.
+    const gateDelay = _parentConfirmedAuth ? 30000 : 10000;
+    _authGateTimer = setTimeout(() => {
+      _authGateTimer = null;
+      if (!_appInitialised && !_parentConfirmedAuth) {
+        _show('csrLoading', false);
+        _show('csrAuthGate', true);
+        _show('csrApp', false);
+        _setAuthBadge('Sign In');
+      }
+    }, gateDelay);
   }
 });
 
