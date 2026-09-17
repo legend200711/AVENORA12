@@ -35,6 +35,8 @@
   <link rel="stylesheet" href="src/styles/hub.css">
   <link rel="stylesheet" href="src/styles/chat-extended.css">
   <link rel="stylesheet" href="src/styles/companion.css">
+  <!-- Creator Studio — mobile-first layout fix -->
+  <link rel="stylesheet" href="src/styles/cloudstudio.css">
   <!-- Responsive overrides — must load last to win specificity -->
   <link rel="stylesheet" href="src/styles/responsive.css">
   <link rel="stylesheet" href="src/styles/customize.css">
@@ -282,6 +284,8 @@
   <!-- Firebase must load before api.js so the auth shim is available -->
   <script src="src/services/firebase.js"></script>
   <script src="src/services/api.js"></script>
+  <!-- Supabase Storage client — must load after firebase.js/api.js so auth state is available -->
+  <script src="src/services/supabase.js"></script>
   <!-- Founder theme token service — applies published theme CSS vars on every page load -->
   <script src="src/services/themeService.js"></script>
   <script src="src/services/musicService.js"></script>
@@ -294,6 +298,7 @@
   <script src="src/pages/video.js"></script>
   <script src="src/pages/live.js"></script>
   <script src="src/pages/cloudstream.js"></script>
+  <script src="src/pages/cloudstudio.js"></script>
   <script src="src/pages/dj.js"></script>
   <script src="src/pages/music.js"></script>
   <script src="src/pages/arcade.js"></script>

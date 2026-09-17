@@ -731,27 +731,25 @@
     },
   };
 
-  // ─── Upload API — delegates to Supabase Storage via AvenoraStorage ───────────
+  // ─── Upload API — delegates directly to Supabase Storage via AvenoraStorage ─
+  // No silent fallback to backend routes. If AvenoraStorage is missing the script
+  // did not load — show the real error so the user can refresh/report it.
   const UploadAPI = {
     async image(file, onProgress) {
-      if (window.AvenoraStorage) return window.AvenoraStorage.uploadImage(file, onProgress);
-      const fd = new FormData(); fd.append('file', file);
-      return upload('/upload/image', fd);
+      if (!window.AvenoraStorage) throw new Error('Storage service not loaded. Refresh the page and try again.');
+      return window.AvenoraStorage.uploadImage(file, onProgress);
     },
     async avatar(file, onProgress) {
-      if (window.AvenoraStorage) return window.AvenoraStorage.uploadAvatar(file, onProgress);
-      const fd = new FormData(); fd.append('file', file);
-      return upload('/upload/avatar', fd);
+      if (!window.AvenoraStorage) throw new Error('Storage service not loaded. Refresh the page and try again.');
+      return window.AvenoraStorage.uploadAvatar(file, onProgress);
     },
     async audio(file, onProgress) {
-      if (window.AvenoraStorage) return window.AvenoraStorage.uploadAudio(file, onProgress);
-      const fd = new FormData(); fd.append('file', file);
-      return upload('/upload/audio', fd);
+      if (!window.AvenoraStorage) throw new Error('Storage service not loaded. Refresh the page and try again.');
+      return window.AvenoraStorage.uploadAudio(file, onProgress);
     },
     async video(file, onProgress) {
-      if (window.AvenoraStorage) return window.AvenoraStorage.uploadVideo(file, onProgress);
-      const fd = new FormData(); fd.append('file', file);
-      return upload('/upload/video', fd);
+      if (!window.AvenoraStorage) throw new Error('Storage service not loaded. Refresh the page and try again.');
+      return window.AvenoraStorage.uploadVideo(file, onProgress);
     },
   };
 
@@ -825,30 +823,23 @@
       return get(`/gallery?${q}`);
     },
     async upload(formData) {
-      // Primary path: upload via the backend multipart API which routes through
-      // Supabase Storage server-side with the service-role key.
-      // AvenoraStorage direct upload is the fallback when the backend is unreachable.
-      try {
-        return await upload('/gallery/upload', formData);
-      } catch (backendErr) {
-        // Backend unreachable — fall back to direct Supabase upload + Firestore metadata
-        console.warn('[AVN] Gallery backend upload failed, trying direct upload:', backendErr.message);
-        if (window.AvenoraStorage) {
-          const file     = formData.get('file');
-          const category = formData.get('category') || 'artwork';
-          const title    = formData.get('title') || '';
-          if (!file) throw backendErr;
-          const result = await window.AvenoraStorage.uploadImage(file);
-          try {
-            if (window.AvenoraFirebase?.Firestore?.addGalleryItem) {
-              await window.AvenoraFirebase.Firestore.addGalleryItem(result.url, category, title);
-            }
-          } catch (_) {}
-          return { images: [{ _id: Date.now().toString(), url: result.url, title, category,
-            uploader: { username: LegendAPI?.auth?.getUser()?.username }, createdAt: new Date().toISOString() }] };
-        }
-        throw backendErr;
+      // Upload directly to Supabase Storage via AvenoraStorage.
+      // No silent fallback to an unavailable backend route.
+      if (!window.AvenoraStorage) {
+        throw new Error('Storage service not loaded. Refresh the page and try again.');
       }
+      const file     = formData.get('file');
+      const category = formData.get('category') || 'artwork';
+      const title    = formData.get('title') || '';
+      if (!file) throw new Error('No file selected.');
+      const result = await window.AvenoraStorage.uploadImage(file);
+      try {
+        if (window.AvenoraFirebase?.Firestore?.addGalleryItem) {
+          await window.AvenoraFirebase.Firestore.addGalleryItem(result.url, category, title);
+        }
+      } catch (_) {}
+      return { images: [{ _id: Date.now().toString(), url: result.url, title, category,
+        uploader: { username: LegendAPI?.auth?.getUser()?.username }, createdAt: new Date().toISOString() }] };
     },
     async like(id) {
       if (window.AvenoraFirebase?.Firestore) {
