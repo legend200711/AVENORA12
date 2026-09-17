@@ -50,25 +50,45 @@ registerPage('cloudstream', {
       </div>
     `;
 
-    // After the iframe loads, forward the current Firebase ID token so the
-    // iframe can confirm the user is already signed in even before its own
-    // onAuthStateChanged fires.  This eliminates the brief auth-gate flash
-    // and prevents the "signed out" appearance when navigating to Cloud Stream.
+    // After the iframe loads, forward two things to the cloud-stream iframe:
+    //   1. AVN_CONFIG  — the runtime API URL (window.LU_CONFIG) so the iframe
+    //                    can reach the AVENORA backend (its own window.LU_CONFIG
+    //                    is undefined because iframes have an isolated window).
+    //   2. AVN_AUTH_TOKEN — the current Firebase ID token so the iframe can
+    //                    confirm the user is already signed in before its own
+    //                    onAuthStateChanged fires (eliminates auth-gate flash).
     const frame = document.getElementById('csr-frame');
-    if (frame && window.AvenoraFirebase && window.AvenoraFirebase.Auth) {
-      const sendToken = async () => {
+    if (frame) {
+      const sendConfig = () => {
         try {
-          const token = await window.AvenoraFirebase.Auth.getIdToken();
-          const user  = window.AvenoraFirebase.Auth.getUser();
-          if (token && user && frame.contentWindow) {
+          if (frame.contentWindow && window.LU_CONFIG) {
             frame.contentWindow.postMessage(
-              { type: 'AVN_AUTH_TOKEN', idToken: token, uid: user.uid || user.id },
-              window.location.origin
+              { type: 'AVN_CONFIG', apiUrl: window.LU_CONFIG.apiUrl || '', socketUrl: window.LU_CONFIG.socketUrl || '' },
+              '*'
             );
           }
         } catch (_) {}
       };
-      frame.addEventListener('load', sendToken);
+
+      const sendToken = async () => {
+        try {
+          if (window.AvenoraFirebase && window.AvenoraFirebase.Auth) {
+            const token = await window.AvenoraFirebase.Auth.getIdToken();
+            const user  = window.AvenoraFirebase.Auth.getUser();
+            if (token && user && frame.contentWindow) {
+              frame.contentWindow.postMessage(
+                { type: 'AVN_AUTH_TOKEN', idToken: token, uid: user.uid || user.id },
+                '*'
+              );
+            }
+          }
+        } catch (_) {}
+      };
+
+      frame.addEventListener('load', () => {
+        sendConfig();
+        sendToken();
+      });
     }
 
     return () => {};

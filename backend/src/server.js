@@ -39,6 +39,7 @@ const companionRoutes = require('./api/routes/companion');
 const preferencesRoutes = require('./api/routes/preferences');
 
 const cloudStreamRoutes = require('./api/routes/cloudStream');
+const cloudRadioRoutes  = require('./api/routes/cloudRadio');
 const liveRoutes = require('./api/routes/live');
 
 // Middleware
@@ -139,6 +140,7 @@ app.use('/api/companion', companionRoutes);
 app.use('/api/preferences', preferencesRoutes);
 
 app.use('/api/admin/cloud-stream', cloudStreamRoutes);
+app.use('/api/cloud-radio', cloudRadioRoutes);
 app.use('/api/live', liveRoutes);
 
 // ─── Public: Published Theme Tokens (no auth required) ───────

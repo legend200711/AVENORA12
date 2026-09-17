@@ -83,16 +83,40 @@ setPersistence(_auth, browserLocalPersistence).catch(() => {});
 })();
 
 /* ── Avenora Backend URL ─────────────────────────────────────────────── */
-// Resolved from runtime config (set by index.html or the page that hosts this).
-// NOTE: The Cloudflare Worker is no longer used. Stream control goes through Firestore
-// directly from the frontend, with the backend handling media and RTMP (if configured).
-const _BACKEND_BASE_URL =
-  (typeof window !== 'undefined' && window.LU_CONFIG && window.LU_CONFIG.apiUrl)
-    ? window.LU_CONFIG.apiUrl.replace(/\/api\/?$/, '')
+// Resolved from runtime config.
+// Priority: window.LU_CONFIG (set by the SPA's index.html) → postMessage AVN_CONFIG
+// from the parent SPA frame → null (degraded / local mode).
+// NOTE: When this page runs inside an <iframe> inside the AVENORA SPA, the
+// parent's window.LU_CONFIG is NOT accessible (iframes have isolated windows).
+// The parent sends it via postMessage { type: 'AVN_CONFIG', apiUrl } on load.
+// We store the resolved value in a mutable variable so the postMessage handler
+// can update it before csrStartBroadcast runs.
+let _API_BASE = (() => {
+  const raw = (typeof window !== 'undefined' && window.LU_CONFIG && window.LU_CONFIG.apiUrl)
+    ? window.LU_CONFIG.apiUrl.replace(/\/api\/?$/, '') + '/api'
     : null;
+  return raw;
+})();
 
-// WORKER_URL kept for backward compat — now points to the Avenora backend, not Cloudflare.
-const WORKER_URL = _BACKEND_BASE_URL;
+/**
+ * Make an authenticated request to the AVENORA backend.
+ * Attaches the Firebase ID token from the current user.
+ * Returns the parsed JSON response, or throws on network/HTTP error.
+ */
+async function _apiRequest(method, path, body) {
+  if (!_API_BASE) throw new Error('Backend URL not configured (window.LU_CONFIG.apiUrl). The cloud radio server cannot be reached.');
+  const token = _user ? await _user.getIdToken().catch(() => null) : null;
+  if (!token) throw new Error('Authentication required — Firebase ID token unavailable');
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+  };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const res = await fetch(_API_BASE + path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+  return data;
+}
 
 /* ═══════════════════════════════════════════════════════
    STATE
@@ -102,6 +126,9 @@ let _userData     = null;
 let _streamId     = null;   // active stream ID (creator's own)
 let _streamData   = null;   // cloudStreams Firestore doc data
 let _artworkDataUrl = null; // base64 cover artwork
+// Set to true after POST /api/cloud-radio/start succeeds so the client-side
+// auto-advance queue writer knows the server engine is managing the queue.
+let _engineRunning = false;
 
 /* Listener player state */
 let _player = {
@@ -196,14 +223,27 @@ onAuthStateChanged(_auth, async user => {
 });
 
 // If this page is embedded as an iframe inside the AVENORA SPA, the parent
-// sends the current Firebase ID token via postMessage immediately after the
-// iframe loads.  Both pages use Firebase SDK 10.12.2 with browserLocalPersistence,
-// so they share the same auth session via localStorage automatically.
-// The postMessage is an additional signal: if Firebase hasn't resolved auth yet
-// we cancel the gate timer early because we know the user IS signed in.
+// sends two messages immediately after the iframe loads:
+//   1. { type: 'AVN_CONFIG', apiUrl, socketUrl } — runtime backend URL that
+//      this iframe cannot access from window.LU_CONFIG (isolated iframe window).
+//   2. { type: 'AVN_AUTH_TOKEN', idToken, uid } — Firebase ID token so the
+//      iframe can skip the auth-gate if Firebase SDK hasn't resolved yet.
 window.addEventListener('message', async (event) => {
   try {
-    if (!event.data || event.data.type !== 'AVN_AUTH_TOKEN') return;
+    if (!event.data) return;
+
+    // ── Runtime config injection ──────────────────────────────────
+    if (event.data.type === 'AVN_CONFIG') {
+      const apiUrl = event.data.apiUrl || '';
+      if (apiUrl && !_API_BASE) {
+        // Strip trailing /api if present, then re-add — normalise the base URL.
+        _API_BASE = apiUrl.replace(/\/api\/?$/, '') + '/api';
+      }
+      return;
+    }
+
+    // ── Auth token confirmation ───────────────────────────────────
+    if (event.data.type !== 'AVN_AUTH_TOKEN') return;
     // Parent confirmed the user is signed in.
     // Cancel the gate timer — onAuthStateChanged will fire with the user shortly.
     if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
@@ -286,7 +326,10 @@ function _renderStatusPanel() {
   _el('csrInfoStarted').textContent  = d.startedAt ? _fmtTime(d.startedAt.toMillis ? d.startedAt.toMillis() : d.startedAt) : '—';
   _el('csrInfoExpires').textContent  = d.expiresAt ? new Date(d.expiresAt).toLocaleString() : '—';
   _el('csrInfoListeners').textContent = d.viewerCount || '0';
-  _el('csrInfoWorker').textContent   = d.workerStatus || 'active';
+  // Worker status is derived from studioCloudStreamMusic, not the broadcast doc.
+  // _checkHealth updates this element via Firestore; seed it as 'starting' on first render.
+  const workerEl = _el('csrInfoWorker');
+  if (workerEl && workerEl.textContent === '—') workerEl.textContent = 'starting';
 }
 
 function _setStatusBadge(status) {
@@ -323,23 +366,54 @@ function _stopHealthMonitor() {
 async function _checkHealth() {
   if (!_streamId) return;
   try {
-    const r    = await fetch(WORKER_URL + '/api/stream/health/' + _streamId);
-    const data = await r.json();
-    if (data.success) {
-      if (_streamData) {
-        _streamData.status     = data.status;
-        _streamData.viewerCount = data.viewerCount || 0;
-      }
-      _setStatusBadge(data.status);
-      _el('csrInfoWorker').textContent = data.workerActive ? 'active' : 'offline';
-      _el('csrInfoListeners').textContent = data.viewerCount || '0';
-      // Sync now playing from health response
-      if (data.currentMusicTitle) {
-        _el('csrNpTitle').textContent  = data.currentMusicTitle;
-        _el('csrNpArtist').textContent = data.currentMusicArtist || '';
-        _el('csrNpNext').textContent   = data.nextMusicTitle ? 'Next: ' + data.nextMusicTitle : '';
+    let backendAnswered = false;
+
+    // Primary: ask the backend engine for real server-side status.
+    if (_API_BASE) {
+      try {
+        const data = await _apiRequest('GET', `/cloud-radio/status/${_streamId}`);
+        backendAnswered = true;
+        if (data.success && data.status) {
+          const s = data.status;
+          // Update running flag so auto-advance stays suppressed
+          if (s.status === 'running') _engineRunning = true;
+          _el('csrInfoWorker').textContent = s.status || 'running';
+          if (s.currentTrack) {
+            _el('csrNpTitle').textContent  = s.currentTrack.title  || '—';
+            _el('csrNpArtist').textContent = s.currentTrack.artist || '';
+            _el('csrNpNext').textContent   = s.nextTrack ? 'Next: ' + s.nextTrack.title : '';
+          }
+        } else if (data.success && !data.running) {
+          // Engine not running on backend — session may have been stopped or server restarted
+          _engineRunning = false;
+          _el('csrInfoWorker').textContent = 'offline';
+        }
+      } catch (_apiErr) {
+        // Backend unreachable — fall through to Firestore
+        backendAnswered = false;
       }
     }
+
+    // Firestore: read cloudStreams for status + listener count.
+    // Always run — gives us status badge and listener count even when backend answers.
+    const cloudSnap = await getDoc(doc(_db, 'cloudStreams', _streamId));
+    if (cloudSnap.exists()) {
+      const cs = cloudSnap.data();
+      if (_streamData) {
+        _streamData.status      = cs.status;
+        _streamData.viewerCount = cs.viewerCount || 0;
+      }
+      _setStatusBadge(cs.status);
+      _el('csrInfoListeners').textContent = cs.viewerCount || '0';
+      // Worker badge: prefer backend answer; fall back to Firestore workerStatus field
+      if (!backendAnswered) {
+        const wStatus = cs.workerStatus || 'pending';
+        _el('csrInfoWorker').textContent = wStatus;
+        // If Firestore says running, reflect that in the engine flag
+        if (wStatus === 'running') _engineRunning = true;
+      }
+    }
+
     // Check expiry
     if (_streamData && _streamData.expiresAt) {
       const remain = _streamData.expiresAt - Date.now();
@@ -348,7 +422,7 @@ async function _checkHealth() {
       }
     }
   } catch(_) {
-    // Worker temporarily unreachable — non-fatal
+    // Temporarily unreachable — non-fatal
   }
 }
 
@@ -565,7 +639,7 @@ window.csrStartBroadcast = async function() {
     _show('csrValidationError', false);
     _renderHandoffStep(0, 'Preparing broadcast…');
 
-    // 6. Create Firestore record
+    // 6. Create Firestore record (status: starting, workerStatus: pending)
     await setDoc(doc(_db, 'cloudStreams', streamId), {
       uid:            _user.uid,
       displayName:    _userData?.displayName || _userData?.username || '',
@@ -586,28 +660,58 @@ window.csrStartBroadcast = async function() {
     });
     _streamData = { uid: _user.uid, streamName: title, status: 'starting', durationMinutes };
     _renderHandoffStep(1, 'Saving broadcast configuration…');
-    await _sleep(400);
+    await _sleep(300);
 
-    // 7. Build music queue — no longer calls Cloudflare Worker
+    // 7. Build music queue
     _renderHandoffStep(2, 'Configuring broadcast…');
     const musicQueue = validTracks.map(t => ({
-      id:       t.id,
-      title:    t.title    || t.name   || 'Untitled',
-      artist:   t.artist   || t.artist_name || '',
-      url:      t.url      || t.downloadURL || t.musicUrl || '',
-      storagePath: t.storagePath || null,
-      duration: t.duration || t.durationSecs || 0
+      id:          t.id,
+      title:       t.title    || t.name   || 'Untitled',
+      artist:      t.artist   || t.artist_name || '',
+      url:         t.url      || t.downloadURL || t.musicUrl || '',
+      storagePath: t.storagePath || '',
+      duration:    t.duration || t.durationSecs || 0
     }));
-    // Stream is managed entirely via Firestore + AVENORA backend (no Cloudflare Worker)
-    _renderHandoffStep(3, 'Broadcast configured…');
-    await _sleep(400);
 
-    // 8. Mark active + publish to liveRooms feed
+    // 8. Start the real server-side cloud radio engine via the AVENORA backend.
+    //    The backend will write Now Playing to studioCloudStreamMusic and update
+    //    workerStatus. The broadcast is not marked LIVE until the backend confirms.
+    let engineStarted = false;
+    let engineError   = null;
+    if (_API_BASE) {
+      try {
+        _renderHandoffStep(2, 'Starting cloud radio engine…');
+        const startResult = await _apiRequest('POST', '/cloud-radio/start', {
+          streamId,
+          uid:             _user.uid,
+          queue:           musicQueue,
+          shuffle,
+          repeat,
+          durationMinutes,
+        });
+        engineStarted = true;
+        _engineRunning = true;
+        _renderHandoffStep(3, 'Engine running…');
+      } catch (apiErr) {
+        engineError = apiErr.message;
+        console.error('[CSR] Backend engine start failed:', apiErr.message);
+        // Do NOT throw — degrade to client-side playback so the user can still broadcast
+        _renderHandoffStep(3, 'Engine offline — using local playback…');
+      }
+    } else {
+      engineError = 'Backend API URL not configured. Set window.LU_CONFIG.apiUrl.';
+      console.warn('[CSR] _API_BASE is null — backend engine cannot be started. ' + engineError);
+      _renderHandoffStep(3, 'No backend configured — using local playback…');
+    }
+
+    // 9. Mark active + publish to liveRooms feed
     const expiresAt = Date.now() + durationMinutes * 60 * 1000;
     await updateDoc(doc(_db, 'cloudStreams', streamId), {
-      status:    'active',
-      startedAt: serverTimestamp(),
-      expiresAt: expiresAt
+      status:       'active',
+      startedAt:    serverTimestamp(),
+      expiresAt:    expiresAt,
+      workerStatus: engineStarted ? 'running' : 'local',
+      engineError:  engineError || null,
     });
 
     // Publish to liveRooms so the discovery feed picks it up
@@ -641,36 +745,47 @@ window.csrStartBroadcast = async function() {
       displayName: _userData?.displayName || ''
     };
 
-    // 9. Write initial Now Playing to Firestore (includes full queue for auto-advance)
-    if (musicQueue.length) {
+    // 10. If the server engine is NOT running, seed the initial Now Playing in Firestore
+    //     so the client-side player has something to show until the backend picks up.
+    //     (When the backend IS running, it writes its own Now Playing via the engine.)
+    if (!engineStarted && musicQueue.length) {
       const first = musicQueue[0];
       await setDoc(doc(_db, 'studioCloudStreamMusic', streamId), {
-        cloudStreamId:  streamId,
-        uid:            _user.uid,
-        playlistId:     _creator.selectedPl.id,
-        // Full queue — required for client-side auto-advance (no Durable Object)
-        queue:          musicQueue,
-        currentTrackId: first.id,
-        currentTitle:   first.title,
-        currentArtist:  first.artist,
+        cloudStreamId:   streamId,
+        uid:             _user.uid,
+        playlistId:      _creator.selectedPl.id,
+        queue:           musicQueue,
+        currentTrackId:  first.id,
+        currentTitle:    first.title,
+        currentArtist:   first.artist,
         currentTrackUrl: first.url,
         currentDuration: first.duration || 0,
-        nextTrackId:    musicQueue[1]?.id    || '',
-        nextTitle:      musicQueue[1]?.title || '',
-        nextArtist:     musicQueue[1]?.artist || '',
-        queueIndex:     0,
-        status:         'playing',
-        updatedAt:      serverTimestamp()
+        trackStartedAt:  Date.now(),
+        currentElapsed:  0,
+        nextTrackId:     musicQueue[1]?.id    || '',
+        nextTitle:       musicQueue[1]?.title || '',
+        nextArtist:      musicQueue[1]?.artist || '',
+        queueIndex:      0,
+        status:          'playing',
+        updatedAt:       serverTimestamp()
       }, { merge: true });
     }
 
-    _renderHandoffStep(4, 'Broadcast is LIVE!');
+    _renderHandoffStep(4, engineStarted ? 'Broadcast is LIVE! Engine running 24/7.' : 'Broadcast is LIVE! (local playback mode)');
     await _sleep(800);
 
     _show('csrStartingProgress', false);
     _show('csrCreatePanel', false);
     _showActiveStream();
-    _toast('&#9925; Cloud Radio is now LIVE! You can close this tab — the broadcast continues.', 'success');
+
+    if (engineStarted) {
+      _toast('&#9925; Cloud Radio is LIVE! The server will keep playing even when you close this tab.', 'success');
+    } else if (engineError) {
+      _toast('&#9888; Cloud Radio started in local mode. Engine error: ' + engineError, 'warn');
+      console.error('[CSR] Engine start error (full):', engineError);
+    } else {
+      _toast('&#9925; Cloud Radio is LIVE!', 'success');
+    }
 
   } catch (e) {
     console.error('[CSR] startBroadcast error:', e);
@@ -725,22 +840,26 @@ async function _stopBroadcast() {
   const btn = _el('csrStopBtn');
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Stopping…'; }
   _stopHealthMonitor();
+  _engineRunning = false;
 
-  try {
-    // Update Firestore directly — no Cloudflare Worker call needed
-    if (_streamId) {
-      await updateDoc(doc(_db, 'cloudStreams', _streamId), {
-        status: 'stopped', stoppedAt: serverTimestamp(), stoppedBy: 'creator'
-      }).catch(() => {});
+  const sid = _streamId; // capture before we clear
+
+  // 1. Stop the server-side engine
+  if (_API_BASE && sid) {
+    try {
+      await _apiRequest('POST', '/cloud-radio/stop', { streamId: sid });
+    } catch (_) {
+      // Engine may already be stopped or backend unreachable — continue regardless
     }
-  } catch(_) {}
+  }
 
+  // 2. Update Firestore records
   try {
-    if (_streamId) {
-      await updateDoc(doc(_db, 'cloudStreams', _streamId), {
-        status: 'stopped', stoppedAt: serverTimestamp()
-      });
-      await updateDoc(doc(_db, 'studioCloudStreamMusic', _streamId), {
+    if (sid) {
+      await updateDoc(doc(_db, 'cloudStreams', sid), {
+        status: 'stopped', stoppedAt: serverTimestamp(), stoppedBy: 'creator', workerStatus: 'stopped'
+      }).catch(() => {});
+      await updateDoc(doc(_db, 'studioCloudStreamMusic', sid), {
         status: 'stopped', stoppedAt: serverTimestamp()
       }).catch(() => {});
     }
@@ -767,7 +886,13 @@ async function _stopBroadcast() {
 window.csrSkipTrack = async function() {
   if (!_streamId || !_user) return;
   try {
-    // Advance queueIndex in Firestore — listeners pick it up via onSnapshot
+    // First try the server-side engine — it updates Firestore authoritatively
+    if (_API_BASE) {
+      const data = await _apiRequest('POST', '/cloud-radio/skip', { streamId: _streamId });
+      _toast('Skipping to next track…', 'info');
+      return;
+    }
+    // Fallback (no backend): advance Firestore directly for client-side playback
     const musicSnap = await getDoc(doc(_db, 'studioCloudStreamMusic', _streamId));
     if (!musicSnap.exists()) { _toast('No active music state found.', 'error'); return; }
     const ms = musicSnap.data();
@@ -782,6 +907,8 @@ window.csrSkipTrack = async function() {
       currentArtist:   nextTrack.artist    || '',
       currentTrackUrl: nextTrack.url       || '',
       currentDuration: nextTrack.duration  || 0,
+      trackStartedAt:  Date.now(),
+      currentElapsed:  0,
       nextTitle:       (queue[(nextIndex + 1) % queue.length] || {}).title || '',
       nextArtist:      (queue[(nextIndex + 1) % queue.length] || {}).artist || '',
       status:          'playing',
@@ -924,10 +1051,18 @@ function _syncListenerToNowPlaying(d) {
 
   // If the track changed, load the new audio
   if (url && url !== _player.trackUrl) {
-    _player.trackUrl     = url;
-    _player.trackId      = d.currentTrackId || '';
-    _player.trackDur     = dur;
-    _player.trackStartedAt = d.updatedAt?.toMillis ? d.updatedAt.toMillis() : Date.now();
+    _player.trackUrl  = url;
+    _player.trackId   = d.currentTrackId || '';
+    _player.trackDur  = dur;
+
+    // Use engine's trackStartedAt (epoch ms) for accurate clock-sync.
+    // The engine publishes this on every track start; fall back to updatedAt
+    // then to serverTime (Firestore write time), then to local clock.
+    _player.trackStartedAt =
+      (typeof d.trackStartedAt === 'number' && d.trackStartedAt > 0)
+        ? d.trackStartedAt
+        : (d.updatedAt?.toMillis ? d.updatedAt.toMillis() : Date.now());
+
     _loadAndPlayTrack(url, dur);
   }
 }
@@ -940,6 +1075,9 @@ function _loadAndPlayTrack(url, dur) {
   audio.preload     = 'auto';
   _player.audio     = audio;
   _player.trackDur  = dur;
+  // Mark as playing so the play button and auto-advance work correctly.
+  // The browser may block autoplay — we handle that below and show the play button.
+  _player.playing   = true;
 
   // Seek to synchronized position based on server-side clock
   // The worker sets updatedAt when the track starts; we skip ahead to match
@@ -956,18 +1094,20 @@ function _loadAndPlayTrack(url, dur) {
 
   audio.addEventListener('timeupdate', _updatePlayerProgress);
   audio.addEventListener('ended', _onTrackEnded);
-  audio.addEventListener('error', () => {
-    console.warn('[CSR] audio error for track:', url);
-    // Don't show error — the worker will advance and we'll get a new track
+  audio.addEventListener('error', (e) => {
+    console.warn('[CSR] audio error for track:', url, e.target?.error?.message || '');
+    // Auto-advance to next track after a brief delay so listeners aren't stuck on a broken file
+    setTimeout(() => { if (_player.audio === audio) _autoAdvanceQueue(); }, 2000);
   });
 
-  if (_player.playing) {
-    audio.play().catch(() => {
-      // Autoplay blocked — show play button
-      _setPlayBtn(false);
-    });
-  }
-  _setPlayBtn(_player.playing);
+  // Always attempt autoplay — if blocked, show the play button so the user can start manually
+  audio.play().then(() => {
+    _setPlayBtn(true);
+  }).catch(() => {
+    // Autoplay blocked by browser policy — show play button so user can tap to start
+    _player.playing = false;
+    _setPlayBtn(false);
+  });
   _startProgressRaf();
   _show('csrPlayerOffline', false);
 }
@@ -984,12 +1124,17 @@ function _onTrackEnded() {
 
 /**
  * Advance the Now Playing queue by one track.
- * Only the creator's client writes to studioCloudStreamMusic.
- * If this is a listener-only session (_streamId is null / different user), this
- * is a no-op — the creator's client (or backend) will update the doc.
+ * Only the creator's client writes to studioCloudStreamMusic — and only when
+ * the server engine is NOT running (local/fallback mode).
+ * When _engineRunning is true the server engine handles all track advancement
+ * via its own setTimeout scheduler and Firestore writes; the client must not
+ * interfere or the two will race and cause double-skips.
  */
 async function _autoAdvanceQueue() {
   if (!_streamId || !_user) return;
+
+  // If the server engine is running it manages the queue — do not write from client.
+  if (_engineRunning) return;
 
   // Only the stream owner auto-advances.
   if (_streamData && _streamData.uid && _streamData.uid !== _user.uid) return;

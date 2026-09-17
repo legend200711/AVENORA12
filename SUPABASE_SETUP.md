@@ -306,18 +306,68 @@ field: file (audio/video)
 
 ---
 
-## 8. 24-Hour Cloud Stream
+## 8. 24-Hour Cloud Radio (Real Server-Side Playback)
 
-The Cloudflare Worker, KV, and Durable Objects have been **removed**.
+The cloud radio is now powered by the **AVENORA backend** running a real Node.js
+playback engine. The broadcast continues on the server even when your phone is
+off and the browser is closed.
 
-Stream control now works through:
-- **Firestore** (`cloudStreams/{streamId}`) — stream state
-- **Firestore** (`studioCloudStreamMusic/{streamId}`) — now-playing state
-- **Supabase Storage** (`stream-media` bucket) — media files
-- **AVENORA backend** (`/api/admin/cloud-stream/*`) — RTMP push, queue management
+### How it works
+
+| Component | Role |
+|---|---|
+| **CloudRadioEngine** (`backend/src/services/stream/cloudRadioEngine.js`) | Server-side scheduler — advances tracks, writes Now Playing to Firestore every 10 s |
+| **Firestore `studioCloudStreamMusic/{streamId}`** | Live Now Playing state — browser clients subscribe and play the audio URL |
+| **Supabase Storage (`music` bucket)** | Public audio URLs — browser clients fetch and play directly |
+| **`/api/cloud-radio/*`** | Authenticated REST API — start, stop, skip, status |
+
+### Requirements to run 24/7
+
+The backend server must stay running. Options:
+
+| Hosting | Command |
+|---|---|
+| **Railway / Render / Fly.io** | Deploy `backend/` — it stays up automatically |
+| **VPS (Ubuntu)** | `pm2 start src/server.js --name avenora-api` |
+| **Local development** | `cd backend && npm run dev` (stops when you close terminal) |
+
+> ⚠️ If the backend is running locally and you close your laptop, the broadcast stops.
+> Deploy the backend to a cloud host for true 24/7 operation.
+
+### Firestore authentication for the engine
+
+The engine writes to Firestore using the REST API. It tries two auth strategies:
+
+1. **Google Application Default Credentials** — works automatically on GCP, Cloud Run, Railway, Render, and Fly.io.
+2. **Firebase anonymous sign-in** — works anywhere using `FIREBASE_WEB_API_KEY`.
+
+If neither works the engine still runs but does not update Firestore (local status only). Verify by checking the `Worker` field on the dashboard.
+
+### Cloud Radio API
+
+```
+POST   /api/cloud-radio/start          Start a session (any authenticated user)
+POST   /api/cloud-radio/stop           Stop a session (owner or admin)
+POST   /api/cloud-radio/skip           Skip current track (owner or admin)
+GET    /api/cloud-radio/status/:id     Get live status (any authenticated user)
+GET    /api/cloud-radio/sessions       List all sessions (founder/admin only)
+```
+
+### How listeners hear the music
+
+There is **no media server or audio relay** — listeners play the audio file URLs
+from Supabase Storage directly in their browser. The engine publishes the current
+track URL + how many seconds have elapsed, and the browser seeks to that position.
+This means:
+- Any audio format the browser supports (MP3, AAC, OGG, FLAC, WAV) works.
+- No latency from relay servers.
+- Playback is synchronized within ~1 second across all listeners.
 
 ### Upload media for the stream
-Use the admin dashboard or:
+Use the Creator Studio (24-Hour Studio page) to upload music. Files go to the
+`music` bucket in Supabase Storage and are saved to Firestore `cloudStreamTracks`.
+
+Or use the admin endpoint (founder only):
 ```
 POST /api/admin/cloud-stream/media/upload
 ```
