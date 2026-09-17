@@ -16,10 +16,9 @@ const dailyTaskSchema = new mongoose.Schema({
 
 const companionSchema = new mongoose.Schema({
   userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    type: String,             // Firebase UID
     required: true,
-    unique: true, // one companion per user
+    unique: true,             // one companion per user
     index: true,
   },
 

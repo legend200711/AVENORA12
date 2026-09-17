@@ -868,9 +868,10 @@ async function openVideoDetail(videoId) {
     const data = await LegendAPI.videos.get(videoId);
     video = data.video || data;
 
-    // For private-bucket videos (storagePath present and URL is not a public URL),
-    // refresh the signed URL immediately so the player never starts with an expired link.
-    if (video && video.storagePath && !video.videoUrl?.includes('/object/public/')) {
+    // Ensure we have a playback URL. If videoUrl/hlsUrl/originalFileUrl is missing
+    // (can happen if the video was uploaded before the public-URL fix), fetch it.
+    const hasUrl = video?.videoUrl || video?.hlsUrl || video?.originalFileUrl;
+    if (video && video.storagePath && !hasUrl) {
       try {
         const urlData = await LegendAPI.request('GET', `/videos/${videoId}/url`).catch(() => null);
         if (urlData?.url) {

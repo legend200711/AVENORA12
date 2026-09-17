@@ -15,13 +15,12 @@ router.get('/', authenticate, async (req, res, next) => {
     const limit = Math.min(50, parseInt(req.query.limit) || 20);
     const skip = (page - 1) * limit;
 
+    // sender is a Firebase UID string — no populate available
     const [notifications, unreadCount] = await Promise.all([
       Notification.find({ recipient: req.user.id })
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('sender', 'username profile.displayName profile.avatarUrl')
-        .populate('post', 'content')
         .lean(),
       Notification.countDocuments({ recipient: req.user.id, isRead: false }),
     ]);

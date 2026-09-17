@@ -28,8 +28,6 @@ router.get('/', optionalAuth, async (req, res, next) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('author', 'username profile.displayName profile.avatarUrl role')
-      .populate('originalPost')
       .lean();
 
     // Attach likedByMe flag if user is authenticated
@@ -73,14 +71,15 @@ router.post('/',
         tags: (tags || []).slice(0, 20),
       });
 
-      // Update post count
-      await User.findByIdAndUpdate(req.user.id, { $inc: { 'stats.postsCount': 1 } });
+      // Update post count (non-critical for Firebase-only users)
+      try {
+        const mongoose = require('mongoose');
+        if (mongoose.Types.ObjectId.isValid(req.user.id)) {
+          await User.findByIdAndUpdate(req.user.id, { $inc: { 'stats.postsCount': 1 } });
+        }
+      } catch (_) { /* non-critical */ }
 
-      const populated = await Post.findById(post._id)
-        .populate('author', 'username profile.displayName profile.avatarUrl role')
-        .lean();
-
-      res.status(201).json({ success: true, post: populated });
+      res.status(201).json({ success: true, post: post.toObject() });
     } catch (err) {
       next(err);
     }
@@ -147,11 +146,7 @@ router.put('/:id', authenticate, async (req, res, next) => {
     post.editedAt = new Date();
     await post.save();
 
-    const populated = await Post.findById(post._id)
-      .populate('author', 'username profile.displayName profile.avatarUrl role')
-      .lean();
-
-    res.json({ success: true, post: populated });
+    res.json({ success: true, post: post.toObject() });
   } catch (err) {
     next(err);
   }
@@ -171,9 +166,14 @@ router.delete('/:id', authenticate, async (req, res, next) => {
     post.deletedAt = new Date();
     await post.save();
 
-    // Decrement user's post count
+    // Decrement user's post count (non-critical for Firebase-only users)
     if (isOwner) {
-      await User.findByIdAndUpdate(req.user.id, { $inc: { 'stats.postsCount': -1 } });
+      try {
+        const mongoose = require('mongoose');
+        if (mongoose.Types.ObjectId.isValid(req.user.id)) {
+          await User.findByIdAndUpdate(req.user.id, { $inc: { 'stats.postsCount': -1 } });
+        }
+      } catch (_) { /* non-critical */ }
     }
 
     res.json({ success: true, message: 'Post deleted' });
@@ -280,12 +280,10 @@ router.delete('/:id/comment/:commentId', authenticate, async (req, res, next) =>
   }
 });
 
-// GET /api/posts/:id/comments - Get comments for a post (populated)
+// GET /api/posts/:id/comments - Get comments for a post
 router.get('/:id/comments', optionalAuth, async (req, res, next) => {
   try {
-    const post = await Post.findOne({ _id: req.params.id, isDeleted: false })
-      .populate('comments.author', 'username profile.displayName profile.avatarUrl role')
-      .lean();
+    const post = await Post.findOne({ _id: req.params.id, isDeleted: false }).lean();
 
     if (!post) return next(new NotFoundError('Post'));
 

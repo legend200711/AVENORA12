@@ -68,6 +68,25 @@ router.get('/users', async (req, res, next) => {
   }
 });
 
+// Helper: find a MongoDB User record regardless of whether `id` is a MongoDB ObjectId
+// or a Firebase UID (non-ObjectId string).
+async function _findMongoUser(id) {
+  const mongoose = require('mongoose');
+  if (mongoose.Types.ObjectId.isValid(id) && id.length === 24) {
+    return User.findById(id);
+  }
+  // Firebase UID: match by firebaseUid field if it exists, otherwise no record
+  return User.findOne({ firebaseUid: id });
+}
+
+async function _updateMongoUser(id, update, opts) {
+  const mongoose = require('mongoose');
+  if (mongoose.Types.ObjectId.isValid(id) && id.length === 24) {
+    return User.findByIdAndUpdate(id, update, opts);
+  }
+  return User.findOneAndUpdate({ firebaseUid: id }, update, opts);
+}
+
 // PUT /api/admin/users/:id/role
 router.put('/users/:id/role', async (req, res, next) => {
   try {
@@ -94,7 +113,7 @@ router.put('/users/:id/role', async (req, res, next) => {
       }
     }
 
-    const user = await User.findByIdAndUpdate(req.params.id, { role }, { new: true });
+    const user = await _updateMongoUser(req.params.id, { role }, { new: true });
     if (!user) return res.status(404).json({ error: true, message: 'User not found' });
     logger.info(`Admin ${req.user.username} changed user ${user.username} role to ${role}`);
     res.json({ success: true, user: user.toPublicProfile() });
@@ -107,7 +126,7 @@ router.put('/users/:id/role', async (req, res, next) => {
 router.put('/users/:id/suspend', async (req, res, next) => {
   try {
     const { reason, until } = req.body;
-    const user = await User.findByIdAndUpdate(req.params.id, {
+    const user = await _updateMongoUser(req.params.id, {
       'status.isSuspended': true,
       'status.suspendedReason': reason || 'Policy violation',
       'status.suspendedUntil': until ? new Date(until) : null,
@@ -123,7 +142,7 @@ router.put('/users/:id/suspend', async (req, res, next) => {
 // PUT /api/admin/users/:id/unsuspend
 router.put('/users/:id/unsuspend', async (req, res, next) => {
   try {
-    const user = await User.findByIdAndUpdate(req.params.id, {
+    const user = await _updateMongoUser(req.params.id, {
       'status.isSuspended': false,
       'status.suspendedReason': null,
       'status.suspendedUntil': null,
@@ -139,7 +158,6 @@ router.put('/users/:id/unsuspend', async (req, res, next) => {
 router.get('/posts/flagged', async (req, res, next) => {
   try {
     const posts = await Post.find({ isFlagged: true, isDeleted: false })
-      .populate('author', 'username')
       .sort({ createdAt: -1 })
       .limit(100)
       .lean();
@@ -162,8 +180,6 @@ router.get('/reports', async (req, res, next) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('reporter', 'username')
-        .populate('reviewedBy', 'username')
         .lean(),
       Report.countDocuments({ status }),
     ]);

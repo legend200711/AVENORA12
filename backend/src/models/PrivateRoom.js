@@ -11,21 +11,21 @@
 const mongoose = require('mongoose');
 
 const memberSchema = new mongoose.Schema({
-  userId:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  userId:    { type: String, required: true },   // Firebase UID
   role:      { type: String, enum: ['owner', 'moderator', 'member'], default: 'member' },
   joinedAt:  { type: Date, default: Date.now },
   mutedUntil:{ type: Date },   // null = not muted
 }, { _id: false });
 
 const banSchema = new mongoose.Schema({
-  userId:   { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  userId:   { type: String, required: true },    // Firebase UID
   reason:   { type: String, maxlength: 300 },
   bannedAt: { type: Date, default: Date.now },
-  bannedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  bannedBy: { type: String },                    // Firebase UID
 }, { _id: false });
 
 const joinRequestSchema = new mongoose.Schema({
-  userId:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  userId:      { type: String, required: true }, // Firebase UID
   requestedAt: { type: Date, default: Date.now },
   status:      { type: String, enum: ['pending', 'approved', 'rejected'], default: 'pending' },
 }, { _id: false });
@@ -41,7 +41,7 @@ const privateRoomSchema = new mongoose.Schema({
     default: 'private',
   },
 
-  owner:       { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  owner:       { type: String, required: true }, // Firebase UID
   members:     [memberSchema],
   bans:        [banSchema],
   joinRequests:[joinRequestSchema],

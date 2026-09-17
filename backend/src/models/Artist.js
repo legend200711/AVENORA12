@@ -11,7 +11,7 @@ const artistSchema = new mongoose.Schema({
   avatarUrl:  { type: String },
   bannerUrl:  { type: String },
   genres:     [{ type: String, maxlength: 80 }],
-  createdBy:  { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  createdBy:  { type: String },   // Firebase UID
   isVerified: { type: Boolean, default: false },
   isDeleted:  { type: Boolean, default: false },
 

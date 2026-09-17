@@ -44,8 +44,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v9';
-const CACHE_NAME  = 'avenora-cache-v9';
+const SW_VERSION  = 'v10';
+const CACHE_NAME  = 'avenora-cache-v10';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -60,6 +60,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v6', // v6 — evict: CSS diag removed, video upload fixed
   'avenora-cache-v7', // v7 — evict: supabase.js was missing from cache list
   'avenora-cache-v8', // v8 — evict: music queue, video URL, Firebase role fixes
+  'avenora-cache-v9', // v9 — evict: UID/model fixes, cloud stream skip fix
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
@@ -82,6 +83,7 @@ const STATIC_ASSETS = [
   `${BASE}/src/styles/hub.css`,
   `${BASE}/src/styles/chat-extended.css`,
   `${BASE}/src/styles/companion.css`,
+  `${BASE}/src/styles/cloudstudio.css`,
   `${BASE}/src/styles/responsive.css`,
   `${BASE}/src/styles/customize.css`,
   `${BASE}/src/styles/theme-control.css`,

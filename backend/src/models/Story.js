@@ -6,7 +6,7 @@
 const mongoose = require('mongoose');
 
 const storySchema = new mongoose.Schema({
-  author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  author: { type: String, required: true },      // Firebase UID
   mediaUrl: { type: String, required: true },
   mediaType: {
     type: String,
@@ -14,7 +14,7 @@ const storySchema = new mongoose.Schema({
     required: true,
   },
   caption: { type: String, maxlength: 500 },
-  viewers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  viewers: [{ type: String }],                   // Firebase UIDs
   // expiresAt is set at creation to createdAt + 24h
   expiresAt: {
     type: Date,

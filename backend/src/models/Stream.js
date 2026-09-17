@@ -10,7 +10,7 @@
 const mongoose = require('mongoose');
 
 const streamSchema = new mongoose.Schema({
-  streamer: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  streamer: { type: String, required: true },   // Firebase UID
   title: { type: String, required: true, maxlength: 200 },
   description: { type: String, maxlength: 2000 },
   category: { type: String, maxlength: 100 },

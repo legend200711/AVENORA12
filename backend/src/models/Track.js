@@ -13,7 +13,7 @@ const trackSchema = new mongoose.Schema({
   artistName:  { type: String, maxlength: 200, trim: true },   // denormalized for fast queries
   album:       { type: mongoose.Schema.Types.ObjectId, ref: 'Album' },
   albumTitle:  { type: String, maxlength: 300, trim: true },
-  uploader:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  uploader:    { type: String, required: true },   // Firebase UID
 
   // Audio file
   fileUrl:       { type: String },   // Signed URL — refresh via GET /api/music/tracks/:id/url
@@ -48,7 +48,7 @@ const trackSchema = new mongoose.Schema({
 
   // Engagement
   plays:     { type: Number, default: 0 },
-  likedBy:   [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  likedBy:   [{ type: String }],                  // Firebase UIDs
   isFlagged: { type: Boolean, default: false },
 }, {
   timestamps: true,

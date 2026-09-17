@@ -8,7 +8,7 @@ const mongoose = require('mongoose');
 const playlistSchema = new mongoose.Schema({
   name:        { type: String, required: true, maxlength: 200, trim: true },
   description: { type: String, maxlength: 1000, trim: true },
-  owner:       { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  owner:       { type: String, required: true },   // Firebase UID
   coverUrl:    { type: String },
   tracks:      [{ type: mongoose.Schema.Types.ObjectId, ref: 'Track' }],
   visibility:  {

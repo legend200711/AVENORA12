@@ -22,7 +22,7 @@ try {
   GalleryImage = mongoose.model('GalleryImage');
 } catch {
   const schema = new mongoose.Schema({
-    uploader:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    uploader:    { type: String, required: true },  // Firebase UID
     url:         { type: String, required: true },
     storagePath: { type: String },   // Supabase Storage path (gallery bucket)
     title:       { type: String, maxlength: 200, default: 'Untitled' },
@@ -33,7 +33,7 @@ try {
       default: 'artwork',
     },
     tags:      [{ type: String, maxlength: 50 }],
-    likes:     [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    likes:     [{ type: String }],                  // Firebase UIDs
     isDeleted: { type: Boolean, default: false },
   }, { timestamps: true });
 
@@ -89,7 +89,6 @@ router.get('/', optionalAuth, async (req, res, next) => {
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limit)
-        .populate('uploader', 'username profile.displayName profile.avatarUrl')
         .lean(),
       GalleryImage.countDocuments(filter),
     ]);
@@ -144,11 +143,9 @@ router.post(
         })
       );
 
-      const populated = await GalleryImage.find({ _id: { $in: docs.map(d => d._id) } })
-        .populate('uploader', 'username profile.displayName profile.avatarUrl')
-        .lean();
+      const images = await GalleryImage.find({ _id: { $in: docs.map(d => d._id) } }).lean();
 
-      res.status(201).json({ success: true, images: populated });
+      res.status(201).json({ success: true, images });
     } catch (err) {
       next(err);
     }

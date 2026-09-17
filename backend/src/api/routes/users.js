@@ -73,11 +73,13 @@ router.get('/:username/posts', optionalAuth, async (req, res, next) => {
     const limit = Math.min(50, parseInt(req.query.limit) || 20);
     const skip = (page - 1) * limit;
 
-    const posts = await Post.find({ author: user._id, isDeleted: false, visibility: 'public' })
+    // author is stored as a Firebase UID string; match by username-looked-up user._id (MongoDB _id)
+    // but since author field is now a String (Firebase UID), we need to query by username's uid
+    // Firebase UID is not stored in MongoDB User — match by MongoDB _id string representation
+    const posts = await Post.find({ author: user._id.toString(), isDeleted: false, visibility: 'public' })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('author', 'username profile.displayName profile.avatarUrl role')
       .lean();
 
     const currentUserId = req.user?.id;
@@ -129,12 +131,12 @@ router.delete('/me/account', authenticate, async (req, res, next) => {
 router.post('/:id/follow', authenticate, async (req, res, next) => {
   try {
     const targetId = req.params.id;
+    if (!targetId || typeof targetId !== 'string' || targetId.length < 5) {
+      return next(new AppError('Invalid user ID', 422, 'INVALID_ID'));
+    }
     if (targetId === req.user.id) {
       return next(new AppError('You cannot follow yourself', 422, 'SELF_FOLLOW'));
     }
-
-    const targetUser = await User.findById(targetId);
-    if (!targetUser) return next(new NotFoundError('User'));
 
     const existing = await Follow.findOne({ follower: req.user.id, following: targetId });
     if (existing) {
@@ -142,10 +144,20 @@ router.post('/:id/follow', authenticate, async (req, res, next) => {
     }
 
     await Follow.create({ follower: req.user.id, following: targetId });
-    await Promise.all([
-      User.findByIdAndUpdate(req.user.id, { $inc: { 'stats.followingCount': 1 } }),
-      User.findByIdAndUpdate(targetId, { $inc: { 'stats.followersCount': 1 } }),
-    ]);
+
+    // Update stats for MongoDB-backed users only (non-critical)
+    try {
+      const mongoose = require('mongoose');
+      const isMongoId = (id) => mongoose.Types.ObjectId.isValid(id) && id.length === 24;
+      await Promise.all([
+        isMongoId(req.user.id)
+          ? User.findByIdAndUpdate(req.user.id, { $inc: { 'stats.followingCount': 1 } })
+          : User.findOneAndUpdate({ email: req.user.email }, { $inc: { 'stats.followingCount': 1 } }),
+        isMongoId(targetId)
+          ? User.findByIdAndUpdate(targetId, { $inc: { 'stats.followersCount': 1 } })
+          : Promise.resolve(),
+      ]);
+    } catch (_) { /* non-critical */ }
 
     res.status(201).json({ success: true, following: true, followingId: targetId });
   } catch (err) {

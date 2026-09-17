@@ -227,6 +227,26 @@ function _checkSupabaseConfig() {
 }
 _checkSupabaseConfig();
 
+// ─── Required env-var check ───────────────────────────────────
+// Warn clearly on startup so operators see what is missing.
+(function _checkRequiredEnv() {
+  const warn = (name, hint) =>
+    logger.warn(`⚠️  ${name} is not set. ${hint}`);
+
+  if (!process.env.FIREBASE_PROJECT_ID) warn('FIREBASE_PROJECT_ID', 'Firebase ID token verification will fail.');
+  if (!process.env.FIREBASE_WEB_API_KEY) warn('FIREBASE_WEB_API_KEY', 'Firebase ID token verification will fail.');
+  if (!process.env.JWT_SECRET || process.env.JWT_SECRET.startsWith('REPLACE_')) {
+    logger.warn('⚠️  JWT_SECRET is not set to a real value. Legacy JWT auth will be insecure.');
+  }
+  if (!process.env.FOUNDER_EMAIL) warn('FOUNDER_EMAIL', 'Founder/admin access will not work.');
+  if (process.env.NODE_ENV === 'production' && (!process.env.MONGODB_URI || process.env.MONGODB_URI.includes('localhost'))) {
+    logger.error('❌ MONGODB_URI is pointing to localhost in production mode. The server will exit.');
+  }
+  if (process.env.NODE_ENV === 'production' && (!process.env.FRONTEND_URL || process.env.FRONTEND_URL.includes('your-'))) {
+    logger.warn('⚠️  FRONTEND_URL is not set for production. CORS may block the frontend.');
+  }
+})();
+
 async function start() {
   try {
     await connectDatabase();

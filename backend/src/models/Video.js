@@ -7,7 +7,11 @@ const mongoose = require('mongoose');
 const videoSchema = new mongoose.Schema({
   title: { type: String, required: true, maxlength: 200 },
   description: { type: String, maxlength: 5000 },
-  uploader: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  // uploader stores a Firebase UID (string) — NOT a MongoDB ObjectId.
+  // Firebase-authenticated users do not have a MongoDB User document,
+  // so we cannot use a ref/populate here. Store as a plain string and
+  // embed display-name/avatar at write time (see /save-meta route).
+  uploader: { type: String, required: true },
   channelId: { type: mongoose.Schema.Types.ObjectId, ref: 'Channel' },
 
   // File references
@@ -42,11 +46,11 @@ const videoSchema = new mongoose.Schema({
   tags: [{ type: String, maxlength: 50 }],
   genre: { type: String, maxlength: 100 },
 
-  // Engagement
+  // Engagement — UID arrays stored as strings (Firebase UIDs)
   views: { type: Number, default: 0 },
-  likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  dislikes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  watchLaterBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  likes: [{ type: String }],
+  dislikes: [{ type: String }],
+  watchLaterBy: [{ type: String }],
 
   // Status
   isPublished: { type: Boolean, default: false },
@@ -56,6 +60,15 @@ const videoSchema = new mongoose.Schema({
   isFlagged: { type: Boolean, default: false },
   isFeatured: { type: Boolean, default: false },
 
+  // Embedded uploader snapshot — populated at write time from req.user
+  // so the video list can display name/avatar without a separate join.
+  uploaderInfo: {
+    uid:         { type: String },
+    username:    { type: String },
+    displayName: { type: String },
+    avatarUrl:   { type: String },
+  },
+
   // External integrations (legacy — kept for schema compatibility)
   muxAssetId: { type: String },
   muxPlaybackId: { type: String },
@@ -63,7 +76,7 @@ const videoSchema = new mongoose.Schema({
   timestamps: true,
 });
 
-videoSchema.index({ uploader: 1, createdAt: -1 });
+videoSchema.index({ uploader: 1, createdAt: -1 }); // uploader is now a string (Firebase UID)
 videoSchema.index({ category: 1, createdAt: -1 });
 videoSchema.index({ views: -1 });
 videoSchema.index({ processingStatus: 1 });

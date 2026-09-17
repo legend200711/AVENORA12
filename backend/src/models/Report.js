@@ -6,13 +6,15 @@
 const mongoose = require('mongoose');
 
 const reportSchema = new mongoose.Schema({
-  reporter: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  // reporter stores a Firebase UID (string) — not a MongoDB ObjectId
+  reporter: { type: String, required: true },
   targetType: {
     type: String,
-    enum: ['post', 'comment', 'user', 'message', 'dm_message'],
+    enum: ['post', 'comment', 'user', 'message', 'dm_message', 'video'],
     required: true,
   },
-  targetId: { type: mongoose.Schema.Types.ObjectId, required: true },
+  // targetId can be a MongoDB ObjectId or a string (Firebase UID for user reports)
+  targetId: { type: String, required: true },
   reason: {
     type: String,
     enum: ['spam', 'harassment', 'hate_speech', 'misinformation', 'nsfw', 'violence', 'other'],
@@ -24,7 +26,7 @@ const reportSchema = new mongoose.Schema({
     enum: ['pending', 'reviewed', 'actioned', 'dismissed'],
     default: 'pending',
   },
-  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  reviewedBy: { type: String }, // Firebase UID of the reviewer
   reviewNote: { type: String, maxlength: 500 },
   reviewedAt: { type: Date },
 }, {

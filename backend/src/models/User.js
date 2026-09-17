@@ -102,8 +102,8 @@ const userSchema = new mongoose.Schema({
   },
   refreshTokens: [{ type: String, select: false }], // Hashed refresh tokens
   chat: {
-    blockedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-    mutedUsers:   [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+    blockedUsers: [{ type: String }],   // Firebase UIDs
+    mutedUsers:   [{ type: String }],   // Firebase UIDs
   },
 }, {
   timestamps: true,

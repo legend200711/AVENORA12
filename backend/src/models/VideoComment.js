@@ -4,8 +4,9 @@
 const mongoose = require('mongoose');
 
 const videoCommentSchema = new mongoose.Schema({
-  video:   { type: mongoose.Schema.Types.ObjectId, ref: 'Video',  required: true },
-  author:  { type: mongoose.Schema.Types.ObjectId, ref: 'User',   required: true },
+  video:   { type: mongoose.Schema.Types.ObjectId, ref: 'Video', required: true },
+  // author stores a Firebase UID (string) — not a MongoDB ObjectId
+  author:  { type: String, required: true },
   content: { type: String, required: true, maxlength: 2000 },
   isDeleted:   { type: Boolean, default: false },
   reportCount: { type: Number,  default: 0 },

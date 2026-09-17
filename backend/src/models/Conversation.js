@@ -10,7 +10,7 @@
 const mongoose = require('mongoose');
 
 const participantSchema = new mongoose.Schema({
-  userId:      { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  userId:      { type: String, required: true },   // Firebase UID
   mutedUntil:  { type: Date },          // null = not muted
   isBlocked:   { type: Boolean, default: false },
   lastReadAt:  { type: Date },          // last time this participant read the thread
@@ -29,14 +29,14 @@ const conversationSchema = new mongoose.Schema({
   // Denormalized "last message" preview for inbox rendering
   lastMessage: {
     content:   { type: String },
-    senderId:  { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    senderId:  { type: String },               // Firebase UID
     sentAt:    { type: Date },
   },
 
   // Group DM extras (unused for type === 'dm')
   groupName:   { type: String, maxlength: 80 },
   groupIconUrl:{ type: String },
-  groupOwner:  { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  groupOwner:  { type: String },               // Firebase UID
 
   isDeleted:   { type: Boolean, default: false },
 }, { timestamps: true });

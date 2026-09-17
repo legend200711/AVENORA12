@@ -6,7 +6,7 @@
 const mongoose = require('mongoose');
 
 const musicFavoriteSchema = new mongoose.Schema({
-  user:  { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  user:  { type: String, required: true },   // Firebase UID
   track: { type: mongoose.Schema.Types.ObjectId, ref: 'Track', required: true },
 }, {
   timestamps: true,

@@ -9,13 +9,13 @@ const chatMessageSchema = new mongoose.Schema({
   roomId: { type: String, required: true, index: true },
   // 'public' = public room; 'private' = PrivateRoom (roomId is PrivateRoom ObjectId string)
   roomType: { type: String, enum: ['public', 'private'], default: 'public' },
-  author: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  author: { type: String },                       // Firebase UID (denormalized below)
   authorUsername: { type: String }, // Denormalized for quick display
   authorAvatarUrl: { type: String }, // Denormalized for quick display
   content: { type: String, required: true, maxlength: 4000 },
   replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'ChatMessage' },
   replyPreview: { type: String, maxlength: 100 }, // Snippet of quoted message
-  reportedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  reportedBy: [{ type: String }],                 // Firebase UIDs
   isDeleted: { type: Boolean, default: false },
   isSystem: { type: Boolean, default: false }, // System/bot messages
 }, { timestamps: true });

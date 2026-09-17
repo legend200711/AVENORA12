@@ -5,12 +5,14 @@
 const mongoose = require('mongoose');
 
 const channelSchema = new mongoose.Schema({
-  owner:       { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+  // owner stores a Firebase UID (string). Not an ObjectId — Firebase users
+  // do not have MongoDB User documents.
+  owner:       { type: String, required: true, unique: true },
   name:        { type: String, required: true, maxlength: 100 },
   description: { type: String, maxlength: 2000 },
   avatarUrl:   { type: String },
   bannerUrl:   { type: String },
-  subscribers: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  subscribers: [{ type: String }], // Firebase UID strings
   isSuspended: { type: Boolean, default: false },
   suspendReason: { type: String },
 }, { timestamps: true });

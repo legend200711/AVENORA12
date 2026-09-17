@@ -24,8 +24,11 @@ router.post('/follow/:userId', authenticate, async (req, res, next) => {
       return next(new AppError('You cannot follow yourself', 422, 'SELF_FOLLOW'));
     }
 
-    const targetUser = await User.findById(targetId);
-    if (!targetUser) return next(new NotFoundError('User'));
+    // Note: Firebase users may not have a MongoDB User record.
+    // We accept any valid Firebase UID as a target; the Follow record is the source of truth.
+    if (!targetId || typeof targetId !== 'string' || targetId.length < 5) {
+      return next(new AppError('Invalid user ID', 422, 'INVALID_ID'));
+    }
 
     // Upsert — idempotent
     const existing = await Follow.findOne({ follower: req.user.id, following: targetId });
@@ -35,19 +38,29 @@ router.post('/follow/:userId', authenticate, async (req, res, next) => {
 
     await Follow.create({ follower: req.user.id, following: targetId });
 
-    // Update denormalized counters
-    await Promise.all([
-      User.findByIdAndUpdate(req.user.id, { $inc: { 'stats.followingCount': 1 } }),
-      User.findByIdAndUpdate(targetId, { $inc: { 'stats.followersCount': 1 } }),
-    ]);
+    // Update denormalized counters for MongoDB User records (non-critical — Firebase users may not have one)
+    try {
+      const mongoose = require('mongoose');
+      const isMongoId = (id) => mongoose.Types.ObjectId.isValid(id) && id.length === 24;
+      await Promise.all([
+        isMongoId(req.user.id)
+          ? User.findByIdAndUpdate(req.user.id, { $inc: { 'stats.followingCount': 1 } })
+          : User.findOneAndUpdate({ email: req.user.email }, { $inc: { 'stats.followingCount': 1 } }),
+        isMongoId(targetId)
+          ? User.findByIdAndUpdate(targetId, { $inc: { 'stats.followersCount': 1 } })
+          : Promise.resolve(),
+      ]);
+    } catch (_) { /* non-critical */ }
 
-    // Notify the followed user
-    await createNotification({
-      recipient: targetId,
-      sender: req.user.id,
-      type: 'follow',
-      message: `${req.user.username} started following you`,
-    });
+    // Notify the followed user (non-critical)
+    try {
+      await createNotification({
+        recipient: targetId,
+        sender: req.user.id,
+        type: 'follow',
+        message: `${req.user.username} started following you`,
+      });
+    } catch (_) { /* non-critical */ }
 
     res.status(201).json({ success: true, following: true });
   } catch (err) {
@@ -67,10 +80,19 @@ router.delete('/follow/:userId', authenticate, async (req, res, next) => {
     const result = await Follow.findOneAndDelete({ follower: req.user.id, following: targetId });
 
     if (result) {
-      await Promise.all([
-        User.findByIdAndUpdate(req.user.id, { $inc: { 'stats.followingCount': -1 } }),
-        User.findByIdAndUpdate(targetId, { $inc: { 'stats.followersCount': -1 } }),
-      ]);
+      // Update counters for MongoDB User records (non-critical)
+      try {
+        const mongoose = require('mongoose');
+        const isMongoId = (id) => mongoose.Types.ObjectId.isValid(id) && id.length === 24;
+        await Promise.all([
+          isMongoId(req.user.id)
+            ? User.findByIdAndUpdate(req.user.id, { $inc: { 'stats.followingCount': -1 } })
+            : User.findOneAndUpdate({ email: req.user.email }, { $inc: { 'stats.followingCount': -1 } }),
+          isMongoId(targetId)
+            ? User.findByIdAndUpdate(targetId, { $inc: { 'stats.followersCount': -1 } })
+            : Promise.resolve(),
+        ]);
+      } catch (_) { /* non-critical */ }
     }
 
     res.json({ success: true, following: false });
@@ -86,14 +108,14 @@ router.get('/followers/:userId', optionalAuth, async (req, res, next) => {
     const limit = Math.min(100, parseInt(req.query.limit) || 30);
     const skip = (page - 1) * limit;
 
+    // follower/following are Firebase UIDs (strings) — no populate available
     const follows = await Follow.find({ following: req.params.userId })
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('follower', 'username profile.displayName profile.avatarUrl role')
       .lean();
 
-    const users = follows.map(f => f.follower);
+    const users = follows.map(f => ({ id: f.follower, uid: f.follower }));
     res.json({ success: true, users, page, limit });
   } catch (err) {
     next(err);
@@ -111,10 +133,9 @@ router.get('/following/:userId', optionalAuth, async (req, res, next) => {
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate('following', 'username profile.displayName profile.avatarUrl role')
       .lean();
 
-    const users = follows.map(f => f.following);
+    const users = follows.map(f => ({ id: f.following, uid: f.following }));
     res.json({ success: true, users, page, limit });
   } catch (err) {
     next(err);

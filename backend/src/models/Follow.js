@@ -6,8 +6,9 @@
 const mongoose = require('mongoose');
 
 const followSchema = new mongoose.Schema({
-  follower: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-  following: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  // Firebase UIDs stored as strings — not MongoDB ObjectIds
+  follower:  { type: String, required: true },
+  following: { type: String, required: true },
 }, {
   timestamps: true,
 });

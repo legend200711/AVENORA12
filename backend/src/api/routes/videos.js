@@ -87,12 +87,19 @@ router.get('/', optionalAuth, async (req, res, next) => {
         .sort(sortBy)
         .skip(skip)
         .limit(limitN)
-        .populate('uploader', 'username profile.displayName profile.avatarUrl'),
+        .lean(),
       Video.countDocuments(query),
     ]);
 
-    // Serialize with virtuals so videoUrl is included for frontend compatibility
-    const serialized = videos.map(v => v.toObject({ virtuals: true }));
+    // Normalize uploader field for frontend compatibility.
+    // uploader is stored as a Firebase UID string with display info in uploaderInfo.
+    const serialized = videos.map(v => ({
+      ...v,
+      videoUrl: v.hlsUrl || v.originalFileUrl || null,
+      uploader: v.uploaderInfo
+        ? { _id: v.uploader, username: v.uploaderInfo.username, profile: { displayName: v.uploaderInfo.displayName, avatarUrl: v.uploaderInfo.avatarUrl } }
+        : { _id: v.uploader, username: v.uploader },
+    }));
 
     res.json({ success: true, videos: serialized, total, page: parseInt(page), limit: limitN });
   } catch (err) { next(err); }
@@ -153,6 +160,12 @@ router.post('/upload', authenticate, (req, res, next) => {
         title:           title.trim().slice(0, 200),
         description:     (description || '').trim().slice(0, 5000),
         uploader:        req.user.id,
+        uploaderInfo: {
+          uid:         req.user.id,
+          username:    req.user.username || req.user.id,
+          displayName: req.user.username || req.user.id,
+          avatarUrl:   null,
+        },
         channelId:       channel._id,
         originalFileUrl: fileUrl,
         storagePath:     videoPath,
@@ -166,9 +179,10 @@ router.post('/upload', authenticate, (req, res, next) => {
         hlsUrl:          fileUrl,
       });
 
-      await video.populate('uploader', 'username profile.displayName profile.avatarUrl');
+      const videoObj = video.toObject({ virtuals: true });
+      videoObj.uploader = { _id: req.user.id, username: req.user.username || req.user.id, profile: { displayName: req.user.username || req.user.id, avatarUrl: null } };
 
-      res.status(201).json({ success: true, video });
+      res.status(201).json({ success: true, video: videoObj });
     } catch (err) { next(err); }
   });
 });
@@ -206,6 +220,12 @@ router.post('/save-meta', authenticate, async (req, res, next) => {
       title:            title.trim().slice(0, 200),
       description:      (description || '').trim().slice(0, 5000),
       uploader:         uid,
+      uploaderInfo: {
+        uid:         uid,
+        username:    req.user.username || uid,
+        displayName: req.user.username || uid,
+        avatarUrl:   null,
+      },
       channelId:        channel._id,
       originalFileUrl:  videoUrl,
       storagePath,
@@ -219,22 +239,50 @@ router.post('/save-meta', authenticate, async (req, res, next) => {
       hlsUrl:           videoUrl,
     });
 
-    await video.populate('uploader', 'username profile.displayName profile.avatarUrl');
-
+    // Build a consistent uploader object for the response (uploader is a UID string, not a User doc)
     const videoObj = video.toObject({ virtuals: true });
+    videoObj.uploader = {
+      _id:      uid,
+      username: req.user.username || uid,
+      profile:  { displayName: req.user.username || uid, avatarUrl: null },
+    };
     res.status(201).json({ success: true, video: videoObj });
   } catch (err) { next(err); }
 });
 
-// GET /api/videos/:id/url — refresh signed URL for a private video
-router.get('/:id/url', authenticate, async (req, res, next) => {
+// GET /api/videos/:id/url — return the playback URL for a video.
+// For public buckets (videos is public) just return the public URL.
+// Only generates a signed URL when the storagePath is in a private bucket.
+router.get('/:id/url', optionalAuth, async (req, res, next) => {
   try {
     const video = await Video.findById(req.params.id).lean();
     if (!video) return res.status(404).json({ success: false, message: 'Video not found' });
-    if (!video.storagePath) return res.json({ success: true, url: video.originalFileUrl });
 
-    const signedUrl = await storageSvc.getSignedUrl('videos', video.storagePath, 3600);
-    res.json({ success: true, url: signedUrl });
+    // Access control for private videos
+    if (video.visibility === 'private') {
+      if (!req.user || (String(req.user.id) !== String(video.uploader) && !['founder','admin'].includes(req.user?.role))) {
+        return res.status(403).json({ success: false, message: 'This video is private.' });
+      }
+    }
+
+    // Return existing URL if already resolved
+    if (!video.storagePath) {
+      return res.json({ success: true, url: video.originalFileUrl || video.hlsUrl });
+    }
+
+    // Videos bucket is public — return public URL directly (no signed URL needed)
+    try {
+      const publicUrl = storageSvc.getPublicUrl('videos', video.storagePath);
+      if (publicUrl) return res.json({ success: true, url: publicUrl });
+    } catch {}
+
+    // Fallback to signed URL for any private-bucket videos
+    try {
+      const signedUrl = await storageSvc.getSignedUrl('videos', video.storagePath, 3600);
+      res.json({ success: true, url: signedUrl });
+    } catch {
+      res.json({ success: true, url: video.originalFileUrl || video.hlsUrl });
+    }
   } catch (err) { next(err); }
 });
 
@@ -276,15 +324,22 @@ router.get('/channels', optionalAuth, async (req, res, next) => {
 // ─── GET /api/videos/me/watchlater ─── MUST be before /:id ──
 router.get('/me/watchlater', authenticate, async (req, res, next) => {
   try {
-    const videos = await Video.find({
+    const videosRaw = await Video.find({
       watchLaterBy: req.user.id,
       isDeleted: false,
       processingStatus: 'ready',
     })
       .sort({ createdAt: -1 })
       .limit(100)
-      .populate('uploader', 'username profile.displayName profile.avatarUrl')
       .lean();
+
+    const videos = videosRaw.map(v => ({
+      ...v,
+      videoUrl: v.hlsUrl || v.originalFileUrl || null,
+      uploader: v.uploaderInfo
+        ? { _id: v.uploader, username: v.uploaderInfo.username, profile: { displayName: v.uploaderInfo.displayName, avatarUrl: v.uploaderInfo.avatarUrl } }
+        : { _id: v.uploader, username: v.uploader },
+    }));
 
     res.json({ success: true, videos });
   } catch (err) { next(err); }
@@ -324,7 +379,7 @@ router.get('/channel/:id', optionalAuth, async (req, res, next) => {
       .lean();
     if (!channel || channel.isSuspended) return next(new NotFoundError('Channel'));
 
-    const videosDocs = await Video.find({
+    const videosRaw = await Video.find({
       channelId:        channel._id,
       isDeleted:        false,
       isPublished:      true,
@@ -333,9 +388,15 @@ router.get('/channel/:id', optionalAuth, async (req, res, next) => {
     })
       .sort({ createdAt: -1 })
       .limit(48)
-      .populate('uploader', 'username profile.displayName profile.avatarUrl');
+      .lean();
 
-    const videos = videosDocs.map(v => v.toObject({ virtuals: true }));
+    const videos = videosRaw.map(v => ({
+      ...v,
+      videoUrl: v.hlsUrl || v.originalFileUrl || null,
+      uploader: v.uploaderInfo
+        ? { _id: v.uploader, username: v.uploaderInfo.username, profile: { displayName: v.uploaderInfo.displayName, avatarUrl: v.uploaderInfo.avatarUrl } }
+        : { _id: v.uploader, username: v.uploader },
+    }));
 
     res.json({
       success: true,
@@ -353,13 +414,12 @@ router.get('/channel/:id', optionalAuth, async (req, res, next) => {
 // ─── GET /api/videos/:id ─────────────────────────────────────
 router.get('/:id', optionalAuth, async (req, res, next) => {
   try {
-    const video = await Video.findById(req.params.id)
-      .populate('uploader', 'username profile.displayName profile.avatarUrl role');
+    const video = await Video.findById(req.params.id).lean();
     if (!video || video.isDeleted) return next(new NotFoundError('Video'));
 
-    // Access control
+    // Access control (uploader is a Firebase UID string)
     if (video.visibility === 'private') {
-      if (!req.user || (String(req.user.id) !== String(video.uploader._id) && !['founder','admin'].includes(req.user?.role))) {
+      if (!req.user || (String(req.user.id) !== String(video.uploader) && !['founder','admin'].includes(req.user?.role))) {
         return next(new ForbiddenError('This video is private.'));
       }
     }
@@ -374,8 +434,14 @@ router.get('/:id', optionalAuth, async (req, res, next) => {
       if (hist) lastPosition = hist.position;
     }
 
-    // Serialize to plain object and inject videoUrl for frontend compatibility
-    const videoObj = video.toObject({ virtuals: true });
+    // Normalize uploader shape and add videoUrl virtual
+    const videoObj = {
+      ...video,
+      videoUrl: video.hlsUrl || video.originalFileUrl || null,
+      uploader: video.uploaderInfo
+        ? { _id: video.uploader, username: video.uploaderInfo.username, profile: { displayName: video.uploaderInfo.displayName, avatarUrl: video.uploaderInfo.avatarUrl } }
+        : { _id: video.uploader, username: video.uploader },
+    };
 
     res.json({ success: true, video: videoObj, lastPosition });
   } catch (err) { next(err); }
@@ -438,9 +504,9 @@ router.get('/:id/comments', optionalAuth, async (req, res, next) => {
       .sort({ createdAt: -1 })
       .skip((Math.max(1, parseInt(page)) - 1) * Math.min(100, parseInt(limit) || 50))
       .limit(Math.min(100, parseInt(limit) || 50))
-      .populate('author', 'username profile.displayName profile.avatarUrl role')
       .lean();
 
+    // author is a Firebase UID string — no populate available
     res.json({ success: true, comments });
   } catch (err) { next(err); }
 });
@@ -462,8 +528,10 @@ router.post('/:id/comments', authenticate, async (req, res, next) => {
       content: content.trim(),
     });
 
-    await comment.populate('author', 'username profile.displayName profile.avatarUrl role');
-    res.status(201).json({ success: true, comment });
+    // Return comment with author info embedded (author is a UID string)
+    const commentObj = comment.toObject();
+    commentObj.authorInfo = { uid: req.user.id, username: req.user.username || req.user.id };
+    res.status(201).json({ success: true, comment: commentObj });
   } catch (err) { next(err); }
 });
 
@@ -492,11 +560,15 @@ router.post('/:id/report', authenticate, async (req, res, next) => {
     const video = await Video.findById(req.params.id);
     if (!video || video.isDeleted) return next(new NotFoundError('Video'));
 
+    // Map frontend reason values to the enum — 'inappropriate' → 'other' fallback
+    const VALID_REASONS = new Set(['spam','harassment','hate_speech','misinformation','nsfw','violence','other']);
+    const safeReason = VALID_REASONS.has(reason) ? reason : 'other';
+
     await Report.create({
       reporter:   req.user.id,
       targetType: 'video',
-      targetId:   req.params.id,
-      reason,
+      targetId:   String(req.params.id),
+      reason:     safeReason,
       details: details?.slice(0, 500) || '',
     });
 
@@ -553,12 +625,11 @@ router.post('/channel/:id/subscribe', authenticate, async (req, res, next) => {
     const channel = await Channel.findById(req.params.id);
     if (!channel || channel.isSuspended) return next(new NotFoundError('Channel'));
 
-    const uid     = req.user.id;
-    const subList = channel.subscribers.map(String);
-    const already = subList.includes(String(uid));
+    const uid     = String(req.user.id);
+    const already = channel.subscribers.some(s => String(s) === uid);
 
     if (already) {
-      channel.subscribers.pull(uid);
+      channel.subscribers = channel.subscribers.filter(s => String(s) !== uid);
     } else {
       channel.subscribers.push(uid);
     }

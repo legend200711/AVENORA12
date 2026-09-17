@@ -13,8 +13,7 @@ const directMessageSchema = new mongoose.Schema({
     index: true,
   },
   sender: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
+    type: String,         // Firebase UID
     required: true,
   },
   senderUsername: { type: String }, // Denormalized
@@ -25,13 +24,13 @@ const directMessageSchema = new mongoose.Schema({
 
   // Per-recipient delivery/read state
   readBy: [{
-    userId:  { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    userId:  { type: String },   // Firebase UID
     readAt:  { type: Date },
     _id: false,
   }],
 
   isDeleted:   { type: Boolean, default: false },
-  deletedBy:   { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  deletedBy:   { type: String },   // Firebase UID
 }, { timestamps: true });
 
 directMessageSchema.index({ conversationId: 1, createdAt: -1 });

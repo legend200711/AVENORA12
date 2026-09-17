@@ -5,22 +5,22 @@
 const mongoose = require('mongoose');
 
 const commentSchema = new mongoose.Schema({
-  author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  author: { type: String, required: true },   // Firebase UID
   content: { type: String, required: true, maxlength: 2000 },
-  likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  likes: [{ type: String }],                  // Firebase UIDs
   isDeleted: { type: Boolean, default: false },
 }, { timestamps: true });
 
 const postSchema = new mongoose.Schema({
-  author: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  author: { type: String, required: true },   // Firebase UID
   content: { type: String, maxlength: 10000 },
   mediaUrls: [{ type: String }], // Array of image/video URLs
   mediaType: { type: String, enum: ['none', 'image', 'video', 'audio'], default: 'none' },
   type: { type: String, enum: ['post', 'repost', 'reply'], default: 'post' },
   originalPost: { type: mongoose.Schema.Types.ObjectId, ref: 'Post' }, // For reposts
   replyTo: { type: mongoose.Schema.Types.ObjectId, ref: 'Post' }, // For replies
-  likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
-  reposts: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
+  likes: [{ type: String }],                  // Firebase UIDs
+  reposts: [{ type: String }],                // Firebase UIDs
   comments: [commentSchema],
   tags: [{ type: String, maxlength: 50 }],
   isEdited: { type: Boolean, default: false },

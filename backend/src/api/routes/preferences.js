@@ -57,17 +57,34 @@ const ALLOWED_THEMES   = ['dark','darker','amoled'];
 const ALLOWED_NOTIF_LV = ['all','important','none'];
 const ALLOWED_CARDS    = ['cloudstream','live','social','dj','music','gallery','admin'];
 
+// ─── Helper: find MongoDB user by Firebase UID or email ──────
+async function _findMongoUser(req, select) {
+  const mongoose = require('mongoose');
+  const id = req.user.id;
+  if (mongoose.Types.ObjectId.isValid(id) && id.length === 24) {
+    return User.findById(id).select(select).lean ? User.findById(id).select(select).lean() : User.findById(id).select(select);
+  }
+  if (req.user.email) {
+    return User.findOne({ email: req.user.email.toLowerCase() }).select(select);
+  }
+  return null;
+}
+
 // ─── GET /api/preferences ────────────────────────────────────
 router.get('/', authenticate, async (req, res, next) => {
   try {
-    const user = await User.findById(req.user.id).select('preferences role').lean();
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    const user = await _findMongoUser(req, 'preferences role');
+    // Firebase-only users won't have a MongoDB record — return defaults with role from token
+    if (!user) {
+      const prefs = { ...DEFAULT_PREFS, _founderAccess: ['founder','admin'].includes(req.user.role) };
+      return res.json({ success: true, preferences: prefs });
+    }
 
     // Merge stored prefs over defaults so clients always receive a complete object
-    const prefs = deepMerge(DEFAULT_PREFS, user.preferences || {});
+    const prefs = deepMerge(DEFAULT_PREFS, (user.preferences || {}));
 
     // Inject whether this user may see the founder card — resolved server-side
-    prefs._founderAccess = ['founder','admin'].includes(user.role);
+    prefs._founderAccess = ['founder','admin'].includes(user.role || req.user.role);
 
     res.json({ success: true, preferences: prefs });
   } catch (err) {
@@ -78,8 +95,11 @@ router.get('/', authenticate, async (req, res, next) => {
 // ─── PUT /api/preferences ────────────────────────────────────
 router.put('/', authenticate, async (req, res, next) => {
   try {
-    const user = await User.findById(req.user.id).select('preferences role');
-    if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+    const user = await _findMongoUser(req, 'preferences role');
+    if (!user) {
+      // Firebase-only user: no MongoDB record to update — return current defaults
+      return res.json({ success: true, preferences: DEFAULT_PREFS, note: 'Firebase users: preferences are stored in Firestore.' });
+    }
 
     const incoming = req.body || {};
     const current  = user.preferences || {};
@@ -128,11 +148,17 @@ router.put('/', authenticate, async (req, res, next) => {
     if (typeof incoming.savedItems === 'boolean')        update['preferences.savedItems']        = incoming.savedItems;
     if (Array.isArray(incoming.mutedTopics))             update['preferences.mutedTopics']       = incoming.mutedTopics.slice(0, 50).map(t => String(t).slice(0, 64));
 
-    await User.findByIdAndUpdate(req.user.id, { $set: update });
+    const mongoose = require('mongoose');
+    const isMongoId = (id) => mongoose.Types.ObjectId.isValid(id) && id.length === 24;
+    if (isMongoId(req.user.id)) {
+      await User.findByIdAndUpdate(req.user.id, { $set: update });
+    } else if (req.user.email) {
+      await User.findOneAndUpdate({ email: req.user.email.toLowerCase() }, { $set: update });
+    }
 
-    const fresh = await User.findById(req.user.id).select('preferences role').lean();
-    const merged = deepMerge(DEFAULT_PREFS, fresh.preferences || {});
-    merged._founderAccess = ['founder','admin'].includes(fresh.role);
+    const fresh = await _findMongoUser(req, 'preferences role');
+    const merged = deepMerge(DEFAULT_PREFS, fresh?.preferences || {});
+    merged._founderAccess = ['founder','admin'].includes(fresh?.role || req.user.role);
 
     res.json({ success: true, preferences: merged });
   } catch (err) {
@@ -143,8 +169,14 @@ router.put('/', authenticate, async (req, res, next) => {
 // ─── POST /api/preferences/reset ────────────────────────────
 router.post('/reset', authenticate, async (req, res, next) => {
   try {
-    await User.findByIdAndUpdate(req.user.id, { $set: { preferences: DEFAULT_PREFS } });
-    const user = await User.findById(req.user.id).select('role').lean();
+    const mongoose2 = require('mongoose');
+    const isMongoId2 = (id) => mongoose2.Types.ObjectId.isValid(id) && id.length === 24;
+    if (isMongoId2(req.user.id)) {
+      await User.findByIdAndUpdate(req.user.id, { $set: { preferences: DEFAULT_PREFS } });
+    } else if (req.user.email) {
+      await User.findOneAndUpdate({ email: req.user.email.toLowerCase() }, { $set: { preferences: DEFAULT_PREFS } });
+    }
+    const user = await _findMongoUser(req, 'role');
     const prefs = { ...DEFAULT_PREFS, _founderAccess: ['founder','admin'].includes(user?.role) };
     res.json({ success: true, preferences: prefs });
   } catch (err) {

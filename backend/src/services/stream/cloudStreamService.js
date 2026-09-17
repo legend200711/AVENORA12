@@ -37,6 +37,7 @@ let queue = [];             // Admin-managed ordered queue (overrides playlist w
 let currentIndex = 0;       // Index into the active list
 let consecutiveErrors = 0;
 let currentProcess = null;
+let _cancelCurrentTrack = null; // cancel function returned by streamTrack (sim or ffmpeg)
 let isRunning = false;
 let isPaused = false;
 let currentTrack = null;    // name of currently streaming track
@@ -118,11 +119,16 @@ function streamTrack(input, trackName, onComplete, onError) {
   if (!CONFIG.rtmpTargets.length) {
     logger.warn('[CloudStream] No RTMP targets configured (CLOUD_STREAM_RTMP_TARGETS). Simulating playback.');
     const duration = 10000 + Math.random() * 20000; // 10–30s for simulation
+    let _completed = false;
     const timer = setTimeout(() => {
+      if (_completed) return;
+      _completed = true;
       logger.info(`[CloudStream] Simulated track complete: ${trackName}`);
       onComplete();
     }, duration);
-    return () => clearTimeout(timer);
+    const cancel = () => { _completed = true; clearTimeout(timer); };
+    _cancelCurrentTrack = cancel;
+    return cancel;
   }
 
   const rtmpOutput = CONFIG.rtmpTargets[0];
@@ -147,6 +153,7 @@ function streamTrack(input, trackName, onComplete, onError) {
 
   const proc = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'] });
   currentProcess = proc;
+  _cancelCurrentTrack = () => { if (proc && !proc.killed) proc.kill('SIGTERM'); };
 
   proc.stderr.on('data', (data) => {
     const line = data.toString();
@@ -300,6 +307,11 @@ function stop() {
     currentProcess.kill('SIGTERM');
     currentProcess = null;
   }
+  if (_cancelCurrentTrack) {
+    const cancel = _cancelCurrentTrack;
+    _cancelCurrentTrack = null;
+    try { cancel(); } catch {}
+  }
   logger.info('[CloudStream] Stopped');
   return { ok: true };
 }
@@ -329,18 +341,27 @@ function resume() {
 
 function skip() {
   if (!isRunning) return { ok: false, message: 'Stream is not running' };
+  // For ffmpeg processes
   if (currentProcess) {
     currentProcess.kill('SIGTERM');
     currentProcess = null;
   }
-  // playNext() will be called by the close handler (code=null) → onComplete
+  // For simulation-mode timers (no RTMP targets)
+  if (_cancelCurrentTrack) {
+    const cancel = _cancelCurrentTrack;
+    _cancelCurrentTrack = null;
+    cancel();
+    // Advance to next track after a short delay
+    setTimeout(playNext, 100);
+  }
   return { ok: true };
 }
 
 function getStatus() {
   const list = getActiveList();
-  const nextTrack = list.length
-    ? path.basename(list[currentIndex % list.length] || '')
+  const _nextItem = list.length ? list[currentIndex % list.length] : null;
+  const nextTrack = _nextItem
+    ? (_nextItem.name || path.basename(_nextItem.filePath || _nextItem.storagePath || 'unknown'))
     : null;
 
   let state;

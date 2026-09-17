@@ -6,7 +6,8 @@
 const mongoose = require('mongoose');
 
 const watchHistorySchema = new mongoose.Schema({
-  user:     { type: mongoose.Schema.Types.ObjectId, ref: 'User',  required: true },
+  // user stores a Firebase UID (string) — not a MongoDB ObjectId
+  user:     { type: String, required: true },
   video:    { type: mongoose.Schema.Types.ObjectId, ref: 'Video', required: true },
   position: { type: Number, default: 0 },   // seconds
   watchedAt: { type: Date, default: Date.now },

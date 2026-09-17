@@ -8,7 +8,7 @@ const albumSchema = new mongoose.Schema({
   title:       { type: String, required: true, maxlength: 300, trim: true },
   artist:      { type: mongoose.Schema.Types.ObjectId, ref: 'Artist' },
   artistName:  { type: String, maxlength: 200, trim: true },
-  uploader:    { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  uploader:    { type: String, required: true },   // Firebase UID
   coverUrl:    { type: String },
   releaseDate: { type: Date },
   genre:       { type: String, maxlength: 80, trim: true },
