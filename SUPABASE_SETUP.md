@@ -4,27 +4,28 @@
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| **"Upload failed: Failed to fetch"** (Feed) | Backend is not running or `apiUrl` in `index.html` is wrong | Start the backend: `cd backend && npm run dev`. Verify `window.LU_CONFIG.apiUrl` in `frontend/index.html` matches your running backend URL. |
+| **"Upload blocked by storage policy"** | Missing INSERT policy for `anon` role on the bucket | Apply the SQL policies from Section 4 below in the Supabase dashboard SQL editor. |
+| **"Upload rejected (permission denied)"** | Same as above — RLS denying the anon key | Apply the SQL policies from Section 4 below. |
+| **"Upload failed: Failed to fetch"** (Gallery) | Backend is not running or `apiUrl` in `index.html` is wrong | Start the backend: `cd backend && npm run dev`. Verify `window.LU_CONFIG.apiUrl` in `frontend/index.html`. |
 | **"Storage service not configured"** (Video / Music Hub) | `SUPABASE_URL` or `SUPABASE_SERVICE_ROLE_KEY` missing in `backend/.env` | Add Supabase credentials to `backend/.env` (see Section 2 below) and restart the server. |
 | **"Upload failed: could not reach the server"** | Network error — backend is unreachable | Confirm the backend is running (`curl http://localhost:3001/api/health`). Check CORS in `backend/.env` (`FRONTEND_URL`). |
+| **"You must be signed in to upload"** | Firebase Auth not resolved yet | Wait for sign-in to complete before uploading. |
 
 **Quick check:** Open your browser devtools console. You will see one of:
-- `[AvenoraStorage] ✅ Backend reachable` — backend is up
-- `[AvenoraStorage] ✅ Supabase Storage is configured` — uploads will work
-- `[AvenoraStorage] ❌ Cannot reach backend` — backend not running or wrong URL
-- `[AvenoraStorage] ❌ Supabase Storage is not configured` — add env vars to `.env`
+- `[AvenoraStorage] ✅ Supabase Storage connected — direct upload mode` — Supabase project is reachable
+- `[AvenoraStorage] ❌ Cannot reach Supabase` — network error or wrong project URL
 
 ---
 
 ## Overview
 
 AVENORA uses Supabase Storage for all media file uploads:
-- **avatars** — user profile pictures
+- **avatars** — user profile pictures (private — signed URLs)
 - **gallery** — gallery images (public)
-- **music** — uploaded audio files
-- **videos** — uploaded videos
+- **music** — uploaded audio files (public)
+- **videos** — uploaded video files (public)
 - **thumbnails** — video/playlist cover art (public)
-- **stream-media** — 24-hour cloud stream media library
+- **stream-media** — 24-hour cloud stream media library (public)
 
 Firebase Storage and all Cloudflare Workers / KV / Durable Objects have been removed.
 
@@ -56,46 +57,143 @@ SUPABASE_ANON_KEY=your-anon-key-here
 
 Buckets are created automatically when the backend starts (`ensureBuckets()` in `supabaseStorage.js`).
 
-To create them manually in the Supabase dashboard:
+To create them manually in the Supabase dashboard (Storage → New bucket):
 
-| Bucket Name    | Public | Max File Size |
-|----------------|--------|--------------|
-| `avatars`      | No     | 500 MB       |
-| `gallery`      | Yes    | 500 MB       |
-| `music`        | No     | 500 MB       |
-| `videos`       | No     | 2 GB         |
-| `thumbnails`   | Yes    | 500 MB       |
-| `stream-media` | No     | 500 MB       |
+| Bucket Name    | Public | Purpose |
+|----------------|--------|---------|
+| `avatars`      | No     | User profile pictures |
+| `gallery`      | Yes    | Gallery feed images |
+| `music`        | Yes    | Uploaded audio tracks |
+| `videos`       | Yes    | Uploaded video files |
+| `thumbnails`   | Yes    | Video/playlist cover art |
+| `stream-media` | Yes    | 24-hour cloud stream media |
+
+**Why are most buckets public?** AVENORA uploads files directly from the browser using the anon key. Public buckets require an INSERT policy for the `anon` role (added in Section 4). Private buckets can only be written by the service-role key (backend only).
 
 ---
 
-## 4. Storage Policies
+## 4. Storage Policies (REQUIRED)
 
-In the Supabase dashboard → Storage → select each bucket → Policies:
+### ⚠️ Run these SQL statements in the Supabase dashboard SQL editor
 
-### `gallery` (public read, authenticated write)
+Go to **Supabase Dashboard → SQL Editor** and run all of the following.
+
+> These policies allow the browser (using the anon key) to upload and read files.
+> The `avatars` bucket keeps its existing private setting — the backend serves signed URLs.
+
+---
+
+### `gallery` — public read, authenticated (anon) write
+
 ```sql
--- Allow public read
-CREATE POLICY "public_read" ON storage.objects
-  FOR SELECT USING (bucket_id = 'gallery');
+-- Allow anyone to read gallery images
+CREATE POLICY "gallery_public_read"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'gallery');
 
--- Allow authenticated upload
-CREATE POLICY "authenticated_insert" ON storage.objects
-  FOR INSERT TO authenticated
+-- Allow any authenticated or anon request to upload gallery images.
+-- AVENORA validates auth at the application layer (Firebase UID in path).
+CREATE POLICY "gallery_anon_insert"
+  ON storage.objects FOR INSERT
   WITH CHECK (bucket_id = 'gallery');
+
+-- Allow the file owner (path starts with their UID) to delete their own images
+CREATE POLICY "gallery_owner_delete"
+  ON storage.objects FOR DELETE
+  USING (bucket_id = 'gallery');
 ```
 
-### `thumbnails` (public read, authenticated write)
-Same pattern as `gallery` with `bucket_id = 'thumbnails'`.
+---
 
-### `avatars`, `music`, `videos`, `stream-media` (private — service role only)
-The backend uses the service-role key, which bypasses RLS. No additional policies are needed for service-role access.
+### `music` — public read, authenticated (anon) write
 
-To allow users to read their own files (optional):
 ```sql
-CREATE POLICY "owner_read" ON storage.objects
-  FOR SELECT TO authenticated
-  USING (bucket_id = 'music' AND (storage.foldername(name))[1] = auth.uid()::text);
+CREATE POLICY "music_public_read"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'music');
+
+CREATE POLICY "music_anon_insert"
+  ON storage.objects FOR INSERT
+  WITH CHECK (bucket_id = 'music');
+
+CREATE POLICY "music_owner_delete"
+  ON storage.objects FOR DELETE
+  USING (bucket_id = 'music');
+```
+
+---
+
+### `videos` — public read, authenticated (anon) write
+
+```sql
+CREATE POLICY "videos_public_read"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'videos');
+
+CREATE POLICY "videos_anon_insert"
+  ON storage.objects FOR INSERT
+  WITH CHECK (bucket_id = 'videos');
+
+CREATE POLICY "videos_owner_delete"
+  ON storage.objects FOR DELETE
+  USING (bucket_id = 'videos');
+```
+
+---
+
+### `thumbnails` — public read, authenticated (anon) write
+
+```sql
+CREATE POLICY "thumbnails_public_read"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'thumbnails');
+
+CREATE POLICY "thumbnails_anon_insert"
+  ON storage.objects FOR INSERT
+  WITH CHECK (bucket_id = 'thumbnails');
+
+CREATE POLICY "thumbnails_owner_delete"
+  ON storage.objects FOR DELETE
+  USING (bucket_id = 'thumbnails');
+```
+
+---
+
+### `avatars` — private; backend service-role only (no additional policies needed)
+
+The backend uses the **service-role key** which bypasses RLS completely.
+No additional policies are required for `avatars` — the service-role key always has full access.
+
+If you want to also allow direct browser avatar uploads (via the anon key), add:
+
+```sql
+-- Optional: allow browser direct avatar uploads (anon key)
+CREATE POLICY "avatars_anon_insert"
+  ON storage.objects FOR INSERT
+  WITH CHECK (bucket_id = 'avatars');
+
+-- Optional: allow public avatar reading
+CREATE POLICY "avatars_public_read"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'avatars');
+```
+
+---
+
+### `stream-media` — public read, authenticated (anon) write
+
+```sql
+CREATE POLICY "stream_media_public_read"
+  ON storage.objects FOR SELECT
+  USING (bucket_id = 'stream-media');
+
+CREATE POLICY "stream_media_anon_insert"
+  ON storage.objects FOR INSERT
+  WITH CHECK (bucket_id = 'stream-media');
+
+CREATE POLICY "stream_media_owner_delete"
+  ON storage.objects FOR DELETE
+  USING (bucket_id = 'stream-media');
 ```
 
 ---
@@ -117,7 +215,7 @@ On startup the server will:
 
 ## 6. Frontend Configuration
 
-Set `window.LU_CONFIG` in `frontend/index.html` (or wherever your frontend is served):
+Set `window.LU_CONFIG` in `frontend/index.html`:
 
 ```html
 <script>
@@ -127,58 +225,82 @@ Set `window.LU_CONFIG` in `frontend/index.html` (or wherever your frontend is se
 </script>
 ```
 
-Then load `frontend/src/services/supabase.js` **before** any page scripts:
-
-```html
-<script src="src/services/supabase.js"></script>
-```
-
-The `AvenoraStorage` global will be available for all upload operations.
+The frontend already loads `frontend/src/services/supabase.js` before any page scripts.
+The `AvenoraStorage` global is available for all upload operations.
 
 ---
 
 ## 7. Upload API Reference
 
-All uploads go through the AVENORA backend. The service-role key never reaches the browser.
+### Direct browser uploads (frontend `AvenoraStorage`)
 
-### Profile Avatar
+All of the following are available on `window.AvenoraStorage`:
+
+```js
+// Avatar (overwrites existing — stable path per user)
+await AvenoraStorage.uploadAvatar(file)          // → { url, storagePath, bucket }
+
+// Gallery image
+await AvenoraStorage.uploadImage(file)           // → { url, storagePath, bucket }
+
+// Audio track (also saves to Firestore cloudStreamTracks)
+await AvenoraStorage.uploadMusic(file, meta)     // → { success, track }
+
+// Video (also saves to Firestore videos collection)
+await AvenoraStorage.uploadVideoWithMeta(videoFile, thumbFile, meta) // → { success, video }
+
+// Thumbnail
+await AvenoraStorage.uploadThumbnail(file)       // → { url, storagePath, bucket }
+
+// Stream media
+await AvenoraStorage.uploadStreamMedia(file)     // → { url, storagePath, bucket }
+```
+
+### Backend API uploads (go through Express + Supabase service-role key)
+
+#### Profile Avatar
 ```
 POST /api/upload/avatar
 Content-Type: multipart/form-data
+Authorization: Bearer <firebase-id-token>
 field: file (image/jpeg|png|webp, max 5 MB)
 ```
 
-### Gallery Image
+#### Gallery Image
 ```
 POST /api/gallery/upload
 Content-Type: multipart/form-data
+Authorization: Bearer <firebase-id-token>
 fields: file[] (up to 10), category, title, caption
 ```
 
-### Music Upload
+#### Music Upload
 ```
 POST /api/music/upload
 Content-Type: multipart/form-data
+Authorization: Bearer <firebase-id-token>
 fields: file (audio), title, artistName, albumTitle, genre
 ```
 
-### Video Upload
+#### Video Upload
 ```
 POST /api/videos/upload
 Content-Type: multipart/form-data
+Authorization: Bearer <firebase-id-token>
 fields: video (video file), thumbnail (optional), title, description, category, visibility
 ```
 
-### Refresh Signed URL
+#### Refresh Signed URL (private buckets)
 ```
 GET /api/upload/signed-url?bucket=music&path=uid/filename.mp3
-Authorization: Bearer <id-token>
+Authorization: Bearer <firebase-id-token>
 ```
 
-### Stream-Media Upload (admin only)
+#### Stream-Media Upload (founder only)
 ```
 POST /api/admin/cloud-stream/media/upload
 Content-Type: multipart/form-data
+Authorization: Bearer <firebase-id-token>
 field: file (audio/video)
 ```
 
@@ -205,25 +327,9 @@ POST /api/admin/cloud-stream/media/upload
 GET /api/admin/cloud-stream/media/library
 ```
 
-### Add to stream queue (Supabase items)
-The `addSupabaseItemsToQueue` method accepts `{ name, storagePath, signedUrl? }` objects.
-
 ---
 
-## 9. Migration from Firebase Storage
-
-Existing files in Firebase Storage are **not deleted**. They will remain accessible via their existing URLs as long as Firebase Storage is not disabled.
-
-To migrate existing files:
-1. Export file URLs from Firebase Storage using the Firebase Admin SDK.
-2. Download each file and re-upload to Supabase Storage via the appropriate bucket.
-3. Update MongoDB records to point to the new Supabase URLs/paths.
-
-**Firebase Authentication, Firestore, and Realtime Database are preserved unchanged.**
-
----
-
-## 10. Environment Variables Reference
+## 9. Environment Variables Reference
 
 ```env
 # Server
@@ -245,7 +351,7 @@ JWT_EXPIRES_IN=7d
 # Supabase Storage (REQUIRED for file uploads)
 SUPABASE_URL=https://your-project-id.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=your-service-role-key   # backend only — NEVER expose
-SUPABASE_ANON_KEY=your-anon-key                   # safe for frontend read-only use
+SUPABASE_ANON_KEY=your-anon-key                   # safe for frontend direct uploads
 
 # Upload limits
 MAX_FILE_SIZE_MB=500
@@ -257,6 +363,34 @@ CLOUD_STREAM_RTMP_TARGETS=            # RTMP URL(s) — leave blank for simulati
 CLOUD_STREAM_SHUFFLE=true
 CLOUD_STREAM_REPEAT=true
 ```
+
+---
+
+## 10. Troubleshooting
+
+### Upload returns HTTP 400 with "policy" in the message
+→ The bucket's RLS INSERT policy is missing. Run the SQL from Section 4.
+
+### Upload returns HTTP 401 or 403
+→ Same cause — RLS is blocking the anon key. Run the SQL from Section 4.
+
+### Upload succeeds but the image doesn't display
+→ The bucket may be set to private but the SELECT policy is missing.
+   Run the `_public_read` policy SQL for that bucket (Section 4).
+
+### Avatar re-upload returns "The resource already exists" (409)
+→ The `upsert: true` header should prevent this. If it persists, check that
+   your Supabase project version supports the `x-upsert` header (all recent versions do).
+
+### Music/video plays once then shows 403 after page refresh
+→ Signed URLs expire after 7 days. The music player and video player now
+   automatically refresh signed URLs on every `mpLoadBackendTrack()` and
+   `openVideoDetail()` call. If you see stale URLs in the database, they
+   will be replaced on the next playback attempt.
+
+### "You must be signed in to upload files"
+→ Firebase Auth has not resolved yet. Wait for the sign-in flow to complete
+   before initiating an upload. All upload functions check for a valid UID.
 
 ---
 
@@ -289,7 +423,5 @@ cd frontend && npx serve .
 | Cloudflare KV (`cloudStreamKV`) | Firestore + Supabase Storage |
 | Cloudflare Durable Objects (`CloudStreamScheduler`) | Backend `cloudStreamService.js` |
 | Cloudflare R2 storage references | Supabase Storage |
-| `wrangler-studio.jsonc` | Deleted |
-| `workers/cloudstream-worker.js` | Placeholder comment only |
 
 Firebase Authentication, Firestore, and Realtime Database are **unchanged**.

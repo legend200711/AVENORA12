@@ -864,6 +864,19 @@ async function openVideoDetail(videoId) {
   try {
     const data = await LegendAPI.videos.get(videoId);
     video = data.video || data;
+
+    // For private-bucket videos (storagePath present and URL is not a public URL),
+    // refresh the signed URL immediately so the player never starts with an expired link.
+    if (video && video.storagePath && !video.videoUrl?.includes('/object/public/')) {
+      try {
+        const urlData = await LegendAPI.request('GET', `/videos/${videoId}/url`).catch(() => null);
+        if (urlData?.url) {
+          video.videoUrl        = urlData.url;
+          video.hlsUrl          = urlData.url;
+          video.originalFileUrl = urlData.url;
+        }
+      } catch (_) {}
+    }
   } catch (err) {
     console.warn('[AVN] Video detail error:', err);
     error = err.message;
@@ -1129,6 +1142,20 @@ window.somRetryPlayer = async function(videoId) {
   try {
     const data = await LegendAPI.videos.get(videoId);
     const video = data.video || data;
+
+    // If the video uses a private Supabase bucket (storagePath present), refresh
+    // the signed URL before building the player — prevents 403 on expired tokens.
+    if (video.storagePath && !video.videoUrl?.includes('/object/public/')) {
+      try {
+        const urlData = await LegendAPI.request('GET', `/videos/${videoId}/url`).catch(() => null);
+        if (urlData?.url) {
+          video.videoUrl = urlData.url;
+          video.hlsUrl   = urlData.url;
+          video.originalFileUrl = urlData.url;
+        }
+      } catch (_) {}
+    }
+
     wrap.innerHTML = buildPlayerHtml(video);
     initVideoElement(videoId);
   } catch (err) {

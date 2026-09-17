@@ -110,7 +110,7 @@ async function uploadBuffer({ bucket, storagePath, buffer, mimetype }) {
     .from(bucketName)
     .upload(storagePath, buffer, {
       contentType: mimetype,
-      upsert: false,
+      upsert: true, // allow overwriting (critical for avatar re-uploads)
     });
 
   if (error) {

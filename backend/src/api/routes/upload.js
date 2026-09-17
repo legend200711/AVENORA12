@@ -75,17 +75,20 @@ router.post('/avatar', authenticate, uploadRateLimiter, createUploader('avatar')
   if (!req.file) return res.status(400).json({ error: true, message: 'No file uploaded' });
   try {
     const uid = req.user.id;
-    const path = require('path');
-    const ext = path.extname(req.file.originalname).toLowerCase();
-    const storagePath = `${uid}${ext}`;
-    // Delete existing avatar first (upsert handles this via Supabase)
+    const nodePath = require('path');
+    const ext = nodePath.extname(req.file.originalname).toLowerCase();
+    // Store avatar in a uid-namespaced folder so it matches the path used by the
+    // frontend AvenoraStorage.uploadAvatar(). upsert:true (set in uploadBuffer)
+    // ensures re-uploads overwrite the old avatar without a 409 conflict.
+    const storagePath = `${uid}/avatar${ext}`;
     const result = await storage.uploadBuffer({
       bucket: 'avatars',
       storagePath,
       buffer: req.file.buffer,
       mimetype: req.file.mimetype,
     });
-    const url = result.publicUrl || await storage.getSignedUrl('avatars', storagePath);
+    // avatars bucket is private — return a 7-day signed URL
+    const url = result.signedUrl || await storage.getSignedUrl('avatars', storagePath);
     res.json({ success: true, url, storagePath });
   } catch (err) { next(err); }
 });

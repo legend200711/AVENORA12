@@ -1611,8 +1611,8 @@ window.mpLoadTrack = function (index) {
   mpInitVisualizer(audio);
 };
 
-window.mpLoadBackendTrack = function (track, index, context) {
-  if (!track.fileUrl) {
+window.mpLoadBackendTrack = async function (track, index, context) {
+  if (!track.fileUrl && !track.storagePath) {
     Toast.error('This track is not available for playback.');
     return;
   }
@@ -1620,7 +1620,18 @@ window.mpLoadBackendTrack = function (track, index, context) {
 
   const audio = document.getElementById('mp-audio');
   if (!audio) return;
-  audio.src = track.fileUrl;
+
+  // If the track has a storagePath (private bucket), always refresh the signed URL
+  // before playing so an expired URL does not cause a 403 on the audio element.
+  let playUrl = track.fileUrl;
+  if (track.storagePath && track.id) {
+    try {
+      const refreshed = await LegendAPI.request('GET', `/music/tracks/${track.id}/url`).catch(() => null);
+      if (refreshed?.url) playUrl = refreshed.url;
+    } catch (_) {}
+  }
+
+  audio.src = playUrl;
 
   document.getElementById('mp-title').textContent  = track.title || 'Unknown';
   document.getElementById('mp-artist').textContent = track.artistName || '';

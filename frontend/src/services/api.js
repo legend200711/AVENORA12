@@ -699,15 +699,35 @@
     followers: (id, page = 1) => get(`/social/followers/${id}?page=${page}`),
     following: (id, page = 1) => get(`/social/following/${id}?page=${page}`),
     updateProfile: async (data) => {
-      if (window.AvenoraFirebase?.Firestore) {
-        const user = LegendState.get('user');
-        if (!user) throw new Error('Not authenticated');
-        await window.AvenoraFirebase.Firestore.upsertProfile(user.id, { profile: { ...user.profile, ...data } });
-        const updated = { ...user, profile: { ...user.profile, ...data } };
-        LegendState.set('user', updated);
-        return { user: updated };
+      // Always persist to the MongoDB backend (the authoritative record for follow
+      // counts, role, and profile fields like avatarUrl / bannerUrl used everywhere).
+      // Additionally mirror to Firestore so Firestore-backed pages stay in sync.
+      let result;
+      try {
+        result = await put('/users/profile', data);
+      } catch (backendErr) {
+        // Backend unavailable — fall back to Firestore-only update
+        console.warn('[AVN] Profile backend update failed, falling back to Firestore:', backendErr.message);
+        if (window.AvenoraFirebase?.Firestore) {
+          const user = LegendState.get('user');
+          if (!user) throw new Error('Not authenticated');
+          await window.AvenoraFirebase.Firestore.upsertProfile(user.id, { profile: { ...user.profile, ...data } });
+          const updated = { ...user, profile: { ...user.profile, ...data } };
+          LegendState.set('user', updated);
+          return { user: updated };
+        }
+        throw backendErr;
       }
-      return put('/users/profile', data);
+      // Backend succeeded — mirror to Firestore as a secondary sync (non-critical)
+      try {
+        if (window.AvenoraFirebase?.Firestore) {
+          const user = LegendState.get('user');
+          if (user) {
+            await window.AvenoraFirebase.Firestore.upsertProfile(user.id, { profile: { ...user.profile, ...data } });
+          }
+        }
+      } catch (_) {}
+      return result;
     },
   };
 
@@ -805,16 +825,30 @@
       return get(`/gallery?${q}`);
     },
     async upload(formData) {
-      if (window.AvenoraFirebase?.Storage && window.AvenoraFirebase?.Firestore) {
-        const file     = formData.get('file');
-        const category = formData.get('category') || 'artwork';
-        const title    = formData.get('title') || '';
-        const url = await window.AvenoraFirebase.Storage.uploadImage(file);
-        await window.AvenoraFirebase.Firestore.addGalleryItem(url, category, title);
-        return { images: [{ _id: Date.now().toString(), url, title, category,
-          uploader: { username: LegendAPI?.auth?.getUser()?.username }, createdAt: new Date().toISOString() }] };
+      // Primary path: upload via the backend multipart API which routes through
+      // Supabase Storage server-side with the service-role key.
+      // AvenoraStorage direct upload is the fallback when the backend is unreachable.
+      try {
+        return await upload('/gallery/upload', formData);
+      } catch (backendErr) {
+        // Backend unreachable — fall back to direct Supabase upload + Firestore metadata
+        console.warn('[AVN] Gallery backend upload failed, trying direct upload:', backendErr.message);
+        if (window.AvenoraStorage) {
+          const file     = formData.get('file');
+          const category = formData.get('category') || 'artwork';
+          const title    = formData.get('title') || '';
+          if (!file) throw backendErr;
+          const result = await window.AvenoraStorage.uploadImage(file);
+          try {
+            if (window.AvenoraFirebase?.Firestore?.addGalleryItem) {
+              await window.AvenoraFirebase.Firestore.addGalleryItem(result.url, category, title);
+            }
+          } catch (_) {}
+          return { images: [{ _id: Date.now().toString(), url: result.url, title, category,
+            uploader: { username: LegendAPI?.auth?.getUser()?.username }, createdAt: new Date().toISOString() }] };
+        }
+        throw backendErr;
       }
-      return upload('/gallery/upload', formData);
     },
     async like(id) {
       if (window.AvenoraFirebase?.Firestore) {
