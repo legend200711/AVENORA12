@@ -36,7 +36,7 @@ _messaging.onBackgroundMessage((payload) => {
   return self.registration.showNotification(title, options);
 });
 
-const CACHE_NAME = 'avenora-v2';
+const CACHE_NAME = 'avenora-v3';
 // Bump version when static assets change so the old cache is pruned on activate.
 const STATIC_ASSETS = [
   '/',
@@ -51,6 +51,8 @@ const STATIC_ASSETS = [
   '/src/store/state.js',
   '/src/utils/ui.js',
   '/src/services/api.js',
+  '/src/services/firebase.js',
+  '/src/services/supabase.js',
   '/src/services/musicService.js',
   '/src/components/visual/visualEngine.js',
   '/src/app.js',
@@ -69,7 +71,6 @@ const STATIC_ASSETS = [
   '/src/pages/search.js',
   '/src/pages/profile.js',
   '/src/pages/settings.js',
-  '/src/services/firebase.js',
   'https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600;700&display=swap',
 ];
 
@@ -99,13 +100,14 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const url = new URL(event.request.url);
 
-  // Never cache API calls, Firebase traffic, or socket connections
+  // Never cache API calls, Firebase traffic, Supabase, or socket connections
   if (
     url.pathname.startsWith('/api/') ||
     url.pathname.startsWith('/socket.io') ||
     url.hostname.includes('firebaseio.com') ||
     url.hostname.includes('googleapis.com') ||
-    url.hostname.includes('firebasestorage.googleapis.com')
+    url.hostname.includes('firebasestorage.googleapis.com') ||
+    url.hostname.includes('supabase.co')
   ) {
     return; // Network only
   }

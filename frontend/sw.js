@@ -44,20 +44,21 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v7';
-const CACHE_NAME  = 'avenora-cache-v7';
+const SW_VERSION  = 'v8';
+const CACHE_NAME  = 'avenora-cache-v8';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
 // on a user's device.
 const OLD_CACHE_PREFIXES = [
   'avenora-v',        // avenora-v1, avenora-v2
-  'avenora-cache-v1', // exact names below v7
+  'avenora-cache-v1', // exact names below v8
   'avenora-cache-v2',
   'avenora-cache-v3', // v3 had wrong BASE path — evict
   'avenora-cache-v4', // v4 had wrong /AVENORA1/ base path — evict
   'avenora-cache-v5', // v5 — evict to pick up cloud-stream/ assets
   'avenora-cache-v6', // v6 — evict: CSS diag removed, video upload fixed
+  'avenora-cache-v7', // v7 — evict: supabase.js was missing from cache list
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
@@ -87,6 +88,7 @@ const STATIC_ASSETS = [
   `${BASE}/src/utils/ui.js`,
   `${BASE}/src/services/api.js`,
   `${BASE}/src/services/firebase.js`,
+  `${BASE}/src/services/supabase.js`,
   `${BASE}/src/services/musicService.js`,
   `${BASE}/src/services/themeService.js`,
   `${BASE}/src/components/visual/visualEngine.js`,
@@ -139,6 +141,8 @@ function shouldNeverCache(url) {
   if (u.hostname.includes('securetoken.googleapis.com')) return true;
   // Firebase hosting CDN (dynamic data fetched at runtime)
   if (u.hostname.includes('firebaseapp.com') && u.pathname.includes('/api')) return true;
+  // Supabase — never cache storage uploads, auth, REST, or realtime traffic
+  if (u.hostname.includes('supabase.co')) return true;
   // Analytics / tracking
   if (u.hostname.includes('google-analytics.com')) return true;
   if (u.hostname.includes('analytics.google.com')) return true;

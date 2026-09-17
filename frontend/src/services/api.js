@@ -732,24 +732,37 @@
   };
 
   // ─── Upload API — delegates directly to Supabase Storage via AvenoraStorage ─
-  // No silent fallback to backend routes. If AvenoraStorage is missing the script
-  // did not load — show the real error so the user can refresh/report it.
+  // Waits up to 5 s for the supabase.js script to initialise (covers slow
+  // connections where the script loads after the user taps Upload).
+  async function _awaitStorage() {
+    if (window.AvenoraStorage) return window.AvenoraStorage;
+    for (let i = 0; i < 20; i++) {
+      await new Promise(r => setTimeout(r, 250)); // 20 × 250 ms = 5 s max
+      if (window.AvenoraStorage) return window.AvenoraStorage;
+    }
+    throw new Error(
+      'Storage service failed to load. ' +
+      'Hard-refresh the page (Ctrl+Shift+R / ⌘+Shift+R) to clear the browser cache and try again. ' +
+      'If the problem persists, check your internet connection.'
+    );
+  }
+
   const UploadAPI = {
     async image(file, onProgress) {
-      if (!window.AvenoraStorage) throw new Error('Storage service not loaded. Refresh the page and try again.');
-      return window.AvenoraStorage.uploadImage(file, onProgress);
+      const storage = await _awaitStorage();
+      return storage.uploadImage(file, onProgress);
     },
     async avatar(file, onProgress) {
-      if (!window.AvenoraStorage) throw new Error('Storage service not loaded. Refresh the page and try again.');
-      return window.AvenoraStorage.uploadAvatar(file, onProgress);
+      const storage = await _awaitStorage();
+      return storage.uploadAvatar(file, onProgress);
     },
     async audio(file, onProgress) {
-      if (!window.AvenoraStorage) throw new Error('Storage service not loaded. Refresh the page and try again.');
-      return window.AvenoraStorage.uploadAudio(file, onProgress);
+      const storage = await _awaitStorage();
+      return storage.uploadAudio(file, onProgress);
     },
     async video(file, onProgress) {
-      if (!window.AvenoraStorage) throw new Error('Storage service not loaded. Refresh the page and try again.');
-      return window.AvenoraStorage.uploadVideo(file, onProgress);
+      const storage = await _awaitStorage();
+      return storage.uploadVideo(file, onProgress);
     },
   };
 

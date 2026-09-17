@@ -1648,9 +1648,21 @@ function initUploadForm() {
     try {
       const user = LegendState.get('user');
       if (!user) throw new Error('You must be signed in to upload videos.');
+
+      // Wait up to 5 s for the Supabase Storage service to initialise.
+      // If the SW served a cached page without supabase.js this gives it time to catch up.
       if (!window.AvenoraStorage) {
-        console.error('[AVENORA] AvenoraStorage not found. Check that frontend/src/services/supabase.js loaded correctly.');
-        throw new Error('Storage service not loaded. Check your browser console for details and refresh the page.');
+        statusEl.textContent = 'Waiting for storage service…';
+        for (let _i = 0; _i < 20 && !window.AvenoraStorage; _i++) {
+          await new Promise(r => setTimeout(r, 250));
+        }
+      }
+      if (!window.AvenoraStorage) {
+        console.error('[AVENORA] AvenoraStorage not found after 5 s. supabase.js may not have loaded.');
+        throw new Error(
+          'Storage service failed to load. ' +
+          'Hard-refresh the page (Ctrl+Shift+R / ⌘+Shift+R) to clear the browser cache and try again.'
+        );
       }
 
       // ── Upload video + thumbnail via backend → Supabase Storage ──
