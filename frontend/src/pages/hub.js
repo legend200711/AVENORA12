@@ -36,7 +36,6 @@ registerPage('hub', {
       ${renderExploreSection(user)}
       ${renderAnnouncementsSection()}
       ${user ? renderCompactAccess(user) : ''}
-      ${renderBuildDiagnostics()}
       <!-- Backend status banner — shown for all users when backend is unreachable -->
       <div id="hub-backend-status" style="display:none;align-items:center;gap:8px;padding:8px 12px;margin:0 0 var(--space-md);border-radius:6px;background:rgba(192,57,74,0.12);border:1px solid rgba(192,57,74,0.3);font-size:0.8rem;color:var(--text-secondary)">
         <span id="hub-backend-status-dot" style="width:8px;height:8px;border-radius:50%;background:var(--neon-red,#c0394a);flex-shrink:0;display:inline-block"></span>
