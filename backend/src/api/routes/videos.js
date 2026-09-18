@@ -280,33 +280,101 @@ router.post('/save-meta', authenticate, async (req, res, next) => {
 // Only generates a signed URL when the storagePath is in a private bucket.
 router.get('/:id/url', optionalAuth, async (req, res, next) => {
   try {
-    const video = await Video.findById(req.params.id).lean();
-    if (!video) return res.status(404).json({ success: false, message: 'Video not found' });
+    const mongoose = require('mongoose');
+    const videoId = req.params.id;
+
+    // Only attempt MongoDB lookup for valid ObjectIds (24-char hex)
+    if (!mongoose.Types.ObjectId.isValid(videoId) || videoId.length !== 24) {
+      return res.status(404).json({
+        success: false,
+        code: 'VIDEO_NOT_FOUND',
+        message: 'Video not found — this ID is not a MongoDB ObjectId.',
+      });
+    }
+
+    const video = await Video.findById(videoId).lean();
+    if (!video || video.isDeleted) {
+      return res.status(404).json({
+        success: false,
+        code: 'VIDEO_NOT_FOUND',
+        message: 'Video not found.',
+      });
+    }
 
     // Access control for private videos
     if (video.visibility === 'private') {
       if (!req.user || (String(req.user.id) !== String(video.uploader) && !['founder','admin'].includes(req.user?.role))) {
-        return res.status(403).json({ success: false, message: 'This video is private.' });
+        return res.status(403).json({
+          success: false,
+          code: 'ACCESS_DENIED',
+          message: 'This video is private.',
+        });
       }
     }
 
-    // Return existing URL if already resolved
+    const videoIdStr = String(video._id);
+
+    // Return existing URL if no storagePath recorded (legacy videos)
     if (!video.storagePath) {
-      return res.json({ success: true, url: video.originalFileUrl || video.hlsUrl });
+      const existingUrl = video.originalFileUrl || video.hlsUrl || null;
+      if (!existingUrl) {
+        return res.status(409).json({
+          success: false,
+          code: 'STORAGE_OBJECT_MISSING',
+          message: 'No storage path or URL recorded for this video.',
+        });
+      }
+      return res.json({
+        success: true,
+        videoId: videoIdStr,
+        url: existingUrl,
+        playbackUrl: existingUrl,
+        expiresAt: null,
+      });
     }
 
-    // Videos bucket is public — return public URL directly (no signed URL needed)
+    // Videos bucket is public — return the permanent public URL directly
     try {
       const publicUrl = storageSvc.getPublicUrl('videos', video.storagePath);
-      if (publicUrl) return res.json({ success: true, url: publicUrl });
-    } catch {}
+      if (publicUrl) {
+        return res.json({
+          success: true,
+          videoId: videoIdStr,
+          url: publicUrl,
+          playbackUrl: publicUrl,
+          expiresAt: null,
+        });
+      }
+    } catch (_) {}
 
-    // Fallback to signed URL for any private-bucket videos
+    // Fallback: generate a signed URL (for private-bucket videos)
     try {
-      const signedUrl = await storageSvc.getSignedUrl('videos', video.storagePath, 3600);
-      res.json({ success: true, url: signedUrl });
-    } catch {
-      res.json({ success: true, url: video.originalFileUrl || video.hlsUrl });
+      const expirySecs = 3600; // 1 hour
+      const signedUrl  = await storageSvc.getSignedUrl('videos', video.storagePath, expirySecs);
+      return res.json({
+        success: true,
+        videoId: videoIdStr,
+        url: signedUrl,
+        playbackUrl: signedUrl,
+        expiresAt: new Date(Date.now() + expirySecs * 1000).toISOString(),
+      });
+    } catch (signErr) {
+      // Storage object may be missing
+      const fallbackUrl = video.originalFileUrl || video.hlsUrl || null;
+      if (fallbackUrl) {
+        return res.json({
+          success: true,
+          videoId: videoIdStr,
+          url: fallbackUrl,
+          playbackUrl: fallbackUrl,
+          expiresAt: null,
+        });
+      }
+      return res.status(409).json({
+        success: false,
+        code: 'PLAYBACK_URL_FAILED',
+        message: `Could not generate playback URL: ${signErr.message}`,
+      });
     }
   } catch (err) { next(err); }
 });
@@ -439,7 +507,19 @@ router.get('/channel/:id', optionalAuth, async (req, res, next) => {
 // ─── GET /api/videos/:id ─────────────────────────────────────
 router.get('/:id', optionalAuth, async (req, res, next) => {
   try {
-    const video = await Video.findById(req.params.id).lean();
+    const mongoose = require('mongoose');
+    const videoId  = req.params.id;
+
+    // Reject non-ObjectId IDs with a clean 404 (not a Mongoose CastError 500)
+    if (!mongoose.Types.ObjectId.isValid(videoId) || videoId.length !== 24) {
+      return res.status(404).json({
+        error: true,
+        code: 'VIDEO_NOT_FOUND',
+        message: 'Video not found.',
+      });
+    }
+
+    const video = await Video.findById(videoId).lean();
     if (!video || video.isDeleted) return next(new NotFoundError('Video'));
 
     // Access control (uploader is a Firebase UID string)
@@ -607,18 +687,106 @@ router.post('/:id/report', authenticate, async (req, res, next) => {
 
 // ─── Moderation (Founder/Admin only) ─────────────────────────
 
-// DELETE /api/videos/:id  — remove video
+// DELETE /api/videos/library/:supabaseId — delete a Supabase music_library row server-side
+// This keeps the Supabase service-role key backend-only (never in frontend JS).
+// Requires authentication + founder/admin authorization.
+router.delete('/library/:supabaseId', authenticate, requireRole('founder'), async (req, res, next) => {
+  try {
+    const supabaseId = req.params.supabaseId;
+    // Basic UUID format validation (prevent path traversal / injection)
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(supabaseId)) {
+      return res.status(422).json({ error: true, message: 'Invalid video ID format.' });
+    }
+
+    // Use the Supabase service-role client (server-side only)
+    const supabase = storageSvc.getClient();
+
+    // Fetch the row first to get storagePath for storage cleanup
+    const { data: rows, error: fetchErr } = await supabase
+      .from('music_library')
+      .select('id, uid, storage_path, mime_type')
+      .eq('id', supabaseId)
+      .limit(1);
+
+    if (fetchErr) {
+      return res.status(500).json({ error: true, message: `Database error: ${fetchErr.message}` });
+    }
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: true, code: 'VIDEO_NOT_FOUND', message: 'Video not found.' });
+    }
+
+    const row = rows[0];
+
+    // Verify ownership or admin
+    const isOwner = row.uid === req.user.id;
+    const isMod   = ['founder','admin'].includes(req.user.role);
+    if (!isOwner && !isMod) {
+      return res.status(403).json({ error: true, message: 'Insufficient permissions.' });
+    }
+
+    // Delete the database record
+    const { error: deleteErr } = await supabase
+      .from('music_library')
+      .delete()
+      .eq('id', supabaseId);
+
+    if (deleteErr) {
+      return res.status(500).json({ error: true, message: `Delete failed: ${deleteErr.message}` });
+    }
+
+    // Remove from Supabase Storage (best-effort — do not fail if file already gone)
+    if (row.storage_path) {
+      const bucket = String(row.mime_type || '').startsWith('video/') ? 'videos' : 'music';
+      try {
+        await storageSvc.deleteFile(bucket, row.storage_path);
+      } catch (storageErr) {
+        const logger = require('../../utils/logger');
+        logger.warn(`[VideoDelete] Storage removal skipped for ${row.storage_path}: ${storageErr.message}`);
+      }
+    }
+
+    res.json({ success: true });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/videos/:id  — remove video (soft-delete)
+// Note: Supabase music_library videos use UUID IDs. The frontend detects these and
+// should use DELETE /api/videos/library/:id for those. This route handles MongoDB ObjectId videos only.
 router.delete('/:id', authenticate, async (req, res, next) => {
   try {
-    const video = await Video.findById(req.params.id);
+    const mongoose = require('mongoose');
+    const videoId  = req.params.id;
+
+    // Reject non-ObjectId IDs immediately — do not let Mongoose throw a CastError
+    if (!mongoose.Types.ObjectId.isValid(videoId) || videoId.length !== 24) {
+      return res.status(404).json({
+        error: true,
+        code: 'VIDEO_NOT_FOUND',
+        message: 'Video not found.',
+      });
+    }
+
+    const video = await Video.findById(videoId);
     if (!video || video.isDeleted) return next(new NotFoundError('Video'));
 
     const isOwner = String(video.uploader) === String(req.user.id);
     const isMod   = ['founder','admin'].includes(req.user.role);
     if (!isOwner && !isMod) throw new ForbiddenError('Insufficient permissions.');
 
+    // Soft-delete the database record
     video.isDeleted = true;
     await video.save();
+
+    // Remove from Supabase Storage (best-effort — do not fail the delete if storage is missing)
+    if (video.storagePath) {
+      try {
+        await storageSvc.deleteFile('videos', video.storagePath);
+      } catch (storageErr) {
+        const logger = require('../../utils/logger');
+        logger.warn(`[VideoDelete] Storage removal skipped for ${video.storagePath}: ${storageErr.message}`);
+      }
+    }
+
     res.json({ success: true });
   } catch (err) { next(err); }
 });

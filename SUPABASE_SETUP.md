@@ -38,6 +38,52 @@ also create them manually to ensure the correct `public` setting.
 
 ## 3. Row Level Security (RLS) policies
 
+### 3.0 `music_library` table (PostgREST — required for video list & playback)
+
+The `music_library` table stores video and audio upload metadata.
+The frontend reads it with the **anon key** (public).
+All writes go through the backend service-role key.
+
+Run in **SQL Editor**:
+
+```sql
+-- Create the music_library table if it does not yet exist
+CREATE TABLE IF NOT EXISTS music_library (
+  id            uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+  uid           text NOT NULL,
+  title         text,
+  description   text,
+  artist_name   text,
+  album_title   text,
+  genre         text,
+  file_url      text,
+  storage_path  text,
+  file_size     bigint,
+  mime_type     text,
+  original_name text,
+  uploaded_at   timestamptz DEFAULT now()
+);
+
+-- Enable Row Level Security
+ALTER TABLE music_library ENABLE ROW LEVEL SECURITY;
+
+-- Allow anyone to read public rows (anon key — required for video list/playback)
+CREATE POLICY "Public read music_library"
+ON music_library FOR SELECT
+USING (true);
+
+-- Service-role key bypasses RLS automatically — no INSERT/UPDATE/DELETE policy needed
+-- for the backend. All writes go through the Avenora backend API using service-role.
+```
+
+> **Note:** If the `music_library` table already exists you may skip the CREATE TABLE
+> statement. Only apply the `ALTER TABLE ENABLE ROW LEVEL SECURITY` and the policy
+> if RLS is not already enabled.
+
+---
+
+### 3.1–3.6 Storage bucket policies
+
 Enable RLS on all buckets and apply the policies below.
 In the Supabase dashboard go to **Storage → Policies** and add the SQL policies,
 or run them in **SQL Editor**.

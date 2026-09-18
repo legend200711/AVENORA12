@@ -36,7 +36,7 @@ _messaging.onBackgroundMessage((payload) => {
   return self.registration.showNotification(title, options);
 });
 
-const CACHE_NAME = 'avenora-v3';
+const CACHE_NAME = 'avenora-v4';
 // Bump version when static assets change so the old cache is pruned on activate.
 const STATIC_ASSETS = [
   '/',

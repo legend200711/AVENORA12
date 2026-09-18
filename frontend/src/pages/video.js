@@ -863,31 +863,49 @@ async function openVideoDetail(videoId) {
   const content = document.getElementById('som-content');
   showLoading(content, 'Loading video...');
 
-  let video = null, error = null;
+  let video = null, errorCode = null, errorMsg = null;
   try {
     const data = await LegendAPI.videos.get(videoId);
     video = data.video || data;
 
-    // Ensure we have a playback URL. If videoUrl/hlsUrl/originalFileUrl is missing
-    // (can happen if the video was uploaded before the public-URL fix), fetch it.
+    // Ensure we have a playback URL.
+    // For Supabase public-bucket videos, videoUrl is the direct public CDN URL.
+    // For MongoDB videos without a stored URL, fetch a fresh one from the backend.
     const hasUrl = video?.videoUrl || video?.hlsUrl || video?.originalFileUrl;
-    if (video && video.storagePath && !hasUrl) {
+    if (video && !hasUrl) {
       try {
-        const urlData = await LegendAPI.request('GET', `/videos/${videoId}/url`).catch(() => null);
-        if (urlData?.url) {
-          video.videoUrl        = urlData.url;
-          video.hlsUrl          = urlData.url;
-          video.originalFileUrl = urlData.url;
+        const freshUrl = await LegendAPI.videos.getPlaybackUrl(videoId);
+        if (freshUrl) {
+          video.videoUrl        = freshUrl;
+          video.hlsUrl          = freshUrl;
+          video.originalFileUrl = freshUrl;
+        } else if (video.storagePath) {
+          // Reconstruct the public URL from storagePath for public videos bucket
+          video.videoUrl = `https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public/videos/${video.storagePath}`;
         }
       } catch (_) {}
     }
   } catch (err) {
     console.warn('[AVN] Video detail error:', err);
-    error = err.message;
+    errorCode = err.status === 404 ? 'VIDEO_NOT_FOUND'
+               : err.code === 'API_NOT_CONFIGURED' || err.code === 'BACKEND_NOT_CONFIGURED' ? 'BACKEND_UNAVAILABLE'
+               : err.code === 'BACKEND_UNREACHABLE' || err.code === 'BACKEND_NOT_RUNNING' ? 'BACKEND_UNAVAILABLE'
+               : err.status === 401 ? 'AUTH_REQUIRED'
+               : err.status === 403 ? 'ACCESS_DENIED'
+               : 'DATABASE_ERROR';
+    errorMsg = err.message;
   }
 
-  if (error || !video) {
-    showError(content, 'This video is temporarily unavailable.', () => openVideoDetail(videoId));
+  if (!video) {
+    const msgMap = {
+      VIDEO_NOT_FOUND:   'Video not found.',
+      BACKEND_UNAVAILABLE: 'The video service is currently unavailable. Please try again later.',
+      AUTH_REQUIRED:     'Sign in to watch this video.',
+      ACCESS_DENIED:     'You do not have permission to watch this video.',
+      DATABASE_ERROR:    'Could not load this video. Please try again.',
+    };
+    const displayMsg = msgMap[errorCode] || (errorMsg || 'This video is temporarily unavailable.');
+    showError(content, displayMsg, () => openVideoDetail(videoId));
     return;
   }
 
@@ -1147,15 +1165,17 @@ window.somRetryPlayer = async function(videoId) {
     const data = await LegendAPI.videos.get(videoId);
     const video = data.video || data;
 
-    // If the video uses a private Supabase bucket (storagePath present), refresh
-    // the signed URL before building the player — prevents 403 on expired tokens.
-    if (video.storagePath && !video.videoUrl?.includes('/object/public/')) {
+    // Always attempt to get a fresh playback URL (covers both signed and public URLs)
+    const hasUrl = video.videoUrl || video.hlsUrl || video.originalFileUrl;
+    if (!hasUrl) {
       try {
-        const urlData = await LegendAPI.request('GET', `/videos/${videoId}/url`).catch(() => null);
-        if (urlData?.url) {
-          video.videoUrl = urlData.url;
-          video.hlsUrl   = urlData.url;
-          video.originalFileUrl = urlData.url;
+        const freshUrl = await LegendAPI.videos.getPlaybackUrl(videoId);
+        if (freshUrl) {
+          video.videoUrl = freshUrl;
+          video.hlsUrl   = freshUrl;
+          video.originalFileUrl = freshUrl;
+        } else if (video.storagePath) {
+          video.videoUrl = `https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public/videos/${video.storagePath}`;
         }
       } catch (_) {}
     }
@@ -1164,11 +1184,14 @@ window.somRetryPlayer = async function(videoId) {
     initVideoElement(videoId);
   } catch (err) {
     console.warn('[AVN] Video load error:', err);
+    const msg = err.status === 404 ? 'Video not found.'
+              : err.status === 403 ? 'Access denied.'
+              : 'Could not reload video. Please try again.';
     wrap.innerHTML = `
       <div class="player-error-overlay" style="position:relative;min-height:200px">
         <div class="player-error-icon">⚠️</div>
-        <div class="player-error-msg">This video is temporarily unavailable.</div>
-        <div class="player-error-sub">Please try again later.</div>
+        <div class="player-error-msg">${escapeHtml(msg)}</div>
+        <div class="player-error-sub">Error: ${escapeHtml(err.message || 'unknown')}</div>
       </div>
     `;
   }

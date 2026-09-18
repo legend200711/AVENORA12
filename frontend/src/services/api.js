@@ -16,27 +16,25 @@
   'use strict';
 
   // ─── Supabase direct REST API ──────────────────────────────
-  // Videos and dashboard data are read/written directly via the
-  // Supabase PostgREST REST API using the anon key.
-  // Service-role operations (inserts with uploader_uid) use the
-  // anon key + Firebase ID token for row-level ownership checks.
+  // Used only for READ operations (video list, video get by UUID).
+  // All writes and deletes now route through the backend (keeps service-role key server-side).
   //
   // Tables used:
   //   music_library — stores both audio AND video files
   //                   video rows are identified by mime_type LIKE 'video/%'
   //
-  // This requires NO separate backend server.
+  // NOTE: Only the anon/public key is used here. The service-role key is NEVER in frontend JS.
+  //       Write/delete operations that require elevated access go through the Avenora backend.
   const SUPABASE_PROJECT_URL = 'https://licuiqxkkfboqezzmsqu.supabase.co';
   const SUPABASE_ANON_KEY    = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpY3VpcXhra2Zib3Flenptc3F1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNTYxMDQsImV4cCI6MjEwNDkzMjEwNH0.tsYOyCI7skF6Otz2W0oNYhxM63-0551lrqIDCO8NoJo';
-  const SUPABASE_SERVICE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpY3VpcXhra2Zib3Flenptc3F1Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTM1NjEwNCwiZXhwIjoyMTA0OTMyMTA0fQ.5Xv0MPceJe-QevGi69UbXlvprxFukjeDY19zgialD5A';
   const SUPABASE_REST        = SUPABASE_PROJECT_URL + '/rest/v1';
-  const EDGE_BASE            = SUPABASE_PROJECT_URL + '/functions/v1'; // kept for future use
 
-  // Helper: make an authenticated Supabase REST call
+  // Helper: make a Supabase REST call using the anon key (public, safe for frontend).
+  // For writes that require elevated privileges, use the Avenora backend instead.
   async function _sbFetch(path, opts = {}) {
     const headers = {
-      'apikey':        SUPABASE_SERVICE_KEY,
-      'Authorization': `Bearer ${SUPABASE_SERVICE_KEY}`,
+      'apikey':        SUPABASE_ANON_KEY,
+      'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
       'Content-Type':  'application/json',
       'Prefer':        opts.prefer || 'return=representation',
       ...(opts.headers || {}),
@@ -574,10 +572,18 @@
 
   // ─── Videos API ───────────────────────────────────────────
   // Primary source: Supabase music_library table (mime_type like 'video/%').
-  // Falls back to Firestore for legacy videos.
+  // Falls back to backend MongoDB, then Firestore, for legacy videos.
+  //
+  // ID strategy: Supabase music_library rows use UUID strings as IDs.
+  //   MongoDB ObjectIds are 24-char hex strings.
+  //   A UUID looks like: "550e8400-e29b-41d4-a716-446655440000" (36 chars with dashes).
+  //   We detect the source by checking whether the ID matches UUID or ObjectId format.
+  const _isUUID   = (id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id));
+  const _isMongoId = (id) => /^[0-9a-f]{24}$/i.test(String(id));
+
   const VideosAPI = {
     async list(params = {}) {
-      // Query Supabase music_library for video rows
+      // Query Supabase music_library for video rows (primary source — no backend needed)
       try {
         const limit = Math.min(50, parseInt(params.limit) || 20);
         const sort  = params.sort || 'new';
@@ -588,14 +594,19 @@
         qs += sort === 'trending' ? '&order=file_size.desc' : '&order=uploaded_at.desc';
 
         const rows = await _sbFetch(`/music_library?${qs}`, { prefer: 'count=exact' });
-        if (Array.isArray(rows)) {
+        if (Array.isArray(rows) && rows.length > 0) {
           return { videos: rows.map(_sbVideoRow), total: rows.length };
         }
       } catch (sbErr) {
         console.warn('[AVN] Supabase video list failed:', sbErr.message);
       }
 
-      // Firestore fallback for videos saved before the Supabase migration
+      // Backend MongoDB fallback
+      try {
+        return await get(`/videos?limit=${params.limit || 20}&sort=${params.sort || 'new'}${params.category ? `&category=${params.category}` : ''}`);
+      } catch (_) {}
+
+      // Firestore legacy fallback
       if (window.AvenoraFirebase) {
         try {
           const videos = await _listVideosFromFirestore(params);
@@ -605,21 +616,55 @@
 
       return { videos: [], total: 0 };
     },
+
     async get(id) {
-      // Prefer backend; fall back to Firestore for pre-migration videos.
+      const sid = String(id);
+
+      // Supabase music_library lookup (UUID ID or any ID not recognized as MongoDB ObjectId)
+      if (_isUUID(sid) || !_isMongoId(sid)) {
+        try {
+          const rows = await _sbFetch(`/music_library?id=eq.${encodeURIComponent(sid)}&limit=1`);
+          if (Array.isArray(rows) && rows.length > 0) {
+            return { video: _sbVideoRow(rows[0]) };
+          }
+        } catch (sbErr) {
+          console.warn('[AVN] Supabase video get failed:', sbErr.message);
+        }
+      }
+
+      // Backend MongoDB lookup (for 24-char hex ObjectIds or fallback)
       try {
-        return await get(`/videos/${id}`);
+        return await get(`/videos/${sid}`);
       } catch (apiErr) {
-        if (window.AvenoraFirebase && apiErr.status === 404) {
+        // Firestore fallback for pre-migration videos
+        if (window.AvenoraFirebase && (apiErr.status === 404 || apiErr.code === 'API_NOT_CONFIGURED' || apiErr.code === 'BACKEND_UNREACHABLE')) {
           try {
-            const video = await _getVideoFromFirestore(id);
+            const video = await _getVideoFromFirestore(sid);
             if (video) return { video };
           } catch (_) {}
         }
         throw apiErr;
       }
     },
-    like: (id) => post(`/videos/${id}/like`, {}),
+
+    // Get a fresh playback URL from the backend (re-generates Supabase signed URL / public URL)
+    async getPlaybackUrl(id) {
+      const sid = String(id);
+      // For Supabase-stored videos: construct the public URL directly from storagePath if known
+      // Otherwise call the backend which can generate it server-side
+      try {
+        const urlData = await get(`/videos/${sid}/url`);
+        return urlData?.url || urlData?.playbackUrl || null;
+      } catch (_) {
+        return null;
+      }
+    },
+
+    like: (id) => {
+      // Supabase IDs: no backend like route — skip silently
+      if (_isUUID(String(id))) return Promise.resolve({ liked: true });
+      return post(`/videos/${id}/like`, {});
+    },
 
     // Comments — Firestore sub-collection
     async comments(videoId, page = 1) {
@@ -630,22 +675,40 @@
           return { comments: items.slice(start, start + 20) };
         } catch (_) {}
       }
-      return get(`/videos/${videoId}/comments?page=${page}`);
+      if (!_isUUID(String(videoId))) {
+        return get(`/videos/${videoId}/comments?page=${page}`).catch(() => ({ comments: [] }));
+      }
+      return { comments: [] };
     },
     async addComment(videoId, content) {
       if (window.AvenoraFirebase) {
         try { return _addVideoCommentToFirestore(videoId, content); } catch (_) {}
       }
-      return post(`/videos/${videoId}/comments`, { content });
+      if (!_isUUID(String(videoId))) {
+        return post(`/videos/${videoId}/comments`, { content });
+      }
+      return { ok: true };
     },
-    deleteComment: (videoId, commentId) => del(`/videos/${videoId}/comments/${commentId}`),
+    deleteComment: (videoId, commentId) => {
+      if (_isUUID(String(videoId))) return Promise.resolve({});
+      return del(`/videos/${videoId}/comments/${commentId}`);
+    },
 
     // Watch Later / History — local (SOM state) for now; no backend required
-    toggleWatchLater: (id) => post(`/videos/${id}/watchlater`, {}).catch(() => ({ ok: true })),
+    toggleWatchLater: (id) => {
+      if (_isUUID(String(id))) return Promise.resolve({ ok: true });
+      return post(`/videos/${id}/watchlater`, {}).catch(() => ({ ok: true }));
+    },
     getWatchLater:    ()   => get('/videos/me/watchlater').catch(() => ({ videos: [] })),
-    updateHistory:    (id, position) => post(`/videos/${id}/history`, { position }).catch(() => ({})),
+    updateHistory:    (id, position) => {
+      if (_isUUID(String(id))) return Promise.resolve({});
+      return post(`/videos/${id}/history`, { position }).catch(() => ({}));
+    },
     getHistory:       ()   => get('/videos/me/history').catch(() => ({ videos: [] })),
-    deleteHistory:    (videoId) => del(`/videos/history/${videoId}`).catch(() => ({})),
+    deleteHistory:    (videoId) => {
+      if (_isUUID(String(videoId))) return Promise.resolve({});
+      return del(`/videos/history/${videoId}`).catch(() => ({}));
+    },
 
     // Channels
     channels: (params = {}) => {
@@ -656,18 +719,33 @@
     subscribeChannel: (id) => post(`/videos/channel/${id}/subscribe`, {}).catch(() => ({})),
 
     // Report
-    reportVideo: (id, reason, details) =>
-      post(`/videos/${id}/report`, { reason, details }).catch(() => ({})),
+    reportVideo: (id, reason, details) => {
+      if (_isUUID(String(id))) return Promise.resolve({});
+      return post(`/videos/${id}/report`, { reason, details }).catch(() => ({}));
+    },
 
     // Moderation
-    deleteVideo: (id) => del(`/videos/${id}`),
+    async deleteVideo(id) {
+      const sid = String(id);
+      if (_isUUID(sid)) {
+        // Supabase music_library row — route through backend to keep service-role key server-side
+        // Backend: DELETE /api/videos/library/:id (requires founder auth)
+        return del(`/videos/library/${sid}`);
+      }
+      // MongoDB-backed video
+      return del(`/videos/${sid}`);
+    },
     restoreVideo: (id) => put(`/videos/${id}/restore`, {}),
-    featureVideo: (id, featured = true) => put(`/videos/${id}/feature`, { featured }),
+    featureVideo: (id, featured = true) => {
+      if (_isUUID(String(id))) return Promise.resolve({ success: true });
+      return put(`/videos/${id}/feature`, { featured });
+    },
     suspendChannel: (id, reason) => put(`/videos/channel/${id}/suspend`, { reason }),
     unsuspendChannel: (id) => put(`/videos/channel/${id}/unsuspend`, {}),
 
     // Save metadata for a video already uploaded directly to Supabase Storage.
-    // Writes directly to the Supabase music_library table — no backend needed.
+    // Tries the backend /api/videos/save-meta first (saves to MongoDB for admin dashboard).
+    // Falls back to direct Supabase music_library insert when backend is not available.
     async saveMeta(data) {
       const user = LegendState.get('user');
       const uid  = user?.uid || user?.id || TokenStore.getAccess();
@@ -687,6 +765,26 @@
         throw err;
       }
 
+      // Try the backend first (stores in MongoDB — shows in admin dashboard)
+      if (BASE_URL) {
+        try {
+          const result = await post('/videos/save-meta', data);
+          if (result?.video) return { success: true, video: result.video };
+        } catch (backendErr) {
+          // If it's a config/auth/validation error, propagate immediately
+          if (backendErr.code === 'BACKEND_NOT_CONFIGURED' ||
+              backendErr.code === 'API_NOT_CONFIGURED' ||
+              backendErr.status === 401 ||
+              backendErr.status === 403 ||
+              backendErr.status === 422) {
+            throw backendErr;
+          }
+          // Network/server error — fall through to Supabase direct write
+          console.warn('[AVN] Backend save-meta failed, falling back to Supabase direct write:', backendErr.message);
+        }
+      }
+
+      // Direct Supabase music_library write (fallback when backend is unavailable)
       const VALID_CATEGORIES = ['movies','shows','music','short','gaming','education','comedy','other'];
       const VALID_VISIBILITY  = ['public','unlisted','private'];
 
@@ -1224,7 +1322,7 @@
   // ─── Admin API ────────────────────────────────────────────
   const AdminAPI = {
     async dashboard() {
-      // Require founder account (client-side gate — real check is FOUNDER_EMAIL match)
+      // Client-side role gate (UI only — server enforces real authorization via FOUNDER_EMAIL)
       const user = LegendState.get('user');
       if (!user) {
         const err = new Error('Not authenticated'); err.status = 401; err.code = 'UNAUTHORIZED'; throw err;
@@ -1233,46 +1331,8 @@
         const err = new Error('Access restricted to the authorized founder account');
         err.status = 403; err.code = 'FORBIDDEN'; throw err;
       }
-
-      // Count videos and audio in Supabase music_library
-      const [videoResp, audioResp] = await Promise.all([
-        fetch(`${SUPABASE_REST}/music_library?mime_type=like.video/*&select=id`, {
-          headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, Prefer: 'count=exact', Range: '0-0' },
-        }),
-        fetch(`${SUPABASE_REST}/music_library?mime_type=like.audio/*&select=id`, {
-          headers: { apikey: SUPABASE_SERVICE_KEY, Authorization: `Bearer ${SUPABASE_SERVICE_KEY}`, Prefer: 'count=exact', Range: '0-0' },
-        }),
-      ]);
-
-      // Parse Content-Range header: "0-0/42" → 42
-      const _count = (resp) => {
-        const cr = resp.headers.get('Content-Range') || '';
-        const m  = cr.match(/\/(\d+)$/);
-        return m ? parseInt(m[1]) : 0;
-      };
-
-      const videoCount = _count(videoResp);
-      const audioCount = _count(audioResp);
-
-      // User count from Firebase (count distinct UIDs in music_library as proxy)
-      let userCount = 0;
-      try {
-        const rows = await _sbFetch('/music_library?select=uid');
-        userCount = rows ? new Set(rows.map(r => r.uid)).size : 0;
-      } catch (_) {}
-
-      return {
-        success: true,
-        stats: {
-          users:      userCount,
-          posts:      0,
-          videos:     videoCount,
-          audio:      audioCount,
-          liveStreams: 0,
-          dbStatus:   { connected: true },
-          timestamp:  new Date().toISOString(),
-        },
-      };
+      // Always use the real backend — it has MongoDB stats, DB health, and live-stream counts
+      return get('/admin/dashboard');
     },
     users: (page, search) => get(`/admin/users?page=${page || 1}${search ? `&search=${encodeURIComponent(search)}` : ''}`),
     setRole: (userId, role) => put(`/admin/users/${userId}/role`, { role }),
@@ -1326,21 +1386,37 @@
   };
 
   // ─── Health ───────────────────────────────────────────────
-  // Checks reachability of the Supabase Edge Functions endpoint.
+  // Checks reachability of the backend and Supabase.
   const HealthAPI = {
     check: () => {
-      // Ping the Supabase REST endpoint — if it responds, the Edge Functions are reachable
-      return fetch(`${SUPABASE_PROJECT_URL}/rest/v1/`, {
-        method: 'HEAD',
-        headers: { apikey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpY3VpcXhra2Zib3Flenptc3F1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNTYxMDQsImV4cCI6MjEwNDkzMjEwNH0.tsYOyCI7skF6Otz2W0oNYhxM63-0551lrqIDCO8NoJo' },
-      })
-        .then(r => ({
-          status: (r.ok || r.status === 401 || r.status === 404) ? 'ok' : 'error',
-          service: 'Supabase Edge Functions',
-          supabaseProject: SUPABASE_PROJECT_URL,
-          httpStatus: r.status,
-        }))
-        .catch(e => ({ status: 'error', error: e.message }));
+      // Also ping the backend health endpoint if configured
+      const checks = [
+        // Supabase connectivity check (uses anon key — public)
+        fetch(`${SUPABASE_PROJECT_URL}/rest/v1/`, {
+          method: 'HEAD',
+          headers: { apikey: SUPABASE_ANON_KEY },
+        })
+          .then(r => ({
+            service:        'Supabase',
+            status:         (r.ok || r.status === 401 || r.status === 404) ? 'ok' : 'error',
+            supabaseProject: SUPABASE_PROJECT_URL,
+            httpStatus:     r.status,
+          }))
+          .catch(e => ({ service: 'Supabase', status: 'error', error: e.message })),
+      ];
+      // Backend health check (if configured)
+      if (BASE_URL) {
+        checks.push(
+          fetch(`${BASE_URL}/health`)
+            .then(r => r.json())
+            .then(d => ({ service: 'Backend', status: d.status || 'ok', config: d.config }))
+            .catch(e => ({ service: 'Backend', status: 'error', error: e.message }))
+        );
+      }
+      return Promise.all(checks).then(results => ({
+        status: results.every(r => r.status === 'ok') ? 'ok' : 'degraded',
+        services: results,
+      }));
     },
   };
 

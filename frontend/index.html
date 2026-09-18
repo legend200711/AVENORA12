@@ -310,8 +310,10 @@
                          location.hostname === '127.0.0.1' ||
                          location.hostname === '0.0.0.0';
 
-      // ▼▼▼ EDIT THIS LINE — replace with your actual deployed backend URL ▼▼▼
-      var _productionApiUrl  = 'https://api.avenora.app';   // ← REPLACE WITH REAL URL
+      // ▼▼▼ PRODUCTION BACKEND URL ▼▼▼
+      // Render service name: avenora-backend → https://avenora-backend.onrender.com
+      // If your Render URL is different, update this line and redeploy.
+      var _productionApiUrl  = 'https://avenora-backend.onrender.com';
       // ▲▲▲ DO NOT include /api — api.js adds it automatically ▲▲▲
 
       var _developmentApiUrl = 'http://localhost:3001';
