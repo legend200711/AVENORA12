@@ -706,12 +706,54 @@
     async deleteVideo(id) {
       const sid = String(id);
       if (_isUUID(sid)) {
-        // Supabase music_library row — route through backend to keep service-role key server-side
-        // Backend: DELETE /api/videos/library/:id (requires founder auth)
-        return del(`/videos/library/${sid}`);
+        // Supabase music_library row — delete directly using anon key.
+        // Supabase RLS must allow DELETE for the row owner (uid == auth.uid).
+        // The anon key is used here; Supabase validates via the JWT claim if needed.
+        // We also attempt to delete the storage object from the 'videos' bucket.
+        let storagePathToDelete = null;
+        try {
+          // Fetch the row first so we know the storage_path to clean up
+          const rows = await _sbFetch(`/music_library?id=eq.${encodeURIComponent(sid)}&limit=1`);
+          if (Array.isArray(rows) && rows.length > 0) {
+            storagePathToDelete = rows[0].storage_path || null;
+          }
+        } catch (_) {}
+
+        // Delete from music_library table
+        await _sbFetch(`/music_library?id=eq.${encodeURIComponent(sid)}`, {
+          method: 'DELETE',
+          prefer: 'return=minimal',
+        });
+
+        // Best-effort: delete the storage object (non-fatal if it fails)
+        if (storagePathToDelete) {
+          try {
+            const bucket = storagePathToDelete.startsWith('stream-media/') ? 'stream-media' : 'videos';
+            const objectPath = storagePathToDelete.replace(/^(videos|stream-media)\//, '');
+            await fetch(`${SUPABASE_PROJECT_URL}/storage/v1/object/${bucket}/${objectPath}`, {
+              method: 'DELETE',
+              headers: {
+                'apikey': SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
+              },
+            });
+          } catch (_) {}
+        }
+
+        return { success: true };
       }
-      // MongoDB-backed video
-      return del(`/videos/${sid}`);
+
+      // Firestore-backed video (non-UUID id)
+      try {
+        const db = await window.AvenoraFirebase.getFirestore();
+        const { doc: fsDoc, deleteDoc } = await import(
+          `https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`
+        );
+        await deleteDoc(fsDoc(db, 'videos', sid));
+        return { success: true };
+      } catch (err) {
+        throw new Error(err.message || 'Could not delete video from Firestore.');
+      }
     },
     restoreVideo: (id) => put(`/videos/${id}/restore`, {}),
     featureVideo: (id, featured = true) => {
@@ -1340,46 +1382,370 @@
     system: () => get('/admin/system'),
   };
 
-  // ─── Founder Theme API ────────────────────────────────────
-  const FounderThemeAPI = {
-    list:           ()              => get('/admin/themes'),
-    published:      ()              => get('/admin/themes/published'),
-    history:        ()              => get('/admin/themes/history'),
-    get:            (id)            => get(`/admin/themes/${id}`),
-    create:         (data)          => post('/admin/themes', data),
-    update:         (id, data)      => put(`/admin/themes/${id}`, data),
-    publish:        (id)            => post(`/admin/themes/${id}/publish`, {}),
-    rollback:       (id)            => post(`/admin/themes/${id}/rollback`, {}),
-    delete:         (id)            => del(`/admin/themes/${id}`),
-    // Public endpoint — no auth required, used on every page load
-    active: () => {
-      if (!BASE_URL) return Promise.resolve({ success: false, theme: null });
-      return fetch(`${BASE_URL}/themes/active`).then(r => r.json()).catch(() => ({ success: false, theme: null }));
-    },
-  };
+  // ─── Founder Theme API — backed by Firestore founderThemes collection ────
+  //
+  // Schema (founderThemes/{id}):
+  //   name       string
+  //   tokens     object   — design token map
+  //   notes      string
+  //   presetKey  string
+  //   status     'draft' | 'published' | 'archived'
+  //   createdAt  ISO string
+  //   updatedAt  ISO string
+  //   publishedAt ISO string (when status == 'published')
+  //
+  // founderThemes/active is a pointer { themeId, tokens, name }
+  // readable by all for themeService to load the published theme.
+  const FounderThemeAPI = (() => {
+    const _FS = `https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`;
 
-  // ─── Cloud Stream API ─────────────────────────────────────
-  const CloudStreamAPI = {
-    status:         ()              => get('/admin/cloud-stream/status'),
-    queue:          ()              => get('/admin/cloud-stream/queue'),
-    media:          ()              => get('/admin/cloud-stream/media'),
-    start:          ()              => post('/admin/cloud-stream/start', {}),
-    stop:           ()              => post('/admin/cloud-stream/stop', {}),
-    pause:          ()              => post('/admin/cloud-stream/pause', {}),
-    resume:         ()              => post('/admin/cloud-stream/resume', {}),
-    skip:           ()              => post('/admin/cloud-stream/skip', {}),
-    refresh:        ()              => post('/admin/cloud-stream/refresh', {}),
-    addToQueue:     (files)         => post('/admin/cloud-stream/queue/add', { files }),
-    removeFromQueue:(index)         => del(`/admin/cloud-stream/queue/${index}`),
-    reorderQueue:   (from, to)      => put('/admin/cloud-stream/queue/reorder', { from, to }),
-    clearQueue:     ()              => del('/admin/cloud-stream/queue'),
-    setSettings: (shuffle, repeat) => {
-      const body = {};
-      if (shuffle !== undefined) body.shuffle = shuffle;
-      if (repeat  !== undefined) body.repeat  = repeat;
-      return put('/admin/cloud-stream/settings', body);
-    },
-  };
+    async function _m() {
+      const db = await window.AvenoraFirebase.getFirestore();
+      const m  = await import(_FS);
+      return { db, ...m };
+    }
+
+    function _doc(raw, id) {
+      return {
+        _id: id, id,
+        name: raw.name || 'Untitled',
+        tokens: raw.tokens || {},
+        notes: raw.notes || '',
+        presetKey: raw.presetKey || null,
+        status: raw.status || 'draft',
+        createdAt: raw.createdAt || null,
+        updatedAt: raw.updatedAt || null,
+        publishedAt: raw.publishedAt || null,
+      };
+    }
+
+    return {
+      async list() {
+        const { db, collection, query, orderBy, getDocs } = await _m();
+        const snap = await getDocs(query(collection(db, 'founderThemes'), orderBy('updatedAt', 'desc')));
+        const themes = snap.docs.filter(d => d.id !== 'active').map(d => _doc(d.data(), d.id));
+        return { themes };
+      },
+
+      async published() {
+        const { db, doc: fsDoc, getDoc } = await _m();
+        const activeSnap = await getDoc(fsDoc(db, 'founderThemes', 'active'));
+        if (!activeSnap.exists()) return { theme: null };
+        const active = activeSnap.data();
+        if (!active.themeId) return { theme: null };
+        const ts = await getDoc(fsDoc(db, 'founderThemes', active.themeId));
+        if (!ts.exists()) return { theme: { _id: active.themeId, name: active.name || 'Theme', tokens: active.tokens || {} } };
+        return { theme: _doc(ts.data(), ts.id) };
+      },
+
+      async history() {
+        const { db, collection, query, where, orderBy, getDocs } = await _m();
+        const snap = await getDocs(query(
+          collection(db, 'founderThemes'),
+          where('status', '==', 'published'),
+          orderBy('publishedAt', 'desc')
+        ));
+        return { themes: snap.docs.filter(d => d.id !== 'active').map(d => _doc(d.data(), d.id)) };
+      },
+
+      async get(id) {
+        const { db, doc: fsDoc, getDoc } = await _m();
+        const snap = await getDoc(fsDoc(db, 'founderThemes', id));
+        if (!snap.exists()) throw new Error('Theme not found');
+        return { theme: _doc(snap.data(), snap.id) };
+      },
+
+      async create(data) {
+        const { db, collection, addDoc } = await _m();
+        const now = new Date().toISOString();
+        const row = {
+          name: String(data.name || 'Untitled').slice(0, 120),
+          tokens: data.tokens || {},
+          notes: String(data.notes || '').slice(0, 1000),
+          presetKey: data.presetKey || null,
+          status: 'draft',
+          createdAt: now,
+          updatedAt: now,
+        };
+        const ref = await addDoc(collection(db, 'founderThemes'), row);
+        return { theme: _doc(row, ref.id) };
+      },
+
+      async update(id, data) {
+        const { db, doc: fsDoc, updateDoc } = await _m();
+        const patch = { updatedAt: new Date().toISOString() };
+        if (data.name   !== undefined) patch.name   = String(data.name).slice(0, 120);
+        if (data.tokens !== undefined) patch.tokens = data.tokens;
+        if (data.notes  !== undefined) patch.notes  = String(data.notes).slice(0, 1000);
+        await updateDoc(fsDoc(db, 'founderThemes', id), patch);
+        return { theme: { _id: id, ...patch } };
+      },
+
+      async publish(id) {
+        const { db, doc: fsDoc, getDoc, updateDoc, setDoc } = await _m();
+        const snap = await getDoc(fsDoc(db, 'founderThemes', id));
+        if (!snap.exists()) throw new Error('Theme not found');
+        const themeData = snap.data();
+        const now = new Date().toISOString();
+        await updateDoc(fsDoc(db, 'founderThemes', id), { status: 'published', publishedAt: now, updatedAt: now });
+        await setDoc(fsDoc(db, 'founderThemes', 'active'), {
+          themeId: id, name: themeData.name || 'Theme',
+          tokens: themeData.tokens || {}, publishedAt: now,
+        });
+        return { success: true };
+      },
+
+      async rollback(id) { return this.publish(id); },
+
+      async delete(id) {
+        const { db, doc: fsDoc, getDoc, deleteDoc } = await _m();
+        const activeSnap = await getDoc(fsDoc(db, 'founderThemes', 'active'));
+        if (activeSnap.exists() && activeSnap.data().themeId === id) {
+          throw new Error('Cannot delete the currently published theme. Publish another theme first.');
+        }
+        await deleteDoc(fsDoc(db, 'founderThemes', id));
+        return { success: true };
+      },
+
+      async active() {
+        try {
+          const { db, doc: fsDoc, getDoc } = await _m();
+          const snap = await getDoc(fsDoc(db, 'founderThemes', 'active'));
+          if (!snap.exists()) return { success: false, theme: null };
+          const d = snap.data();
+          return { success: true, theme: { _id: d.themeId, name: d.name, tokens: d.tokens } };
+        } catch { return { success: false, theme: null }; }
+      },
+    };
+  })();
+
+  // ─── Cloud Stream Admin API — backed by Firestore cloudStreams collection ──
+  //
+  // The Founder Control Cloud Stream panel shows live stream status and lets
+  // the Founder manage active streams. All operations are direct Firestore writes
+  // to cloudStreams/{streamId} — no backend server required.
+  //
+  // Collections:
+  //   cloudStreams/{streamId}          — broadcast record
+  //   studioCloudStreamMusic/{id}      — live Now Playing
+  //   music_library (Supabase)         — audio files for the media list
+  const CloudStreamAPI = (() => {
+    const _FS = `https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`;
+
+    async function _m() {
+      const db = await window.AvenoraFirebase.getFirestore();
+      const m  = await import(_FS);
+      return { db, ...m };
+    }
+
+    function _buildStatus(streams) {
+      if (!streams.length) {
+        return {
+          state: 'stopped', running: false, paused: false,
+          currentTrack: null, nextTrack: null, queueSize: 0,
+          consecutiveErrors: 0, lastActivity: null,
+          mediaDir: '(Supabase Storage — stream-media bucket)',
+          shuffle: false, repeat: false,
+          rtmpConfigured: false, rtmpTargetCount: 0,
+          ffmpeg: { available: true },
+          recentErrors: [],
+        };
+      }
+      const s = streams[0];
+      const qLen = Array.isArray(s.queue) ? s.queue.length : 0;
+      return {
+        state: s.status === 'active' ? 'running' : (s.status === 'paused' ? 'paused' : 'stopped'),
+        running: s.status === 'active',
+        paused:  s.status === 'paused',
+        currentTrack: s.nowPlaying?.title || s.currentTrack || null,
+        nextTrack: (Array.isArray(s.queue) && s.queue.length > 1)
+          ? (typeof s.queue[1] === 'string' ? s.queue[1] : s.queue[1]?.title || null) : null,
+        queueSize: qLen,
+        consecutiveErrors: s.errorCount || 0,
+        lastActivity: s.updatedAt || s.startedAt || null,
+        mediaDir: '(Supabase Storage — stream-media bucket)',
+        shuffle: s.shuffle || false,
+        repeat:  s.repeat  || false,
+        rtmpConfigured: !!(s.rtmpUrl),
+        rtmpTargetCount: s.rtmpUrl ? 1 : 0,
+        ffmpeg: { available: true },
+        recentErrors: s.recentErrors || [],
+        _streamId: s._id,
+        _uid: s.uid,
+      };
+    }
+
+    async function _getActive() {
+      const { db, collection, query, where, orderBy, limit: fsLimit, getDocs } = await _m();
+      const snap = await getDocs(query(
+        collection(db, 'cloudStreams'),
+        where('status', 'in', ['active', 'paused', 'starting', 'recovering']),
+        orderBy('startedAt', 'desc'),
+        fsLimit(10)
+      ));
+      return snap.docs.map(d => ({ _id: d.id, ...d.data() }));
+    }
+
+    async function _getAll(lim) {
+      const { db, collection, query, orderBy, limit: fsLimit, getDocs } = await _m();
+      const snap = await getDocs(query(
+        collection(db, 'cloudStreams'),
+        orderBy('startedAt', 'desc'),
+        fsLimit(lim || 10)
+      ));
+      return snap.docs.map(d => ({ _id: d.id, ...d.data() }));
+    }
+
+    async function _founderStream() {
+      const user = LegendState.get('user');
+      if (!user) throw new Error('Not authenticated');
+      const uid = user.uid || user.id;
+      const streams = await _getActive();
+      return streams.find(s => s.uid === uid) || null;
+    }
+
+    async function _updateStream(streamId, patch) {
+      const { db, doc: fsDoc, updateDoc } = await _m();
+      await updateDoc(fsDoc(db, 'cloudStreams', streamId), { ...patch, updatedAt: new Date().toISOString() });
+      return { success: true };
+    }
+
+    return {
+      async status() {
+        const active = await _getActive();
+        const streams = active.length ? active : await _getAll(5);
+        return { status: _buildStatus(streams) };
+      },
+
+      async queue() {
+        const active = await _getActive();
+        if (!active.length) return { queue: [] };
+        const s = active[0];
+        const q = (Array.isArray(s.queue) ? s.queue : []).map((item, i) => ({
+          name: typeof item === 'string' ? item : (item.title || item.name || `Track ${i + 1}`),
+          active: i === 0 && s.status === 'active',
+          url: (item && item.url) || (item && item.fileUrl) || null,
+        }));
+        return { queue: q };
+      },
+
+      async media() {
+        try {
+          const rows = await _sbFetch(
+            `/music_library?mime_type=like.audio/*&order=uploaded_at.desc&limit=50`
+          ).catch(() => []);
+          const files = (Array.isArray(rows) ? rows : []).map(r => ({
+            name: r.original_name || r.title || (r.storage_path || '').split('/').pop() || 'track',
+            url: r.file_url,
+            storagePath: r.storage_path,
+          }));
+          return { files };
+        } catch (err) {
+          console.error('[AVN] CloudStreamAPI.media error:', err);
+          return { files: [] };
+        }
+      },
+
+      async start() {
+        const user = LegendState.get('user');
+        if (!user) throw new Error('Not authenticated');
+        const uid = user.uid || user.id;
+        const { db, collection, addDoc } = await _m();
+        const now = new Date().toISOString();
+        const ref = await addDoc(collection(db, 'cloudStreams'), {
+          uid, status: 'active',
+          title: 'Avenora 24-Hour Cloud Stream',
+          startedAt: now, updatedAt: now,
+          queue: [], shuffle: false, repeat: true,
+          errorCount: 0, recentErrors: [],
+        });
+        return { success: true, streamId: ref.id };
+      },
+
+      async stop() {
+        const s = await _founderStream();
+        if (!s) return { success: true };
+        await _updateStream(s._id, { status: 'stopped', stoppedAt: new Date().toISOString() });
+        return { success: true };
+      },
+
+      async pause() {
+        const s = await _founderStream();
+        if (!s) throw new Error('No active stream');
+        await _updateStream(s._id, { status: 'paused' });
+        return { success: true };
+      },
+
+      async resume() {
+        const s = await _founderStream();
+        if (!s) throw new Error('No paused stream');
+        await _updateStream(s._id, { status: 'active' });
+        return { success: true };
+      },
+
+      async skip() {
+        const s = await _founderStream();
+        if (!s) throw new Error('No active stream');
+        const queue = Array.isArray(s.queue) ? s.queue.slice(1) : [];
+        await _updateStream(s._id, { queue });
+        return { success: true };
+      },
+
+      async refresh() {
+        try {
+          const rows = await _sbFetch(`/music_library?mime_type=like.audio/*&select=id`).catch(() => []);
+          return { playlistSize: Array.isArray(rows) ? rows.length : 0 };
+        } catch { return { playlistSize: 0 }; }
+      },
+
+      async addToQueue(files) {
+        if (!Array.isArray(files) || !files.length) return { added: [] };
+        const s = await _founderStream();
+        if (!s) throw new Error('No active stream');
+        const queue = Array.isArray(s.queue) ? [...s.queue] : [];
+        const added = [];
+        for (const f of files) { if (typeof f === 'string') { queue.push(f); added.push(f); } }
+        await _updateStream(s._id, { queue });
+        return { added };
+      },
+
+      async removeFromQueue(index) {
+        const s = await _founderStream();
+        if (!s) throw new Error('No active stream');
+        const queue = Array.isArray(s.queue) ? [...s.queue] : [];
+        queue.splice(index, 1);
+        await _updateStream(s._id, { queue });
+        return { success: true };
+      },
+
+      async reorderQueue(from, to) {
+        const s = await _founderStream();
+        if (!s) throw new Error('No active stream');
+        const queue = Array.isArray(s.queue) ? [...s.queue] : [];
+        const [item] = queue.splice(from, 1);
+        queue.splice(to, 0, item);
+        await _updateStream(s._id, { queue });
+        return { success: true };
+      },
+
+      async clearQueue() {
+        const s = await _founderStream();
+        if (!s) return { success: true };
+        await _updateStream(s._id, { queue: [] });
+        return { success: true };
+      },
+
+      async setSettings(shuffle, repeat) {
+        const s = await _founderStream();
+        if (!s) throw new Error('No active stream');
+        const patch = {};
+        if (shuffle !== undefined) patch.shuffle = shuffle;
+        if (repeat  !== undefined) patch.repeat  = repeat;
+        await _updateStream(s._id, patch);
+        return { success: true };
+      },
+    };
+  })();
 
   // ─── Health ───────────────────────────────────────────────
   // Checks reachability of the backend and Supabase.

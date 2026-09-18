@@ -98,18 +98,18 @@ service cloud.firestore {
     }
 
     // ── Site Settings (kill-switches, feature flags) ───────
-    // Read by anyone; only writable by founder/admin via the backend.
+    // Read by anyone; writable by founder/admin directly.
     match /siteSettings/{docId} {
       allow read: if true;
-      allow write: if false; // managed exclusively by the backend / Founder Control Center
+      allow write: if isFounderOrAdmin();
     }
 
     // ── Founder Themes ─────────────────────────────────────
-    // No ordinary user or moderator may read, write, or list founder themes.
-    // Theme tokens are served from the backend API (/api/themes/active)
-    // which applies its own validation — no direct Firestore access needed.
+    // Managed directly from the browser by founder/admin (Firebase + Supabase architecture).
+    // Active theme doc (id == 'active') is readable by all so themeService can load it.
     match /founderThemes/{themeId} {
-      allow read, write: if false; // managed exclusively by the backend
+      allow read: if themeId == 'active' || isFounderOrAdmin();
+      allow write: if isFounderOrAdmin();
     }
 
     // ── Videos ────────────────────────────────────────────
@@ -186,6 +186,11 @@ service cloud.firestore {
       return request.auth != null
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
            in ['moderator', 'admin', 'founder'];
+    }
+    function isFounderOrAdmin() {
+      return request.auth != null
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+           in ['admin', 'founder'];
     }
   }
 }

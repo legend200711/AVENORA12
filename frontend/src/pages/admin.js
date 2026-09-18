@@ -144,8 +144,16 @@ async function _fsUsers(limitCount = 50, search = '') {
   } else {
     q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(limitCount));
   }
-  const snap = await getDocs(q);
-  return snap.docs.map(d => ({ _id: d.id, id: d.id, ...d.data() }));
+  try {
+    const snap = await getDocs(q);
+    return snap.docs.map(d => ({ _id: d.id, id: d.id, ...d.data() }));
+  } catch (queryErr) {
+    // Firestore may throw if the composite index for createdAt doesn't exist yet.
+    // Fall back to a simple unordered query so the Users panel still renders.
+    console.warn('[AVN] _fsUsers ordered query failed, falling back to unordered:', queryErr.message);
+    const snap = await getDocs(query(collection(db, 'users'), limit(limitCount)));
+    return snap.docs.map(d => ({ _id: d.id, id: d.id, ...d.data() }));
+  }
 }
 
 async function renderAdminDashboard(container) {
@@ -624,14 +632,19 @@ async function renderAdminCloudStream(container) {
 
     if (error) {
       console.error('[AVN] Cloud stream admin error:', error);
+      const errMsg = error.message || 'Unknown error';
+      const isPermission = errMsg.includes('permission') || errMsg.includes('Missing or insufficient');
       container.innerHTML = `
         <h2 style="font-family:var(--font-display);letter-spacing:0.1em;margin-bottom:var(--space-xl);color:var(--neon-green)">
           ☁️ 24-HOUR CLOUD STREAM
         </h2>
         <div class="error-state">
           <div class="error-icon">⚠️</div>
-          <h3>Service Unavailable</h3>
-          <p>Cloud Stream data could not be loaded. Check your connection and try again.</p>
+          <h3>${isPermission ? 'Permission Denied' : 'Could Not Load Stream Data'}</h3>
+          <p>${isPermission
+            ? 'Firestore security rules denied access. Ensure your account has the "founder" or "admin" role in the users collection.'
+            : escapeHtml(errMsg)
+          }</p>
           <button class="btn btn-outline" onclick="adminSection('cloudstream')">Retry</button>
         </div>
       `;

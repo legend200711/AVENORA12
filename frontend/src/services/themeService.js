@@ -137,17 +137,31 @@
     }
   }
 
-  // ── Load from server, apply, cache ───────────────────────
+  // ── Load from Firestore, apply, cache ─────────────────────
+  // Reads founderThemes/active — the publicly-readable pointer doc written
+  // by FounderThemeAPI.publish(). No backend URL required.
   async function loadAndApplyActive() {
     try {
-      const BASE = (window.LU_CONFIG && window.LU_CONFIG.apiUrl) || null;
-      if (!BASE) return; // API not configured — keep cached theme
-      const res  = await fetch(`${BASE}/themes/active`);
-      if (!res.ok) return;
-      const data = await res.json();
-      if (data.theme && data.theme.tokens) {
-        applyTokens(data.theme.tokens);
-        _saveCache(data.theme);
+      // Wait for Firebase to be ready (may not be initialised yet on first load)
+      let fb = window.AvenoraFirebase;
+      if (!fb) {
+        for (let i = 0; i < 20 && !fb; i++) {
+          await new Promise(r => setTimeout(r, 200));
+          fb = window.AvenoraFirebase;
+        }
+      }
+      if (!fb) return; // Firebase not available — keep cached theme
+
+      const db = await fb.getFirestore();
+      const { doc: fsDoc, getDoc } = await import(
+        'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js'
+      );
+      const snap = await getDoc(fsDoc(db, 'founderThemes', 'active'));
+      if (!snap.exists()) return; // No published theme yet
+      const active = snap.data();
+      if (active && active.tokens) {
+        applyTokens(active.tokens);
+        _saveCache({ _id: active.themeId, name: active.name, tokens: active.tokens });
         // Tell the companion to re-check Easter egg visibility now that the
         // cache is up-to-date with the new easterEggEnabled value.
         if (window.AVNCompanion?.refreshEasterEgg) {
