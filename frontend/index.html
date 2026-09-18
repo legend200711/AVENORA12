@@ -21,13 +21,15 @@
   <link rel="icon" type="image/svg+xml" href="icons/icon-192.svg">
   <link rel="apple-touch-icon" href="icons/icon-192.svg">
 
-  <!-- Google Fonts: Cinzel (Gothic Egyptian display) + Rajdhani (fallback) -->
+  <!-- Google Fonts: Cinzel (display) + Inter (body) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Rajdhani:wght@400;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
 
   <!-- Core Styles -->
   <link rel="stylesheet" href="src/styles/theme.css">
+  <!-- AVENORA COSMIC DESIGN SYSTEM — must load before page-specific styles -->
+  <link rel="stylesheet" href="src/styles/avenora-cosmic.css">
   <link rel="stylesheet" href="src/styles/visual.css">
   <link rel="stylesheet" href="src/styles/social.css">
   <link rel="stylesheet" href="src/styles/midnight.css">
@@ -52,10 +54,14 @@
   <!-- Skip navigation link for keyboard users -->
   <a href="#main-content" class="skip-to-main">Skip to main content</a>
 
-  <!-- ═══════ VISUAL BACKGROUND ═══════════════════════════════ -->
-  <div class="visual-bg" id="visual-bg">
+  <!-- ═══════ COSMIC BACKGROUND ══════════════════════════════ -->
+  <!-- Deep-space starfield, nebula, planet decorations — CSS-only -->
+  <div class="visual-bg" id="visual-bg" aria-hidden="true">
     <canvas class="visual-canvas" id="canvas-stars"></canvas>
-    <canvas class="visual-canvas" id="canvas-rain" style="opacity:0.4"></canvas>
+    <canvas class="visual-canvas" id="canvas-rain" style="opacity:0.25"></canvas>
+    <!-- Decorative planets — CSS only, no images -->
+    <div style="position:absolute;top:-60px;right:-60px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle at 35% 35%, rgba(201,168,76,0.10) 0%, rgba(100,60,10,0.06) 45%, transparent 70%);border:1px solid rgba(201,168,76,0.08);pointer-events:none"></div>
+    <div style="position:absolute;bottom:10%;left:-80px;width:160px;height:160px;border-radius:50%;background:radial-gradient(circle at 40% 40%, rgba(0,204,255,0.07) 0%, rgba(0,80,160,0.04) 45%, transparent 70%);border:1px solid rgba(0,204,255,0.07);pointer-events:none"></div>
     <div id="eclipse-mount"></div>
   </div>
 
@@ -65,30 +71,30 @@
       ←
     </button>
 
-    <a href="#hub" class="nav-brand" aria-label="Avenora Home" style="display:flex;flex-direction:column;line-height:1.1">
-      <span>AVENORA</span>
-      <span id="nav-subtitle" style="font-size:0.6rem;letter-spacing:0.25em;color:var(--avenora-bronze);font-weight:600;opacity:0.85">HOME</span>
+    <a href="#hub" class="nav-brand" aria-label="Avenora Home" style="display:flex;flex-direction:column;line-height:1.15;text-decoration:none">
+      <span style="font-family:var(--font-display);font-size:1.05rem;font-weight:900;letter-spacing:0.18em;background:linear-gradient(135deg,#ffd060 0%,#f0e8d8 45%,#c9a84c 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 8px rgba(201,168,76,0.45))">AVENORA</span>
+      <span id="nav-subtitle" style="font-size:0.52rem;letter-spacing:0.28em;color:rgba(201,168,76,0.70);font-family:var(--font-display);font-weight:600;text-transform:uppercase">HOME</span>
     </a>
 
     <!-- Desktop nav links -->
     <ul class="nav-links" role="list" id="nav-links">
-      <li><a href="#hub" class="nav-link" data-page="hub">HOME</a></li>
+      <li><a href="#hub"    class="nav-link" data-page="hub">HOME</a></li>
       <li><a href="#social" class="nav-link" data-page="social">FEED</a></li>
-      <li><a href="#video" class="nav-link" data-page="video">VIDEO</a></li>
-      <li><a href="#live" class="nav-link" data-page="live">LIVE</a></li>
-      <li><a href="#dj" class="nav-link" data-page="dj">DJ SYSTEM</a></li>
-      <li><a href="#music" class="nav-link" data-page="music">MUSIC HUB</a></li>
+      <li><a href="#video"  class="nav-link" data-page="video">VIDEO</a></li>
+      <li><a href="#live"   class="nav-link" data-page="live">LIVE</a></li>
+      <li><a href="#dj"     class="nav-link" data-page="dj">DJ</a></li>
+      <li><a href="#music"  class="nav-link" data-page="music">MUSIC</a></li>
       <li><a href="#arcade" class="nav-link" data-page="arcade">ARCADE</a></li>
-      <li><a href="#chat" class="nav-link" data-page="chat">CHAT</a></li>
+      <li><a href="#chat"   class="nav-link" data-page="chat">CHAT</a></li>
       <li><a href="#gallery" class="nav-link" data-page="gallery">GALLERY</a></li>
     </ul>
 
     <!-- Desktop search -->
-    <div class="search-bar nav-search-desktop" style="width:220px" id="search-bar-desktop">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+    <div class="search-bar nav-search-desktop" style="width:200px" id="search-bar-desktop">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
         <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
       </svg>
-      <input type="search" placeholder="Search..." id="search-input-desktop" aria-label="Search">
+      <input type="search" placeholder="Search Avenora…" id="search-input-desktop" aria-label="Search">
     </div>
 
     <!-- Nav action buttons -->
@@ -101,14 +107,14 @@
       <!-- Notifications -->
       <div class="dropdown" id="notif-dropdown" style="position:relative">
         <button class="btn btn-ghost btn-sm" id="btn-notif" aria-label="Notifications" aria-expanded="false" aria-haspopup="true">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
           <span class="notif-badge hidden" id="notif-badge">0</span>
         </button>
         <div class="dropdown-menu hidden" id="notif-menu" role="menu" aria-label="Notifications">
-          <div id="notif-list" style="max-height:300px;overflow-y:auto;min-width:280px">
-            <p style="padding:12px;color:var(--text-muted);font-size:0.85rem;text-align:center">No notifications</p>
+          <div id="notif-list" style="max-height:300px;overflow-y:auto;min-width:290px">
+            <p style="padding:14px;color:var(--cs-text-muted,#8a8090);font-size:0.82rem;text-align:center">No notifications</p>
           </div>
-          <div style="padding:8px;border-top:1px solid var(--border-subtle)">
+          <div style="padding:8px;border-top:1px solid var(--cs-border-panel,rgba(201,168,76,0.10))">
             <button class="btn btn-ghost btn-sm w-full" onclick="LegendAPI.notifications.markAllRead().then(loadNotifications)">Mark all read</button>
           </div>
         </div>
@@ -117,13 +123,13 @@
       <!-- User menu (shown when logged in) -->
       <div class="dropdown" id="user-dropdown" style="display:none;position:relative">
         <button class="btn btn-ghost btn-sm" id="btn-user-menu" aria-label="User menu" aria-expanded="false" aria-haspopup="true" style="display:flex;align-items:center;gap:6px">
-          <div id="nav-avatar" style="width:28px;height:28px;border-radius:50%;background:var(--bg-elevated);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700"></div>
-          <span id="nav-username" style="font-size:0.85rem;font-weight:600;max-width:100px" class="truncate desktop-only"></span>
+          <div id="nav-avatar" style="width:30px;height:30px;border-radius:50%;background:rgba(201,168,76,0.12);border:1px solid rgba(201,168,76,0.28);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;box-shadow:0 0 8px rgba(201,168,76,0.20)"></div>
+          <span id="nav-username" style="font-size:0.82rem;font-weight:600;max-width:90px;color:var(--cs-text,#f0e8d8)" class="truncate desktop-only"></span>
         </button>
         <div class="dropdown-menu hidden" id="user-menu" role="menu">
           <a class="dropdown-item" href="#profile" data-page="profile">👤 My Profile</a>
           <a class="dropdown-item" href="#settings" data-page="settings">⚙️ Settings</a>
-          <a class="dropdown-item" href="#customize" data-page="customize">✦ Customize Avenora</a>
+          <a class="dropdown-item" href="#customize" data-page="customize">✦ Customize</a>
           <div class="divider"></div>
           <a class="dropdown-item" id="admin-link" href="#admin" data-page="admin" style="display:none">🛡️ Founder Control</a>
           <button class="dropdown-item danger" id="btn-logout" onclick="handleLogout()">🚪 Sign Out</button>
@@ -156,31 +162,31 @@
     <ul class="mobile-nav-items" role="list">
       <li>
         <a href="#hub" class="mobile-nav-item" data-page="hub">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
           HOME
         </a>
       </li>
       <li>
         <a href="#social" class="mobile-nav-item" data-page="social">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           FEED
         </a>
       </li>
       <li>
         <a href="#video" class="mobile-nav-item" data-page="video">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
           VIDEO
         </a>
       </li>
       <li>
         <a href="#arcade" class="mobile-nav-item" data-page="arcade">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><circle cx="16.5" cy="11" r="0.5" fill="currentColor"/><circle cx="18.5" cy="13" r="0.5" fill="currentColor"/><path d="M11.5 17H13a2 2 0 0 0 2-2v-1a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h6"/></svg>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><circle cx="16.5" cy="11" r="0.5" fill="currentColor"/><circle cx="18.5" cy="13" r="0.5" fill="currentColor"/><path d="M11.5 17H13a2 2 0 0 0 2-2v-1a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h6"/></svg>
           ARCADE
         </a>
       </li>
       <li>
         <a href="#chat" class="mobile-nav-item" data-page="chat" style="position:relative">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
           CHAT
           <span id="chat-nav-unread-badge" class="chat-nav-badge" style="display:none">0</span>
         </a>
@@ -195,7 +201,7 @@
   <div id="auth-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
     <div class="modal" style="max-width:420px">
       <div class="modal-header">
-        <h3 id="auth-modal-title" style="margin:0;font-family:var(--font-display);letter-spacing:0.12em;background:linear-gradient(135deg,var(--avenora-gold),var(--avenora-ivory),var(--avenora-bronze));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">AVENORA</h3>
+        <h3 id="auth-modal-title" style="margin:0;font-family:var(--font-display);letter-spacing:0.16em;font-size:1.1rem;background:linear-gradient(135deg,#ffd060 0%,#f0e8d8 45%,#c9a84c 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 8px rgba(201,168,76,0.40))">AVENORA</h3>
         <button class="btn btn-ghost btn-sm" onclick="Modal.close('auth-modal')" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">

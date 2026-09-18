@@ -1452,3 +1452,86 @@ svg {
     user-select: none;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC MOBILE ENHANCEMENTS — avenora-cosmic.css overrides
+   Applied after main responsive rules for maximum specificity
+   ═══════════════════════════════════════════════════════════ */
+
+/* Cosmic mobile nav — active item golden glow */
+.mobile-nav-item.active {
+  color: var(--cs-gold, #c9a84c) !important;
+  filter: drop-shadow(0 0 8px rgba(201,168,76,0.55)) !important;
+}
+
+/* Upload zones — cosmic styling on touch devices */
+@media (hover: none) {
+  .midnight-upload-zone,
+  .music-upload-zone {
+    -webkit-tap-highlight-color: rgba(201,168,76,0.18);
+    user-select: none;
+    border-color: rgba(201,168,76,0.18);
+  }
+
+  .midnight-upload-zone:active,
+  .music-upload-zone:active {
+    border-color: rgba(201,168,76,0.40);
+    background: rgba(201,168,76,0.06);
+  }
+}
+
+/* Admin sidebar on mobile — cosmic border */
+@media (max-width: 767px) {
+  .admin-tabs-mobile {
+    border-bottom: 1px solid rgba(201,168,76,0.10) !important;
+    background: rgba(4,3,10,0.92);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+}
+
+/* Settings sidebar on mobile — cosmic border */
+@media (max-width: 480px) {
+  .settings-sidebar,
+  [id="settings-sidebar"] {
+    border-bottom: 1px solid rgba(201,168,76,0.10) !important;
+    background: rgba(8,6,16,0.96) !important;
+  }
+}
+
+/* Focus-visible — cosmic gold ring */
+:focus-visible {
+  outline: 2px solid rgba(201,168,76,0.65) !important;
+  outline-offset: 3px;
+  border-radius: var(--radius-sm);
+}
+
+/* Range sliders — cosmic styling */
+@media (max-width: 480px) {
+  input[type="range"]::-webkit-slider-thumb {
+    background: var(--cs-gold, #c9a84c);
+    border: 2px solid rgba(201,168,76,0.50);
+    box-shadow: 0 0 6px rgba(201,168,76,0.40);
+  }
+
+  input[type="range"]::-webkit-slider-runnable-track {
+    background: rgba(201,168,76,0.15);
+    border-radius: 4px;
+  }
+}
+
+/* Skip link — cosmic */
+.skip-to-main {
+  background: var(--cs-gold, #c9a84c);
+  color: var(--cs-bg-void, #04030a);
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+}
+
+/* Mobile search panel — cosmic */
+#mobile-search-panel {
+  background: rgba(4,3,10,0.96) !important;
+  border-bottom: 1px solid rgba(201,168,76,0.12) !important;
+  backdrop-filter: blur(20px) !important;
+  -webkit-backdrop-filter: blur(20px) !important;
+}

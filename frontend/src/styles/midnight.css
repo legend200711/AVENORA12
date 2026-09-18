@@ -1,26 +1,26 @@
 /**
  * AVENORA VIDEO — Video Platform Styles
- * Deep black / neon blue / green accent — cinematic atmosphere
+ * COSMIC deep-space edition — gold, cyan, space black.
  * Mobile-first, accessible, no strobe/flash effects
  */
 
-/* ─── Midnight Color Overrides ──────────────────────────── */
+/* ─── Cosmic Video Color Tokens ──────────────────────────── */
 .midnight-theme {
-  --midnight-bg: #03030a;
-  --midnight-surface: #080812;
-  --midnight-card: #0c0c18;
-  --midnight-elevated: #10101e;
-  --midnight-border: rgba(0,160,255,0.13);
-  --midnight-blue: #00a8ff;
-  --midnight-blue-dim: #0060cc;
-  --midnight-green: #00e87a;
-  --midnight-glow: 0 0 24px rgba(0,168,255,0.35);
-  --midnight-glow-sm: 0 0 12px rgba(0,168,255,0.22);
+  --midnight-bg: #04030a;
+  --midnight-surface: #08060f;
+  --midnight-card: rgba(14,11,26,0.82);
+  --midnight-elevated: rgba(22,18,38,0.88);
+  --midnight-border: rgba(201,168,76,0.12);
+  --midnight-blue: #c9a84c;
+  --midnight-blue-dim: #a07830;
+  --midnight-green: #00ccff;
+  --midnight-glow: 0 0 24px rgba(201,168,76,0.32);
+  --midnight-glow-sm: 0 0 12px rgba(201,168,76,0.18);
 }
 
 /* ─── Page Layout ────────────────────────────────────────── */
 .midnight-page {
-  background: var(--midnight-bg, #03030a);
+  background: transparent;
   min-height: 100vh;
   padding-bottom: 80px; /* mobile nav clearance */
 }
@@ -28,8 +28,11 @@
 .midnight-hero {
   position: relative;
   padding: var(--space-xl) var(--space-lg) var(--space-lg);
-  background: linear-gradient(180deg, #080818 0%, #03030a 100%);
-  border-bottom: 1px solid rgba(0,168,255,0.12);
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 40%, rgba(140,90,10,0.10) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 50% at 80% 60%, rgba(0,80,160,0.08) 0%, transparent 65%),
+    linear-gradient(180deg, rgba(14,11,26,0.80) 0%, rgba(4,3,10,0) 100%);
+  border-bottom: 1px solid rgba(201,168,76,0.10);
   overflow: hidden;
 }
 
@@ -38,8 +41,8 @@
   position: absolute;
   inset: 0;
   background:
-    radial-gradient(ellipse 60% 40% at 20% 50%, rgba(0,168,255,0.06) 0%, transparent 70%),
-    radial-gradient(ellipse 40% 60% at 80% 30%, rgba(0,100,200,0.05) 0%, transparent 70%);
+    radial-gradient(ellipse 60% 40% at 20% 50%, rgba(140,90,10,0.08) 0%, transparent 70%),
+    radial-gradient(ellipse 40% 60% at 80% 30%, rgba(0,100,180,0.06) 0%, transparent 70%);
   pointer-events: none;
 }
 
@@ -83,13 +86,13 @@
   overflow-x: auto;
   scrollbar-width: none;
   -webkit-overflow-scrolling: touch;
-  background: rgba(0,0,0,0.4);
-  border-bottom: 1px solid rgba(0,168,255,0.1);
+  background: rgba(4,3,10,0.88);
+  border-bottom: 1px solid rgba(201,168,76,0.10);
   position: sticky;
   top: 60px; /* nav height */
   z-index: 50;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
 }
 
 .midnight-tabs::-webkit-scrollbar { display: none; }
@@ -97,29 +100,30 @@
 .midnight-tab {
   flex-shrink: 0;
   background: transparent;
-  border: 1px solid rgba(0,168,255,0.15);
-  color: var(--text-secondary);
+  border: 1px solid rgba(201,168,76,0.12);
+  color: var(--cs-text-muted, #8a8090);
   padding: 6px 14px;
   border-radius: var(--radius-full);
   font-size: 0.78rem;
+  font-family: var(--font-display);
   font-weight: 600;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   cursor: pointer;
   transition: all var(--transition-fast);
   white-space: nowrap;
 }
 
 .midnight-tab:hover {
-  border-color: rgba(0,168,255,0.4);
-  color: var(--avenora-gold);
-  background: rgba(0,168,255,0.06);
+  border-color: rgba(201,168,76,0.32);
+  color: var(--cs-gold, #c9a84c);
+  background: rgba(201,168,76,0.06);
 }
 
 .midnight-tab.active {
-  background: rgba(0,168,255,0.15);
-  border-color: var(--avenora-gold);
-  color: var(--avenora-gold);
-  box-shadow: 0 0 10px rgba(0,168,255,0.25);
+  background: rgba(201,168,76,0.12);
+  border-color: var(--cs-gold, #c9a84c);
+  color: var(--cs-gold, #c9a84c);
+  box-shadow: 0 0 12px rgba(201,168,76,0.22);
 }
 
 /* ─── Section Headers ────────────────────────────────────── */
@@ -198,18 +202,20 @@
 
 /* ─── Video Card ─────────────────────────────────────────── */
 .video-card-midnight {
-  background: #0c0c18;
-  border: 1px solid rgba(0,168,255,0.1);
+  background: rgba(14,11,26,0.82);
+  border: 1px solid rgba(201,168,76,0.10);
   border-radius: var(--radius-md);
   overflow: hidden;
   cursor: pointer;
   transition: transform var(--transition-base), border-color var(--transition-base), box-shadow var(--transition-base);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
 }
 
 .video-card-midnight:hover {
   transform: translateY(-2px);
-  border-color: rgba(0,168,255,0.35);
-  box-shadow: 0 4px 20px rgba(0,168,255,0.15);
+  border-color: rgba(201,168,76,0.30);
+  box-shadow: 0 4px 24px rgba(0,0,0,0.60), 0 0 16px rgba(201,168,76,0.12);
 }
 
 .video-card-midnight:focus-visible {
@@ -242,7 +248,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(0,168,255,0.3);
+  color: rgba(201,168,76,0.30);
   font-size: 2rem;
 }
 
@@ -293,15 +299,15 @@
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: var(--bg-elevated);
+  background: rgba(22,18,38,0.88);
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
   font-size: 13px;
   font-weight: 700;
-  color: var(--avenora-gold);
-  border: 1px solid rgba(0,168,255,0.2);
+  color: var(--cs-gold, #c9a84c);
+  border: 1px solid rgba(201,168,76,0.18);
   overflow: hidden;
 }
 

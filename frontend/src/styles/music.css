@@ -15,7 +15,10 @@
 .music-hero-bg {
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse 80% 60% at 50% 0%, rgba(184,149,75,0.07) 0%, rgba(74,158,114,0.04) 40%, transparent 70%);
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 0%, rgba(140,90,10,0.10) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 80% 80%, rgba(0,80,160,0.08) 0%, transparent 60%),
+    radial-gradient(ellipse 40% 40% at 20% 70%, rgba(60,20,120,0.06) 0%, transparent 60%);
   pointer-events: none;
 }
 
@@ -42,14 +45,14 @@
   position: sticky;
   top: 60px;
   z-index: var(--z-sticky);
-  background: rgba(8, 8, 14, 0.97);
-  border: 1px solid var(--border-green);
+  background: rgba(8, 6, 16, 0.97);
+  border: 1px solid rgba(201,168,76,0.16);
   border-radius: var(--radius-md);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
   padding: var(--space-sm) var(--space-md);
   margin-bottom: var(--space-xl);
-  box-shadow: 0 4px 32px rgba(184,149,75,0.08);
+  box-shadow: 0 4px 32px rgba(0,0,0,0.40), 0 0 20px rgba(201,168,76,0.06);
 }
 
 .mp-main-row {

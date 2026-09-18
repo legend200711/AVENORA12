@@ -50,8 +50,8 @@
         speed: Math.random() * 0.015 + 0.005,
         twinklePhase: Math.random() * Math.PI * 2,
         twinkleSpeed: (Math.random() * 0.3 + 0.1) * 0.02,
-        /* Egyptian gold, bronze, and warm ivory starfield */
-        color: Math.random() > 0.85 ? '#b8954b' : Math.random() > 0.7 ? '#76552f' : '#eee4cf',
+        /* Cosmic: gold, cyan, warm white */
+        color: Math.random() > 0.88 ? '#c9a84c' : Math.random() > 0.75 ? '#50d8ff' : Math.random() > 0.6 ? '#ffd060' : '#f0e8d8',
       }));
     }
 

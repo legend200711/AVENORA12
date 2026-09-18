@@ -12,26 +12,27 @@
 
 .tcc-header {
   padding: var(--space-lg) 0 var(--space-md);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid rgba(201,168,76,0.12);
   margin-bottom: var(--space-lg);
 }
 
 .tcc-header h2 {
   font-family: var(--font-display);
-  letter-spacing: 0.12em;
+  letter-spacing: 0.16em;
   font-size: clamp(1.1rem, 3vw, 1.6rem);
-  background: linear-gradient(135deg, var(--avenora-gold), var(--avenora-ivory), var(--avenora-bronze));
+  background: linear-gradient(135deg, #ffd060 0%, #f0e8d8 45%, #c9a84c 100%);
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   background-clip: text;
+  filter: drop-shadow(0 0 8px rgba(201,168,76,0.30));
   margin-bottom: 4px;
 }
 
 .tcc-subtitle {
-  font-size: 0.78rem;
-  letter-spacing: 0.2em;
+  font-size: 0.72rem;
+  letter-spacing: 0.22em;
   text-transform: uppercase;
-  color: var(--text-muted);
+  color: var(--cs-text-muted, #8a8090);
 }
 
 /* ─── Action bar ─────────────────────────────────────────── */
@@ -40,7 +41,7 @@
   flex-wrap: wrap;
   gap: var(--space-sm);
   padding: var(--space-md) 0;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid rgba(201,168,76,0.10);
   margin-bottom: var(--space-lg);
   align-items: center;
 }
@@ -70,7 +71,7 @@
 .tcc-tabs {
   display: flex;
   gap: 2px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: 1px solid rgba(201,168,76,0.10);
   margin-bottom: var(--space-lg);
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;

@@ -1,0 +1,782 @@
+/**
+ * AVENORA — GLOBAL COSMIC DESIGN SYSTEM
+ * ══════════════════════════════════════════════════════════════
+ * One unified cosmic design language across ALL Avenora pages.
+ * Premium deep-space: gold × cyan × black × violet.
+ * CSS-only effects — no Three.js, no heavy libraries.
+ * Mobile-first · prefers-reduced-motion respected.
+ *
+ * COLOUR PALETTE:
+ *   Deep Space   #04030a / #060410 / #040308
+ *   Avenora Gold #c9a84c / #f0d080 / #ffd060
+ *   Cyan/Blue    #00ccff / #30c0ff / #50c8f0
+ *   Violet       #7c5cd8 / #a888d4 / #6644bb
+ *   Warm White   #f0e8d8
+ *   Champagne    #d4c4a8
+ *   Muted Gold   #8a7040
+ */
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC CSS VARIABLES — extends theme.css tokens
+   ═══════════════════════════════════════════════════════════ */
+:root {
+  /* ── Deep Space backgrounds ─────────────────────────────── */
+  --cs-bg-void:      #04030a;
+  --cs-bg-deep:      #060510;
+  --cs-bg-space:     #08060f;
+  --cs-bg-panel:     rgba(8, 6, 16, 0.88);
+  --cs-bg-glass:     rgba(12, 10, 22, 0.72);
+  --cs-bg-glass-lt:  rgba(18, 14, 32, 0.55);
+  --cs-bg-card:      rgba(14, 11, 26, 0.80);
+  --cs-bg-elevated:  rgba(22, 18, 38, 0.90);
+
+  /* ── Gold palette ───────────────────────────────────────── */
+  --cs-gold-bright:  #ffd060;
+  --cs-gold:         #c9a84c;
+  --cs-gold-dim:     #a07830;
+  --cs-gold-muted:   #6a5020;
+  --cs-gold-glow:    rgba(201, 168, 76, 0.55);
+  --cs-gold-glow-sm: rgba(201, 168, 76, 0.28);
+
+  /* ── Cyan / Electric Blue ───────────────────────────────── */
+  --cs-cyan:         #00ccff;
+  --cs-cyan-bright:  #50d8ff;
+  --cs-cyan-dim:     #0088bb;
+  --cs-cyan-glow:    rgba(0, 204, 255, 0.50);
+  --cs-cyan-glow-sm: rgba(0, 204, 255, 0.22);
+
+  /* ── Violet accent ──────────────────────────────────────── */
+  --cs-violet:       #7c5cd8;
+  --cs-violet-dim:   #4a3488;
+  --cs-violet-glow:  rgba(124, 92, 216, 0.40);
+
+  /* ── Text palette ───────────────────────────────────────── */
+  --cs-text:         #f0e8d8;
+  --cs-text-warm:    #e8d8bc;
+  --cs-text-muted:   #8a8090;
+  --cs-text-gold:    #c9a84c;
+  --cs-text-cyan:    #00ccff;
+
+  /* ── Borders ────────────────────────────────────────────── */
+  --cs-border-gold:  rgba(201, 168, 76, 0.22);
+  --cs-border-cyan:  rgba(0, 204, 255, 0.18);
+  --cs-border-glow:  rgba(201, 168, 76, 0.35);
+  --cs-border-panel: rgba(201, 168, 76, 0.12);
+
+  /* ── Box shadows / glows ────────────────────────────────── */
+  --cs-shadow-gold:  0 0 24px rgba(201,168,76,0.30), 0 0 48px rgba(201,168,76,0.12);
+  --cs-shadow-cyan:  0 0 24px rgba(0,204,255,0.28),  0 0 48px rgba(0,204,255,0.10);
+  --cs-shadow-panel: 0 8px 32px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.40);
+  --cs-shadow-card:  0 4px 20px rgba(0,0,0,0.45), 0 1px 4px rgba(0,0,0,0.30);
+  --cs-glow-gold:    0 0 18px rgba(201,168,76,0.45), inset 0 1px 0 rgba(255,220,100,0.14);
+  --cs-glow-cyan:    0 0 18px rgba(0,204,255,0.40),  inset 0 1px 0 rgba(80,216,255,0.12);
+
+  /* ── Gradient presets ───────────────────────────────────── */
+  --cs-grad-title:   linear-gradient(135deg, #ffd060 0%, #f0e8d8 45%, #c9a84c 100%);
+  --cs-grad-cyan:    linear-gradient(135deg, #00ccff 0%, #50d8ff 50%, #0088bb 100%);
+  --cs-grad-panel:   linear-gradient(145deg, rgba(14,11,26,0.92), rgba(8,6,16,0.96));
+  --cs-grad-hero:    linear-gradient(160deg, #09071a 0%, #04030a 55%, #070414 100%);
+  --cs-grad-card:    linear-gradient(145deg, rgba(18,14,32,0.85), rgba(10,8,20,0.92));
+  --cs-grad-btn:     linear-gradient(135deg, rgba(201,168,76,0.20), rgba(160,120,48,0.12));
+  --cs-grad-btn-cyan:linear-gradient(135deg, rgba(0,204,255,0.18), rgba(0,140,200,0.10));
+}
+
+/* ═══════════════════════════════════════════════════════════
+   GLOBAL COSMIC BACKGROUND (applied to body)
+   ═══════════════════════════════════════════════════════════ */
+body {
+  background:
+    radial-gradient(ellipse 80% 60% at 15% 10%,  rgba(140,90,10,0.12)  0%, transparent 60%),
+    radial-gradient(ellipse 70% 50% at 85% 90%,  rgba(0,80,160,0.13)   0%, transparent 60%),
+    radial-gradient(ellipse 55% 50% at 50% 50%,  rgba(20,8,50,0.35)    0%, transparent 65%),
+    radial-gradient(ellipse 40% 35% at 25% 75%,  rgba(0,40,100,0.12)   0%, transparent 55%),
+    radial-gradient(ellipse 35% 28% at 78% 18%,  rgba(100,60,0,0.10)   0%, transparent 50%),
+    radial-gradient(ellipse 100% 100% at 50% 50%, #04030a 0%, #060410 45%, #040308 100%);
+  background-attachment: fixed;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC STAR BACKGROUND — fixed, rendered via pseudo on .visual-bg
+   ═══════════════════════════════════════════════════════════ */
+.visual-bg {
+  background:
+    /* Bright stars */
+    radial-gradient(1.8px 1.8px at  7%  11%, rgba(255,255,255,0.92) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 17%  44%, rgba(255,255,255,0.68) 0%, transparent 100%),
+    radial-gradient(1.8px 1.8px at 27%   7%, rgba(255,255,255,0.85) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 37%  71%, rgba(255,255,255,0.72) 0%, transparent 100%),
+    radial-gradient(1.8px 1.8px at 47%  29%, rgba(255,255,255,0.88) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 57%  87%, rgba(255,255,255,0.60) 0%, transparent 100%),
+    radial-gradient(1.8px 1.8px at 67%  21%, rgba(255,255,255,0.90) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 77%  54%, rgba(255,255,255,0.70) 0%, transparent 100%),
+    radial-gradient(1.8px 1.8px at 87%  14%, rgba(255,255,255,0.82) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at  4%  63%, rgba(255,255,255,0.75) 0%, transparent 100%),
+    radial-gradient(1.8px 1.8px at 92%  39%, rgba(255,255,255,0.65) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 34%  94%, rgba(255,255,255,0.55) 0%, transparent 100%),
+    /* Gold-tinted stars */
+    radial-gradient(1.8px 1.8px at 54%  17%, rgba(255,230,160,0.65) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 83%  62%, rgba(255,220,120,0.55) 0%, transparent 100%),
+    radial-gradient(1.5px 1.5px at 23%  48%, rgba(255,215,100,0.50) 0%, transparent 100%),
+    /* Cyan-tinted stars */
+    radial-gradient(1.8px 1.8px at 71%  77%, rgba(160,220,255,0.68) 0%, transparent 100%),
+    radial-gradient(1.5px 1.5px at 44%  34%, rgba(120,200,255,0.55) 0%, transparent 100%),
+    /* Dimmer field */
+    radial-gradient(1.2px 1.2px at 41%  57%, rgba(255,255,255,0.42) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 61%  41%, rgba(255,255,255,0.48) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 81%  81%, rgba(255,255,255,0.38) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at  2%  27%, rgba(255,255,255,0.65) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 95%  67%, rgba(255,255,255,0.58) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 13%  88%, rgba(255,255,255,0.45) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 59%  52%, rgba(255,255,255,0.35) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 29%  19%, rgba(255,255,255,0.55) 0%, transparent 100%),
+    radial-gradient(1.2px 1.2px at 98%   8%, rgba(255,255,255,0.48) 0%, transparent 100%);
+}
+
+/* Nebula layer animated drift */
+.visual-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 70% 40% at 10% 20%,  rgba(160,100,10,0.08)  0%, transparent 65%),
+    radial-gradient(ellipse 60% 35% at 90% 80%,  rgba(0,80,160,0.10)    0%, transparent 60%),
+    radial-gradient(ellipse 50% 45% at 50% 55%,  rgba(60,20,120,0.08)   0%, transparent 65%),
+    radial-gradient(ellipse 35% 30% at 75% 25%,  rgba(0,120,200,0.07)   0%, transparent 55%);
+  animation: cs-nebula-drift 28s ease-in-out infinite alternate;
+  pointer-events: none;
+}
+
+@keyframes cs-nebula-drift {
+  0%   { transform: translateX(0)    translateY(0)    scale(1);    opacity: 0.7; }
+  33%  { transform: translateX(12px) translateY(-8px) scale(1.02); opacity: 0.9; }
+  66%  { transform: translateX(-9px) translateY(7px)  scale(1.01); opacity: 0.75; }
+  100% { transform: translateX(6px)  translateY(-5px) scale(0.99); opacity: 0.85; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .visual-bg::after { animation: none; }
+  body { background-attachment: scroll; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   GLOBAL NAVIGATION — Cosmic upgrade
+   ═══════════════════════════════════════════════════════════ */
+.nav-global {
+  background: rgba(4, 3, 10, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid var(--cs-border-gold);
+  box-shadow: 0 1px 0 rgba(201,168,76,0.08), 0 4px 24px rgba(0,0,0,0.40);
+}
+
+.nav-brand {
+  background: var(--cs-grad-title);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  font-family: var(--font-display);
+  letter-spacing: 0.16em;
+  font-size: 1.1rem;
+  font-weight: 900;
+  text-shadow: none;
+  filter: drop-shadow(0 0 8px rgba(201,168,76,0.45));
+  transition: filter var(--transition-base);
+}
+
+.nav-brand:hover {
+  filter: drop-shadow(0 0 14px rgba(201,168,76,0.70));
+  text-decoration: none;
+}
+
+.nav-link {
+  color: var(--cs-text-muted);
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  transition: color var(--transition-fast), text-shadow var(--transition-fast);
+}
+
+.nav-link:hover,
+.nav-link.active {
+  color: var(--cs-gold);
+  text-shadow: 0 0 10px var(--cs-gold-glow-sm);
+  text-decoration: none;
+}
+
+.nav-link.active {
+  text-shadow: 0 0 14px var(--cs-gold-glow);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MOBILE BOTTOM NAVIGATION — Cosmic
+   ═══════════════════════════════════════════════════════════ */
+.mobile-nav {
+  background: rgba(4, 3, 10, 0.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border-top: 1px solid var(--cs-border-gold);
+  box-shadow: 0 -4px 24px rgba(0,0,0,0.50), 0 -1px 0 rgba(201,168,76,0.10);
+}
+
+.mobile-nav-item {
+  color: var(--cs-text-muted);
+  font-family: var(--font-display);
+  font-size: 0.58rem;
+  letter-spacing: 0.12em;
+  transition: color var(--transition-fast), filter var(--transition-fast);
+  gap: 3px;
+}
+
+.mobile-nav-item:hover,
+.mobile-nav-item.active {
+  color: var(--cs-gold) !important;
+  filter: drop-shadow(0 0 6px rgba(201,168,76,0.55));
+  text-decoration: none;
+}
+
+.mobile-nav-item.active {
+  filter: drop-shadow(0 0 10px rgba(201,168,76,0.70));
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC CARD — base glass panel
+   ═══════════════════════════════════════════════════════════ */
+.card {
+  background: var(--cs-bg-card);
+  border: 1px solid var(--cs-border-panel);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: var(--cs-shadow-card);
+  transition: border-color var(--transition-base), box-shadow var(--transition-base), transform var(--transition-base);
+}
+
+.card:hover {
+  border-color: var(--cs-border-gold);
+  box-shadow: var(--cs-shadow-card), 0 0 20px rgba(201,168,76,0.14);
+  transform: translateY(-2px);
+}
+
+/* Gold accent card */
+.card-cosmic-gold {
+  background: var(--cs-grad-card);
+  border-color: var(--cs-border-gold);
+  box-shadow: var(--cs-shadow-card), 0 0 24px rgba(201,168,76,0.12);
+}
+
+/* Cyan accent card */
+.card-cosmic-cyan {
+  background: var(--cs-grad-card);
+  border-color: var(--cs-border-cyan);
+  box-shadow: var(--cs-shadow-card), 0 0 24px rgba(0,204,255,0.10);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC BUTTONS
+   ═══════════════════════════════════════════════════════════ */
+.btn {
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
+  border-radius: var(--radius-md);
+  transition: all var(--transition-base);
+  position: relative;
+  overflow: hidden;
+}
+
+.btn::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  background: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.08), transparent 70%);
+  pointer-events: none;
+}
+
+.btn:active::before { opacity: 1; }
+
+.btn-primary {
+  background: linear-gradient(135deg, rgba(201,168,76,0.24) 0%, rgba(160,120,48,0.16) 100%);
+  border: 1px solid var(--cs-border-gold);
+  color: var(--cs-gold);
+  box-shadow: 0 0 0 0 var(--cs-gold-glow-sm);
+}
+
+.btn-primary:hover {
+  background: linear-gradient(135deg, rgba(201,168,76,0.35) 0%, rgba(180,140,60,0.24) 100%);
+  border-color: var(--cs-gold);
+  box-shadow: var(--cs-glow-gold);
+  color: var(--cs-gold-bright);
+  text-decoration: none;
+}
+
+.btn-green {
+  background: linear-gradient(135deg, rgba(0,204,255,0.18) 0%, rgba(0,140,200,0.10) 100%);
+  border: 1px solid var(--cs-border-cyan);
+  color: var(--cs-cyan);
+  box-shadow: 0 0 0 0 var(--cs-cyan-glow-sm);
+}
+
+.btn-green:hover {
+  background: linear-gradient(135deg, rgba(0,204,255,0.30) 0%, rgba(0,170,230,0.18) 100%);
+  border-color: var(--cs-cyan);
+  box-shadow: var(--cs-glow-cyan);
+  color: var(--cs-cyan-bright);
+  text-decoration: none;
+}
+
+.btn-outline {
+  background: transparent;
+  border: 1px solid var(--cs-border-gold);
+  color: var(--cs-text-muted);
+}
+
+.btn-outline:hover {
+  border-color: var(--cs-gold);
+  color: var(--cs-gold);
+  box-shadow: 0 0 12px rgba(201,168,76,0.20);
+  text-decoration: none;
+}
+
+.btn-ghost {
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--cs-text-muted);
+}
+
+.btn-ghost:hover {
+  background: rgba(201,168,76,0.06);
+  border-color: var(--cs-border-panel);
+  color: var(--cs-text);
+  text-decoration: none;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC FORM ELEMENTS
+   ═══════════════════════════════════════════════════════════ */
+.form-input {
+  background: rgba(8, 6, 16, 0.80);
+  border: 1px solid var(--cs-border-panel);
+  border-radius: var(--radius-md);
+  color: var(--cs-text);
+  padding: 10px 14px;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.form-input:focus {
+  outline: none;
+  border-color: var(--cs-gold-dim);
+  box-shadow: 0 0 0 2px rgba(201,168,76,0.14), 0 0 16px rgba(201,168,76,0.14);
+}
+
+.form-input::placeholder {
+  color: var(--cs-text-muted);
+  opacity: 0.7;
+}
+
+.form-label {
+  color: var(--cs-text-muted);
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+}
+
+/* Search bar cosmic */
+.search-bar {
+  background: rgba(8, 6, 16, 0.80);
+  border: 1px solid var(--cs-border-panel);
+  border-radius: var(--radius-full);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.search-bar:focus-within {
+  border-color: var(--cs-gold-dim) !important;
+  box-shadow: 0 0 14px rgba(201,168,76,0.18);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MODAL — Cosmic glass panel
+   ═══════════════════════════════════════════════════════════ */
+.modal-backdrop {
+  background: rgba(4, 3, 10, 0.88);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.modal {
+  background: var(--cs-grad-panel);
+  border: 1px solid var(--cs-border-gold);
+  border-radius: var(--radius-xl);
+  box-shadow: var(--cs-shadow-panel), 0 0 40px rgba(201,168,76,0.12);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.modal-header {
+  border-bottom: 1px solid var(--cs-border-panel);
+  background: rgba(201,168,76,0.03);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   DROPDOWN — Cosmic
+   ═══════════════════════════════════════════════════════════ */
+.dropdown-menu {
+  background: var(--cs-grad-panel);
+  border: 1px solid var(--cs-border-gold);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--cs-shadow-panel), 0 0 20px rgba(201,168,76,0.10);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+.dropdown-item {
+  color: var(--cs-text-muted);
+  font-size: 0.85rem;
+  transition: color var(--transition-fast), background var(--transition-fast);
+}
+
+.dropdown-item:hover {
+  color: var(--cs-gold);
+  background: rgba(201,168,76,0.06);
+  text-decoration: none;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   TABS — Cosmic
+   ═══════════════════════════════════════════════════════════ */
+.tab-btn {
+  color: var(--cs-text-muted);
+  font-family: var(--font-display);
+  font-size: 0.75rem;
+  letter-spacing: 0.10em;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.tab-btn.active {
+  color: var(--cs-gold) !important;
+  border-bottom-color: var(--cs-gold) !important;
+  text-shadow: 0 0 10px var(--cs-gold-glow-sm);
+}
+
+.tab-btn:hover { color: var(--cs-text); }
+
+/* ═══════════════════════════════════════════════════════════
+   TOASTS — Cosmic
+   ═══════════════════════════════════════════════════════════ */
+.toast {
+  background: var(--cs-grad-panel) !important;
+  border: 1px solid var(--cs-border-panel) !important;
+  box-shadow: var(--cs-shadow-panel) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  color: var(--cs-text) !important;
+}
+
+.toast.success { border-left: 3px solid var(--cs-cyan) !important; }
+.toast.error   { border-left: 3px solid #c0394a !important; }
+.toast.info    { border-left: 3px solid var(--cs-gold) !important; }
+.toast.warning { border-left: 3px solid var(--cs-violet) !important; }
+
+/* ═══════════════════════════════════════════════════════════
+   SECTION HEADERS — Cosmic
+   ═══════════════════════════════════════════════════════════ */
+.section-title {
+  font-family: var(--font-display);
+  letter-spacing: 0.12em;
+  background: var(--cs-grad-title);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  filter: drop-shadow(0 0 8px rgba(201,168,76,0.30));
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PAGE HEADER — Cosmic hero strip
+   ═══════════════════════════════════════════════════════════ */
+.page-header {
+  position: relative;
+  overflow: hidden;
+  padding: var(--space-xl) var(--space-lg) var(--space-lg);
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 50%, rgba(140,90,10,0.10) 0%, transparent 70%),
+    radial-gradient(ellipse 60% 50% at 80% 40%, rgba(0,80,160,0.08)  0%, transparent 65%),
+    linear-gradient(180deg, rgba(14,11,26,0.80) 0%, rgba(4,3,10,0) 100%);
+  border-bottom: 1px solid var(--cs-border-panel);
+}
+
+.page-header::before {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--cs-gold-glow-sm), transparent);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   BADGE — Cosmic
+   ═══════════════════════════════════════════════════════════ */
+.badge {
+  border-radius: var(--radius-full);
+  font-family: var(--font-display);
+  font-size: 0.65rem;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+}
+
+.badge-blue {
+  background: rgba(201,168,76,0.10);
+  color: var(--cs-gold);
+  border: 1px solid var(--cs-border-gold);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   AVATAR — Cosmic glow
+   ═══════════════════════════════════════════════════════════ */
+.avatar {
+  border: 2px solid var(--cs-border-gold);
+  box-shadow: 0 0 12px rgba(201,168,76,0.20);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PROGRESS BAR — Cosmic
+   ═══════════════════════════════════════════════════════════ */
+.progress-bar {
+  background: rgba(201,168,76,0.08);
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(201,168,76,0.10);
+}
+
+.progress-fill {
+  background: linear-gradient(90deg, var(--cs-gold-dim), var(--cs-gold));
+  box-shadow: 0 0 8px rgba(201,168,76,0.40);
+  border-radius: var(--radius-full);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SCROLLBAR — Cosmic
+   ═══════════════════════════════════════════════════════════ */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--cs-bg-void); }
+::-webkit-scrollbar-thumb {
+  background: rgba(201,168,76,0.20);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(201,168,76,0.40); }
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC GLOW TEXT UTILITIES
+   ═══════════════════════════════════════════════════════════ */
+.text-cosmic-gold {
+  background: var(--cs-grad-title);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  filter: drop-shadow(0 0 8px rgba(201,168,76,0.35));
+}
+
+.text-cosmic-cyan {
+  color: var(--cs-cyan);
+  text-shadow: 0 0 12px var(--cs-cyan-glow-sm);
+}
+
+.glow-gold { filter: drop-shadow(0 0 8px rgba(201,168,76,0.50)); }
+.glow-cyan { filter: drop-shadow(0 0 8px rgba(0,204,255,0.45)); }
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC PANEL (glassmorphism container)
+   ═══════════════════════════════════════════════════════════ */
+.cosmic-panel {
+  background: var(--cs-bg-glass);
+  border: 1px solid var(--cs-border-panel);
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: var(--cs-shadow-panel);
+  position: relative;
+  overflow: hidden;
+}
+
+.cosmic-panel::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(201,168,76,0.30), rgba(0,204,255,0.20), transparent);
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   BRAND TITLE — Large Avenora display text
+   ═══════════════════════════════════════════════════════════ */
+.brand-title {
+  font-family: var(--font-display);
+  letter-spacing: 0.20em;
+  text-transform: uppercase;
+  background: var(--cs-grad-title);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  filter: drop-shadow(0 0 14px rgba(201,168,76,0.40));
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ORBITAL RING DECORATIONS — CSS-only cosmetic elements
+   ═══════════════════════════════════════════════════════════ */
+.cs-orbital {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  border: 1px solid rgba(201,168,76,0.15);
+  animation: cs-orbit-slow 30s linear infinite;
+}
+
+.cs-orbital-cyan {
+  border-color: rgba(0,204,255,0.12);
+  animation-direction: reverse;
+  animation-duration: 40s;
+}
+
+@keyframes cs-orbit-slow {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC PLANET DECORATION
+   ═══════════════════════════════════════════════════════════ */
+.cs-planet {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+}
+
+.cs-planet-gold {
+  background: radial-gradient(circle at 35% 35%, rgba(255,210,80,0.25) 0%, rgba(160,100,20,0.15) 40%, rgba(80,50,10,0.10) 70%, transparent 100%);
+  border: 1px solid rgba(201,168,76,0.20);
+  box-shadow: 0 0 30px rgba(201,168,76,0.15), inset 0 0 20px rgba(140,90,10,0.10);
+}
+
+.cs-planet-cyan {
+  background: radial-gradient(circle at 35% 35%, rgba(80,216,255,0.20) 0%, rgba(0,120,200,0.12) 40%, rgba(0,60,120,0.08) 70%, transparent 100%);
+  border: 1px solid rgba(0,204,255,0.18);
+  box-shadow: 0 0 30px rgba(0,204,255,0.12), inset 0 0 20px rgba(0,80,160,0.08);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   TWINKLE ANIMATION for star canvases
+   ═══════════════════════════════════════════════════════════ */
+@keyframes cs-twinkle {
+  0%, 100% { opacity: 0.55; }
+  40%       { opacity: 0.95; }
+  70%       { opacity: 0.72; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   VIDEO CARD — Cosmic
+   ═══════════════════════════════════════════════════════════ */
+.video-card .video-thumb {
+  border-radius: var(--radius-md) var(--radius-md) 0 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.video-card .video-thumb::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, transparent 50%, rgba(4,3,10,0.60) 100%);
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC DIVIDERS
+   ═══════════════════════════════════════════════════════════ */
+.divider {
+  background: linear-gradient(90deg, transparent, var(--cs-border-gold), transparent);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   LOADING / SPINNER — Cosmic
+   ═══════════════════════════════════════════════════════════ */
+.spinner {
+  border: 2px solid rgba(201,168,76,0.12);
+  border-top-color: var(--cs-gold);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   NOTIF BADGE — Cosmic
+   ═══════════════════════════════════════════════════════════ */
+.notif-badge {
+  background: var(--cs-gold);
+  color: var(--cs-bg-void);
+  border: 1px solid rgba(201,168,76,0.40);
+  box-shadow: 0 0 8px rgba(201,168,76,0.40);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   FOCUS-VISIBLE — Cosmic accessibility ring
+   ═══════════════════════════════════════════════════════════ */
+:focus-visible {
+  outline: 2px solid rgba(201,168,76,0.60) !important;
+  outline-offset: 3px;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   SKELETON SHIMMER — Cosmic
+   ═══════════════════════════════════════════════════════════ */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(201,168,76,0.04) 25%,
+    rgba(201,168,76,0.09) 50%,
+    rgba(201,168,76,0.04) 75%
+  );
+  background-size: 200% 100%;
+  animation: cs-shimmer 1.8s ease-in-out infinite;
+}
+
+@keyframes cs-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   HEADER SUBTITLE GLOW PULSE
+   ═══════════════════════════════════════════════════════════ */
+.nav-brand-subtitle-glow {
+  color: var(--cs-gold-dim);
+  text-shadow: 0 0 8px rgba(201,168,76,0.40);
+  animation: cs-subtle-pulse 4s ease-in-out infinite;
+}
+
+@keyframes cs-subtle-pulse {
+  0%, 100% { opacity: 0.80; }
+  50%       { opacity: 1.00; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cs-orbital,
+  .cs-orbital-cyan,
+  .nav-brand-subtitle-glow { animation: none; }
+  .skeleton { animation: none; background: rgba(201,168,76,0.06); }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   RESPONSIVE — ensure no horizontal overflow
+   ═══════════════════════════════════════════════════════════ */
+@media (max-width: 480px) {
+  .page-header {
+    padding: var(--space-lg) var(--space-md) var(--space-md);
+  }
+  .modal {
+    margin: 0 var(--space-md);
+    max-height: calc(100vh - 120px);
+    overflow-y: auto;
+  }
+}

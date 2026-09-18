@@ -7,56 +7,56 @@
 /* ─── Avenora Design Tokens ─────────────────────────────── */
 :root {
   /* ── Palette ───────────────────────────────────────────── */
-  --avenora-obsidian: #090807;
-  --avenora-charcoal: #171513;
-  --avenora-stone:    #292521;
-  --avenora-gold:     #b8954b;
-  --avenora-bronze:   #76552f;
-  --avenora-ivory:    #eee4cf;
+  --avenora-obsidian: #04030a;
+  --avenora-charcoal: #08060f;
+  --avenora-stone:    #12101e;
+  --avenora-gold:     #c9a84c;
+  --avenora-bronze:   #a07830;
+  --avenora-ivory:    #f0e8d8;
   --avenora-red:      #701f28;
   --avenora-emerald:  #21483c;
-  --avenora-violet:   #30213f;
+  --avenora-violet:   #3a2260;
 
   /* ── Semantic background layers ───────────────────────── */
-  --bg-primary:  var(--avenora-obsidian);
-  --bg-secondary: var(--avenora-charcoal);
-  --bg-card:     #131210;
-  --bg-elevated: #1e1b17;
-  --bg-overlay:  rgba(9,8,7,0.93);
+  --bg-primary:   #04030a;
+  --bg-secondary: #08060f;
+  --bg-card:      rgba(14,11,26,0.82);
+  --bg-elevated:  rgba(22,18,38,0.88);
+  --bg-overlay:   rgba(4,3,10,0.92);
 
-  /* ── Legacy neon aliases → Egyptian accents ───────────── */
+  /* ── Legacy neon aliases → Cosmic accents ─────────────── */
   /* These keep every existing reference working while adopting
-     the new palette.  Components can opt into the raw tokens. */
-  --neon-blue:      var(--avenora-gold);
-  --neon-blue-dim:  var(--avenora-bronze);
-  --neon-green:     #4a9e72;          /* muted emerald — readable */
-  --neon-green-dim: #2e6b4d;
-  --neon-purple:    #8866bb;          /* midnight violet accent    */
-  --neon-red:       #c0394a;          /* deep blood red            */
-  --neon-orange:    #b87040;          /* aged amber                */
+     the cosmic palette.  Components can opt into cs-* tokens. */
+  --neon-blue:      #c9a84c;        /* cosmic gold */
+  --neon-blue-dim:  #a07830;
+  --neon-green:     #00ccff;        /* cosmic cyan */
+  --neon-green-dim: #0088bb;
+  --neon-purple:    #7c5cd8;        /* cosmic violet */
+  --neon-red:       #c0394a;
+  --neon-orange:    #c9a84c;
 
   /* ── Text ──────────────────────────────────────────────── */
-  --text-primary:   var(--avenora-ivory);
-  --text-secondary: #b0a08a;
-  --text-muted:     #6b5e4e;
-  --text-link:      var(--avenora-gold);
+  --text-primary:   #f0e8d8;
+  --text-secondary: #c4b49a;
+  --text-muted:     #8a8090;
+  --text-link:      #c9a84c;
 
   /* ── Borders ───────────────────────────────────────────── */
-  --border-subtle: rgba(184,149,75,0.12);
-  --border-blue:   rgba(184,149,75,0.28);   /* gold borders */
-  --border-green:  rgba(74,158,114,0.28);   /* emerald borders */
+  --border-subtle: rgba(201,168,76,0.10);
+  --border-blue:   rgba(201,168,76,0.24);
+  --border-green:  rgba(0,204,255,0.18);
 
   /* ── Glows ─────────────────────────────────────────────── */
-  --glow-blue:   0 0 18px rgba(184,149,75,0.35);
-  --glow-green:  0 0 18px rgba(74,158,114,0.35);
-  --glow-purple: 0 0 18px rgba(136,102,187,0.35);
+  --glow-blue:   0 0 18px rgba(201,168,76,0.35);
+  --glow-green:  0 0 18px rgba(0,204,255,0.32);
+  --glow-purple: 0 0 18px rgba(124,92,216,0.35);
 
   /* ── Gradients ─────────────────────────────────────────── */
-  --grad-blue:  linear-gradient(135deg, rgba(184,149,75,0.12), rgba(118,85,47,0.07));
-  --grad-green: linear-gradient(135deg, rgba(33,72,60,0.25), rgba(33,72,60,0.08));
-  --grad-dark:  linear-gradient(180deg, #171513 0%, #090807 100%);
-  --grad-card:  linear-gradient(145deg, #161410, #0f0d0b);
-  --grad-hero:  linear-gradient(160deg, #141210 0%, #090807 55%, #110d08 100%);
+  --grad-blue:  linear-gradient(135deg, rgba(201,168,76,0.14), rgba(160,120,48,0.07));
+  --grad-green: linear-gradient(135deg, rgba(0,204,255,0.12), rgba(0,140,200,0.06));
+  --grad-dark:  linear-gradient(180deg, #08060f 0%, #04030a 100%);
+  --grad-card:  linear-gradient(145deg, rgba(18,14,32,0.85), rgba(10,8,20,0.92));
+  --grad-hero:  linear-gradient(160deg, #09071a 0%, #04030a 55%, #070414 100%);
 
   /* ── Typography ────────────────────────────────────────── */
   --font-main: -apple-system, 'Segoe UI', system-ui, sans-serif;
@@ -113,6 +113,7 @@ body {
   line-height: 1.6;
   min-height: 100vh;
   overflow-x: hidden;
+  /* Cosmic deep-space base — nebula overlays added by avenora-cosmic.css */
 }
 
 img, video { max-width: 100%; height: auto; display: block; }
