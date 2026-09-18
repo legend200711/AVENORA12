@@ -343,6 +343,29 @@ async function start() {
   server.listen(PORT, () => {
     logger.info(`🌅 AVENORA API running on port ${PORT}`);
     logger.info(`Environment: ${process.env.NODE_ENV}`);
+
+    // ── Render free-tier keep-alive ─────────────────────────────────────
+    // Render's free plan suspends a service after 15 minutes of inactivity.
+    // Ping our own /health endpoint every 14 minutes so the process never
+    // goes idle. Only runs in production when the RENDER env var is set
+    // (Render injects RENDER=true automatically on all its instances).
+    // Has zero effect in local development.
+    if (process.env.NODE_ENV === 'production' && process.env.RENDER) {
+      const _selfUrl = `http://localhost:${PORT}/health`;
+      const _ping = () => {
+        const http = require('http');
+        http.get(_selfUrl, (res) => {
+          // Drain the response so the socket closes cleanly
+          res.resume();
+          logger.debug('[keep-alive] self-ping ok — preventing Render free-tier sleep');
+        }).on('error', (err) => {
+          logger.warn(`[keep-alive] self-ping failed: ${err.message}`);
+        });
+      };
+      // First ping after 14 minutes, then every 14 minutes
+      setInterval(_ping, 14 * 60 * 1000);
+      logger.info('[keep-alive] Render free-tier keep-alive active (ping every 14 min)');
+    }
   });
 
   server.on('error', (err) => {

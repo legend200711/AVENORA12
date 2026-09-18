@@ -477,17 +477,21 @@ async function loadAnnouncements() {
 }
 
 async function checkApiStatus() {
-  // Ping the backend health endpoint. If unreachable (Render cold start,
-  // misconfiguration, no internet), show a dismissible banner.
+  // Ping the backend health endpoint. If unreachable (Render free-tier cold
+  // start, misconfiguration, no internet), show a dismissible banner.
   // Never blocks the page — runs fire-and-forget after paint.
+  //
+  // Cold-start handling:
+  //   Render free-tier services sleep after 15 min of inactivity and take
+  //   30–90 s to wake up. On the first health check after sleep the request
+  //   times out. We automatically retry once after 25 s with a 35 s timeout
+  //   so that the server has time to finish booting before we declare it down.
   if (!window.LU_CONFIG?.apiUrl) return;
 
   function _showBanner(msg) {
-    // Global banner (visible to all users — below footer, dismissible)
     const el   = document.getElementById('hub-backend-status');
     const text = document.getElementById('hub-backend-status-text');
     if (el && text) { text.textContent = msg; el.style.display = 'flex'; }
-    // Compact access status (logged-in users only)
     const dot  = document.getElementById('api-status-dot');
     const txt  = document.getElementById('api-status-text');
     const sEl  = document.getElementById('api-status');
@@ -498,20 +502,70 @@ async function checkApiStatus() {
     }
   }
 
-  try {
-    const result = await LegendAPI.health.check();
-    const backendStatus = result.services?.find(s => s.service === 'Backend');
-    if (backendStatus && backendStatus.status !== 'ok') {
-      const errMsg = backendStatus.error || 'Backend unreachable';
-      _showBanner('Backend offline — some features may be unavailable. ' + errMsg);
+  function _hideBanner() {
+    const el = document.getElementById('hub-backend-status');
+    if (el) el.style.display = 'none';
+    const sEl = document.getElementById('api-status');
+    if (sEl) sEl.style.display = 'none';
+  }
+
+  // Show a gentle "waking up" notice while we wait — not an error yet.
+  function _showWakingBanner() {
+    const el   = document.getElementById('hub-backend-status');
+    const text = document.getElementById('hub-backend-status-text');
+    if (el && text) {
+      text.textContent = 'Server is starting up… this may take up to 30 seconds on a cold start.';
+      el.style.display = 'flex';
+      // Make the dot amber instead of red
+      const dot = el.querySelector('span[style*="border-radius:50%"]');
+      if (dot) dot.style.background = 'var(--avenora-gold,#c8923a)';
     }
-    // If ok, hide any stale banner (in case of retry)
-    if (backendStatus && backendStatus.status === 'ok') {
-      const el = document.getElementById('hub-backend-status');
-      if (el) el.style.display = 'none';
+  }
+
+  // Single attempt: resolve with { ok: bool, error?: string }
+  async function _attempt(timeoutMs) {
+    try {
+      const result = await LegendAPI.health.check();
+      const svc = result.services?.find(s => s.service === 'Backend');
+      if (!svc) return { ok: true }; // no backend configured — not an error
+      if (svc.status === 'ok') return { ok: true };
+      return { ok: false, error: svc.error || 'Backend unreachable' };
+    } catch {
+      return { ok: false, error: 'Failed to fetch' };
     }
-  } catch {
-    _showBanner('Unable to connect to AVENORA servers. Some features may be unavailable.');
+  }
+
+  // First attempt — 15 s timeout (matches the api.js default).
+  const first = await _attempt(15000);
+
+  if (first.ok) {
+    _hideBanner();
+    return;
+  }
+
+  // First attempt failed.
+  // If the error looks like a network/timeout issue (not a config problem)
+  // show the "waking up" notice and retry once after 25 s.
+  const isNetworkError = !first.error || first.error.includes('fetch') ||
+    first.error.includes('timeout') || first.error.includes('starting');
+
+  if (isNetworkError) {
+    _showWakingBanner();
+    await new Promise(r => setTimeout(r, 25000));
+
+    // If the user navigated away while we were waiting, the banner element
+    // may no longer exist — do nothing.
+    if (!document.getElementById('hub-backend-status')) return;
+
+    const retry = await _attempt(35000);
+    if (retry.ok) {
+      _hideBanner();
+      return;
+    }
+    _showBanner('Backend offline — some features may be unavailable. Server did not respond after retry.');
+  } else {
+    // Non-network error (e.g. misconfiguration) — show immediately, no retry.
+    _showBanner('Backend offline — some features may be unavailable. ' + first.error);
   }
 }
 
