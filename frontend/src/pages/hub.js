@@ -37,6 +37,12 @@ registerPage('hub', {
       ${renderAnnouncementsSection()}
       ${user ? renderCompactAccess(user) : ''}
       ${renderBuildDiagnostics()}
+      <!-- Backend status banner — shown for all users when backend is unreachable -->
+      <div id="hub-backend-status" style="display:none;align-items:center;gap:8px;padding:8px 12px;margin:0 0 var(--space-md);border-radius:6px;background:rgba(192,57,74,0.12);border:1px solid rgba(192,57,74,0.3);font-size:0.8rem;color:var(--text-secondary)">
+        <span id="hub-backend-status-dot" style="width:8px;height:8px;border-radius:50%;background:var(--neon-red,#c0394a);flex-shrink:0;display:inline-block"></span>
+        <span id="hub-backend-status-text"></span>
+        <button style="margin-left:auto;background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem;line-height:1" onclick="document.getElementById('hub-backend-status').style.display='none'" aria-label="Dismiss">✕</button>
+      </div>
       <div class="hub-footer">
         <p>AVENORA · A PLACE WHERE EVERYONE BELONGS</p>
       </div>
@@ -471,8 +477,42 @@ async function loadAnnouncements() {
 }
 
 async function checkApiStatus() {
-  // Status check is silent — results are only surfaced in admin diagnostics,
-  // never shown to regular users.
+  // Ping the backend health endpoint. If unreachable (Render cold start,
+  // misconfiguration, no internet), show a dismissible banner.
+  // Never blocks the page — runs fire-and-forget after paint.
+  if (!window.LU_CONFIG?.apiUrl) return;
+
+  function _showBanner(msg) {
+    // Global banner (visible to all users — below footer, dismissible)
+    const el   = document.getElementById('hub-backend-status');
+    const text = document.getElementById('hub-backend-status-text');
+    if (el && text) { text.textContent = msg; el.style.display = 'flex'; }
+    // Compact access status (logged-in users only)
+    const dot  = document.getElementById('api-status-dot');
+    const txt  = document.getElementById('api-status-text');
+    const sEl  = document.getElementById('api-status');
+    if (sEl && dot && txt) {
+      dot.style.background = 'var(--neon-red,#c0394a)';
+      txt.textContent = msg;
+      sEl.style.display = 'flex';
+    }
+  }
+
+  try {
+    const result = await LegendAPI.health.check();
+    const backendStatus = result.services?.find(s => s.service === 'Backend');
+    if (backendStatus && backendStatus.status !== 'ok') {
+      const errMsg = backendStatus.error || 'Backend unreachable';
+      _showBanner('Backend offline — some features may be unavailable. ' + errMsg);
+    }
+    // If ok, hide any stale banner (in case of retry)
+    if (backendStatus && backendStatus.status === 'ok') {
+      const el = document.getElementById('hub-backend-status');
+      if (el) el.style.display = 'none';
+    }
+  } catch {
+    _showBanner('Unable to connect to AVENORA servers. Some features may be unavailable.');
+  }
 }
 
 /* ─── Build / PWA Diagnostic Panel ──────────────────────── */

@@ -185,23 +185,30 @@ app.get('/api/themes/active', async (req, res) => {
 });
 
 // ─── Health Check ────────────────────────────────────────────
-app.get('/api/health', (req, res) => {
+// Unauthenticated — no rate-limit, no auth middleware.
+// Both paths are registered:
+//   GET /health      — root-level ping for Render health checks and uptime monitors
+//   GET /api/health  — used by the frontend HealthAPI (BASE_URL already ends in /api)
+const _healthHandler = (req, res) => {
   res.json({
+    ok: true,
     status: 'ok',
-    service: 'Avenora API',
+    service: 'avenora-backend',
     version: '1.0.0',
     timestamp: new Date().toISOString(),
     // Safe diagnostics: presence checks only — no secret values returned
     config: {
-      mongodbConfigured:    !!(process.env.MONGODB_URI && !process.env.MONGODB_URI.includes('localhost')),
-      firebaseProjectId:    process.env.FIREBASE_PROJECT_ID || null,
+      mongodbConfigured:     !!(process.env.MONGODB_URI && !process.env.MONGODB_URI.includes('localhost')),
+      firebaseProjectId:     process.env.FIREBASE_PROJECT_ID || null,
       firebaseApiKeyPresent: !!(process.env.FIREBASE_WEB_API_KEY),
       founderEmailConfigured: !!(process.env.FOUNDER_EMAIL),
-      supabaseConfigured:   !!(process.env.SUPABASE_URL && !process.env.SUPABASE_URL.includes('your-project')),
-      frontendUrl:          process.env.FRONTEND_URL || null,
+      supabaseConfigured:    !!(process.env.SUPABASE_URL && !process.env.SUPABASE_URL.includes('your-project')),
+      frontendUrl:           process.env.FRONTEND_URL || null,
     },
   });
-});
+};
+app.get('/health', _healthHandler);
+app.get('/api/health', _healthHandler);
 
 // ─── 404 Handler ─────────────────────────────────────────────
 app.use((req, res) => {

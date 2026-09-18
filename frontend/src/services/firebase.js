@@ -158,14 +158,44 @@
      */
     listenAuthState(callback) {
       return new Promise(async (resolve) => {
-        const auth = await getFirebaseAuth();
-        const { onAuthStateChanged } = await loadModule('auth');
+        // Safety timeout: if Firebase auth takes longer than 8 seconds to fire
+        // its first onAuthStateChanged (e.g. slow CDN, Render cold start, network issues)
+        // we unblock the app so the loading spinner never spins forever.
+        // The UI renders as if the user is logged out; the listener continues
+        // running in the background and will update state when Firebase responds.
         let firstFired = false;
+        const _authSafetyTimeout = setTimeout(() => {
+          if (!firstFired) {
+            firstFired = true;
+            console.warn('[AVN] Firebase auth timed out after 8 s — rendering without auth. Will update when Firebase responds.');
+            LegendState.set('authLoading', false);
+            resolve();
+            window.dispatchEvent(new CustomEvent('lu:auth-ready'));
+          }
+        }, 8000);
+
+        let auth;
+        try {
+          auth = await getFirebaseAuth();
+        } catch (initErr) {
+          console.error('[AVN] Firebase Auth init failed:', initErr.message);
+          clearTimeout(_authSafetyTimeout);
+          if (!firstFired) {
+            firstFired = true;
+            LegendState.set('authLoading', false);
+            resolve();
+            window.dispatchEvent(new CustomEvent('lu:auth-ready'));
+          }
+          return;
+        }
+
+        const { onAuthStateChanged } = await loadModule('auth');
         onAuthStateChanged(auth, async (fbUser) => {
           // Resolve the auth gate synchronously on the first call
           // (before any async Firestore lookups) so the UI never hangs.
           if (!firstFired) {
             firstFired = true;
+            clearTimeout(_authSafetyTimeout);
             LegendState.set('authLoading', false);
             resolve();
             // Signal api.js that auth state is known — prevents requests

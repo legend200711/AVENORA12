@@ -288,17 +288,51 @@
     const _user = window.AvenoraFirebase?.Auth?.getUser?.() || null;
     const _uid  = _user?.uid || _user?.id || null;
 
+    // ── Request timeout ──────────────────────────────────────
+    // Render free tier sleeps after inactivity. Without a timeout, the browser
+    // fetch() hangs indefinitely when the backend is waking up, causing the
+    // loading spinner to spin forever ("Cannot reach the backend" / "Failed to fetch").
+    // Default: 15 s for regular requests, 30 s for uploads (set opts._timeoutMs).
+    const _timeoutMs = opts._timeoutMs || 15000;
+    const _aborter = new AbortController();
+    const _timeoutId = setTimeout(() => _aborter.abort(), _timeoutMs);
+    // Merge caller-supplied signal with our timeout signal (both can abort)
+    let _signal = _aborter.signal;
+    if (opts.signal) {
+      // If the caller also has an abort signal, abort on whichever fires first
+      const _callerSignal = opts.signal;
+      const _combined = new AbortController();
+      _callerSignal.addEventListener('abort', () => _combined.abort());
+      _aborter.signal.addEventListener('abort', () => _combined.abort());
+      _signal = _combined.signal;
+    }
+
     const config = {
       method,
       headers,
-      signal: opts.signal,
+      signal: _signal,
     };
     if (opts.body && method !== 'GET') config.body = JSON.stringify(opts.body);
 
     let res;
     try {
       res = await fetch(fullUrl, config);
+      clearTimeout(_timeoutId);
     } catch (networkErr) {
+      clearTimeout(_timeoutId);
+      // AbortError from our timeout → convert to a clear "unreachable" message
+      if (networkErr.name === 'AbortError') {
+        const timeoutErr = new Error(
+          'Unable to connect to AVENORA servers. The server may be starting up — please try again in a moment.'
+        );
+        timeoutErr.code = 'BACKEND_UNREACHABLE';
+        timeoutErr.originalError = 'Request timed out after ' + (_timeoutMs / 1000) + 's';
+        console.error(
+          '[AVENORA] Request timeout — ' + method + ' ' + fullUrl,
+          { timeoutMs: _timeoutMs, backendHost: (() => { try { return new URL(fullUrl).origin; } catch { return fullUrl; } })() }
+        );
+        throw timeoutErr;
+      }
       throw _diagNetworkError(networkErr, method, fullUrl);
     }
 
@@ -1405,32 +1439,42 @@
 
   // ─── Health ───────────────────────────────────────────────
   // Checks reachability of the backend and Supabase.
+  // Uses AbortController with a 10 s timeout so the check never hangs
+  // indefinitely on Render cold starts.
   const HealthAPI = {
     check: () => {
-      // Also ping the backend health endpoint if configured
+      function _timedFetch(url, options, timeoutMs) {
+        const ac = new AbortController();
+        const tid = setTimeout(() => ac.abort(), timeoutMs);
+        return fetch(url, { ...options, signal: ac.signal })
+          .finally(() => clearTimeout(tid));
+      }
+
+      // Supabase connectivity check (uses anon key — public)
       const checks = [
-        // Supabase connectivity check (uses anon key — public)
-        fetch(`${SUPABASE_PROJECT_URL}/rest/v1/`, {
+        _timedFetch(`${SUPABASE_PROJECT_URL}/rest/v1/`, {
           method: 'HEAD',
           headers: { apikey: SUPABASE_ANON_KEY },
-        })
+        }, 8000)
           .then(r => ({
-            service:        'Supabase',
-            status:         (r.ok || r.status === 401 || r.status === 404) ? 'ok' : 'error',
+            service:         'Supabase',
+            status:          (r.ok || r.status === 401 || r.status === 404) ? 'ok' : 'error',
             supabaseProject: SUPABASE_PROJECT_URL,
-            httpStatus:     r.status,
+            httpStatus:      r.status,
           }))
-          .catch(e => ({ service: 'Supabase', status: 'error', error: e.message })),
+          .catch(e => ({ service: 'Supabase', status: 'error', error: e.name === 'AbortError' ? 'Timed out' : e.message })),
       ];
-      // Backend health check (if configured)
+
+      // Backend health check (if configured) — 10 s timeout
       if (BASE_URL) {
         checks.push(
-          fetch(`${BASE_URL}/health`)
+          _timedFetch(`${BASE_URL}/health`, {}, 10000)
             .then(r => r.json())
-            .then(d => ({ service: 'Backend', status: d.status || 'ok', config: d.config }))
-            .catch(e => ({ service: 'Backend', status: 'error', error: e.message }))
+            .then(d => ({ service: 'Backend', status: (d.ok || d.status === 'ok') ? 'ok' : 'error', config: d.config, ok: d.ok }))
+            .catch(e => ({ service: 'Backend', status: 'error', error: e.name === 'AbortError' ? 'Timed out (backend may be starting up)' : e.message }))
         );
       }
+
       return Promise.all(checks).then(results => ({
         status: results.every(r => r.status === 'ok') ? 'ok' : 'degraded',
         services: results,
