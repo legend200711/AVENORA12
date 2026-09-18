@@ -1,0 +1,917 @@
+/**
+ * AVENORA DJ SYSTEM — COSMIC EDITION
+ * Deep-space, premium cinematic DJ studio aesthetic.
+ * CSS-only effects: no Three.js, no heavy 3D, no external images.
+ * Mobile-first, prefers-reduced-motion compliant.
+ */
+
+/* ─── DJ page scope ──────────────────────────────────────── */
+#dj-app {
+  position: relative;
+  min-height: 100vh;
+  padding: var(--space-lg) var(--space-md) calc(var(--space-lg) + 80px);
+  overflow-x: hidden;
+}
+
+/* ─── Cosmic deep-space background ──────────────────────── */
+#dj-cosmic-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  /* Layered radial nebula gradients */
+  background:
+    radial-gradient(ellipse 80% 60% at 15% 20%,  rgba(30,10,60,0.55)   0%, transparent 60%),
+    radial-gradient(ellipse 60% 40% at 85% 75%,  rgba(0,25,60,0.50)    0%, transparent 55%),
+    radial-gradient(ellipse 45% 55% at 50% 50%,  rgba(12,5,28,0.40)    0%, transparent 65%),
+    radial-gradient(ellipse 100% 100% at 50% 50%, #040308               0%, #060510 40%, #050408 100%);
+}
+
+/* Star field — pseudo-element dots via box-shadow */
+#dj-cosmic-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(1px 1px at  8%  12%, rgba(255,255,255,0.80) 0%, transparent 100%),
+    radial-gradient(1px 1px at 18%  45%, rgba(255,255,255,0.55) 0%, transparent 100%),
+    radial-gradient(1px 1px at 28%   8%, rgba(255,255,255,0.70) 0%, transparent 100%),
+    radial-gradient(1px 1px at 38%  72%, rgba(255,255,255,0.65) 0%, transparent 100%),
+    radial-gradient(1px 1px at 48%  30%, rgba(255,255,255,0.75) 0%, transparent 100%),
+    radial-gradient(1px 1px at 58%  88%, rgba(255,255,255,0.50) 0%, transparent 100%),
+    radial-gradient(1px 1px at 68%  22%, rgba(255,255,255,0.80) 0%, transparent 100%),
+    radial-gradient(1px 1px at 78%  55%, rgba(255,255,255,0.60) 0%, transparent 100%),
+    radial-gradient(1px 1px at 88%  15%, rgba(255,255,255,0.70) 0%, transparent 100%),
+    radial-gradient(1px 1px at  5%  65%, rgba(255,255,255,0.65) 0%, transparent 100%),
+    radial-gradient(1px 1px at 93%  40%, rgba(255,255,255,0.55) 0%, transparent 100%),
+    radial-gradient(1px 1px at 35%  95%, rgba(255,255,255,0.45) 0%, transparent 100%),
+    radial-gradient(1.5px 1.5px at 72%  78%, rgba(200,210,255,0.60) 0%, transparent 100%),
+    radial-gradient(1.5px 1.5px at 22%  33%, rgba(210,200,255,0.55) 0%, transparent 100%),
+    radial-gradient(1.5px 1.5px at 55%  18%, rgba(255,240,200,0.50) 0%, transparent 100%),
+    radial-gradient(1px 1px at 42%  58%, rgba(255,255,255,0.40) 0%, transparent 100%),
+    radial-gradient(1px 1px at 62%  42%, rgba(255,255,255,0.45) 0%, transparent 100%),
+    radial-gradient(1px 1px at 82%  82%, rgba(255,255,255,0.35) 0%, transparent 100%),
+    radial-gradient(1px 1px at  3%  28%, rgba(255,255,255,0.60) 0%, transparent 100%),
+    radial-gradient(1px 1px at 96%  68%, rgba(255,255,255,0.55) 0%, transparent 100%);
+  animation: dj-twinkle 6s ease-in-out infinite alternate;
+}
+
+/* Distant aurora/nebula glow layer */
+#dj-cosmic-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 55% 30% at 20% 85%,  rgba(0,60,120,0.18)  0%, transparent 70%),
+    radial-gradient(ellipse 40% 25% at 80% 10%,  rgba(80,20,120,0.16) 0%, transparent 65%),
+    radial-gradient(ellipse 30% 20% at 60% 60%,  rgba(160,100,20,0.08) 0%, transparent 60%);
+  animation: dj-nebula-drift 20s ease-in-out infinite alternate;
+}
+
+@keyframes dj-twinkle {
+  0%   { opacity: 0.6; }
+  50%  { opacity: 0.9; }
+  100% { opacity: 0.65; }
+}
+
+@keyframes dj-nebula-drift {
+  0%   { transform: translateX(0)   translateY(0)   scale(1); }
+  50%  { transform: translateX(8px) translateY(-5px) scale(1.02); }
+  100% { transform: translateX(-6px) translateY(4px) scale(0.99); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #dj-cosmic-bg::before,
+  #dj-cosmic-bg::after { animation: none; }
+}
+
+/* ─── DJ Page Header ─────────────────────────────────────── */
+.dj-cosmic-header {
+  text-align: center;
+  padding: var(--space-xl) 0 var(--space-lg);
+  position: relative;
+}
+
+.dj-brand-wrap {
+  display: inline-block;
+  position: relative;
+}
+
+.dj-brand-title {
+  font-family: var(--font-display);
+  font-size: clamp(2rem, 8vw, 3.8rem);
+  font-weight: 900;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg,
+    #c9a84c 0%,
+    #f0d080 30%,
+    #ffe8a0 55%,
+    #d4a840 80%,
+    #9c7030 100%
+  );
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  filter: drop-shadow(0 0 22px rgba(200,160,60,0.55));
+  line-height: 1.1;
+}
+
+.dj-brand-system {
+  font-family: var(--font-display);
+  font-size: clamp(0.7rem, 2vw, 0.95rem);
+  letter-spacing: 0.45em;
+  text-transform: uppercase;
+  color: rgba(200,170,90,0.70);
+  display: block;
+  margin-top: 2px;
+}
+
+.dj-brand-subtitle {
+  font-family: var(--font-display);
+  font-size: clamp(0.6rem, 1.8vw, 0.78rem);
+  letter-spacing: 0.5em;
+  text-transform: uppercase;
+  color: rgba(100,160,255,0.55);
+  margin-top: var(--space-xs);
+  display: block;
+}
+
+/* Orbital accent ring behind branding */
+.dj-brand-wrap::before {
+  content: '';
+  position: absolute;
+  inset: -18px -28px;
+  border-radius: 50%;
+  border: 1px solid rgba(200,160,60,0.18);
+  box-shadow:
+    0 0 30px rgba(200,160,60,0.10),
+    inset 0 0 30px rgba(200,160,60,0.04);
+  pointer-events: none;
+  animation: dj-ring-pulse 4s ease-in-out infinite;
+}
+
+@keyframes dj-ring-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(1); }
+  50%       { opacity: 1;   transform: scale(1.015); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dj-brand-wrap::before { animation: none; }
+}
+
+/* ─── Mode Selector ──────────────────────────────────────── */
+.dj-mode-bar {
+  display: flex;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: var(--space-xl);
+  flex-wrap: wrap;
+}
+
+.dj-mode-btn {
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 9px 20px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(150,120,60,0.35);
+  background: rgba(8,6,18,0.70);
+  color: rgba(180,150,70,0.60);
+  cursor: pointer;
+  transition: all 200ms ease;
+  white-space: nowrap;
+}
+
+.dj-mode-btn:hover {
+  border-color: rgba(200,160,60,0.55);
+  color: rgba(200,160,60,0.90);
+  background: rgba(200,160,60,0.08);
+  box-shadow: 0 0 12px rgba(200,160,60,0.15);
+  text-decoration: none;
+}
+
+/* LISTEN — cyan */
+.dj-mode-btn.mode-listen.active,
+.dj-mode-btn.mode-listen:focus-visible {
+  border-color: rgba(0,180,240,0.70);
+  color: #00ccff;
+  background: rgba(0,100,180,0.18);
+  box-shadow: 0 0 18px rgba(0,160,220,0.30), inset 0 0 8px rgba(0,160,220,0.08);
+}
+
+/* DJ — gold */
+.dj-mode-btn.mode-dj.active,
+.dj-mode-btn.mode-dj:focus-visible {
+  border-color: rgba(200,160,60,0.80);
+  color: #ffd060;
+  background: rgba(160,100,10,0.22);
+  box-shadow: 0 0 20px rgba(200,150,30,0.40), inset 0 0 10px rgba(200,150,30,0.10);
+}
+
+/* BROADCAST — radio red/amber */
+.dj-mode-btn.mode-broadcast.active,
+.dj-mode-btn.mode-broadcast:focus-visible {
+  border-color: rgba(255,90,40,0.70);
+  color: #ff7040;
+  background: rgba(180,50,10,0.20);
+  box-shadow: 0 0 18px rgba(220,80,30,0.35), inset 0 0 8px rgba(220,80,30,0.08);
+}
+
+.dj-mode-btn.mode-broadcast.active .dj-bc-dot {
+  display: inline-block;
+}
+.dj-bc-dot {
+  display: none;
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #ff5a28;
+  margin-right: 4px;
+  animation: dj-bc-blink 1s step-start infinite;
+  vertical-align: middle;
+}
+@keyframes dj-bc-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dj-bc-dot { animation: none; }
+}
+
+/* ─── Cosmic glass panel mixin ───────────────────────────── */
+.dj-panel {
+  background: linear-gradient(145deg, rgba(12,8,28,0.82), rgba(6,4,16,0.88));
+  border-radius: var(--radius-lg);
+  border: 1px solid rgba(150,120,60,0.22);
+  box-shadow:
+    0 2px 24px rgba(0,0,0,0.60),
+    inset 0 1px 0 rgba(255,220,100,0.06);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  padding: var(--space-lg);
+  position: relative;
+  overflow: hidden;
+}
+
+/* ─── Deck A (AURORA) — gold identity ───────────────────── */
+.dj-deck-a {
+  border-color: rgba(200,150,40,0.35) !important;
+  box-shadow:
+    0 2px 32px rgba(0,0,0,0.65),
+    0 0 0 1px rgba(200,150,40,0.12),
+    inset 0 1px 0 rgba(255,210,80,0.08) !important;
+}
+
+.dj-deck-a::before {
+  content: '';
+  position: absolute;
+  top: -60px; right: -60px;
+  width: 160px; height: 160px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(200,140,20,0.12) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+/* Deck B (NOVA) — cyan/blue identity */
+.dj-deck-b {
+  border-color: rgba(0,140,210,0.35) !important;
+  box-shadow:
+    0 2px 32px rgba(0,0,0,0.65),
+    0 0 0 1px rgba(0,140,210,0.12),
+    inset 0 1px 0 rgba(0,200,255,0.06) !important;
+}
+
+.dj-deck-b::before {
+  content: '';
+  position: absolute;
+  top: -60px; left: -60px;
+  width: 160px; height: 160px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(0,120,200,0.14) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+/* Deck heading */
+.dj-deck-title {
+  font-family: var(--font-display);
+  letter-spacing: 0.14em;
+  font-size: 1rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.dj-deck-title-a { color: #e8b840; text-shadow: 0 0 12px rgba(220,170,40,0.50); }
+.dj-deck-title-b { color: #30c0ff; text-shadow: 0 0 12px rgba(0,170,240,0.50); }
+
+.dj-deck-subtitle {
+  font-size: 0.62rem;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  opacity: 0.55;
+  margin-top: 1px;
+  display: block;
+}
+
+/* ─── Track info box ─────────────────────────────────────── */
+.dj-track-info {
+  background: rgba(4,2,12,0.60);
+  border: 1px solid rgba(255,255,255,0.05);
+  border-radius: var(--radius-md);
+  padding: var(--space-md);
+  margin-bottom: var(--space-md);
+  min-height: 60px;
+}
+
+.dj-track-title {
+  font-weight: 600;
+  font-size: 0.88rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+
+.dj-track-bpm {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ─── Waveform / progress bar ────────────────────────────── */
+.dj-progress-wrap {
+  cursor: pointer;
+  margin-bottom: 4px;
+  position: relative;
+}
+
+.dj-progress-bar {
+  height: 6px;
+  background: rgba(255,255,255,0.06);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  transition: height 150ms ease;
+}
+
+.dj-progress-wrap:hover .dj-progress-bar { height: 8px; }
+
+.dj-progress-fill-a {
+  height: 100%;
+  background: linear-gradient(90deg, #9c7020, #e8b840, #ffd870);
+  border-radius: var(--radius-full);
+  transition: width 150ms linear;
+  box-shadow: 0 0 6px rgba(220,170,40,0.50);
+}
+
+.dj-progress-fill-b {
+  height: 100%;
+  background: linear-gradient(90deg, #005090, #0088d0, #30c0ff);
+  border-radius: var(--radius-full);
+  transition: width 150ms linear;
+  box-shadow: 0 0 6px rgba(0,160,240,0.50);
+}
+
+.dj-time-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-bottom: var(--space-md);
+  font-family: var(--font-mono);
+  letter-spacing: 0.05em;
+}
+
+/* ─── Play Button ────────────────────────────────────────── */
+.dj-play-btn-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: var(--space-md);
+}
+
+/* Play button base — larger circular cosmetic wrap */
+.dj-play-outer-a,
+.dj-play-outer-b {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 58px; height: 58px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.dj-play-outer-a {
+  background: radial-gradient(circle at 35% 35%, #9c6820, #5c3e08);
+  border: 2px solid rgba(220,170,40,0.60);
+  box-shadow:
+    0 0 0 4px rgba(200,150,30,0.15),
+    0 0 18px rgba(200,140,20,0.35),
+    inset 0 1px 0 rgba(255,220,100,0.20);
+}
+
+.dj-play-outer-b {
+  background: radial-gradient(circle at 35% 35%, #005888, #002a50);
+  border: 2px solid rgba(0,160,230,0.55);
+  box-shadow:
+    0 0 0 4px rgba(0,140,210,0.15),
+    0 0 18px rgba(0,140,210,0.35),
+    inset 0 1px 0 rgba(0,220,255,0.12);
+}
+
+/* Pulsing outer ring when playing */
+.dj-play-outer-a.playing {
+  animation: dj-play-pulse-a 2s ease-in-out infinite;
+}
+.dj-play-outer-b.playing {
+  animation: dj-play-pulse-b 2s ease-in-out infinite;
+}
+
+@keyframes dj-play-pulse-a {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(200,150,30,0.15), 0 0 18px rgba(200,140,20,0.35), inset 0 1px 0 rgba(255,220,100,0.20); }
+  50%       { box-shadow: 0 0 0 8px rgba(200,150,30,0.08), 0 0 34px rgba(220,160,30,0.55), inset 0 1px 0 rgba(255,220,100,0.20); }
+}
+@keyframes dj-play-pulse-b {
+  0%, 100% { box-shadow: 0 0 0 4px rgba(0,140,210,0.15), 0 0 18px rgba(0,140,210,0.35), inset 0 1px 0 rgba(0,220,255,0.12); }
+  50%       { box-shadow: 0 0 0 8px rgba(0,140,210,0.08), 0 0 34px rgba(0,160,240,0.55), inset 0 1px 0 rgba(0,220,255,0.12); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dj-play-outer-a.playing,
+  .dj-play-outer-b.playing { animation: none; }
+}
+
+/* The actual btn inside */
+.dj-play-btn {
+  background: transparent !important;
+  border: none !important;
+  color: var(--avenora-ivory) !important;
+  font-size: 1.35rem !important;
+  width: 54px !important;
+  height: 54px !important;
+  border-radius: 50% !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  position: absolute;
+  inset: 0;
+}
+
+/* ─── Deck control buttons ───────────────────────────────── */
+.dj-ctrl-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-bottom: var(--space-md);
+}
+
+.dj-ctrl-btn {
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.12em;
+  padding: 7px 11px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(255,255,255,0.04);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 150ms ease;
+  white-space: nowrap;
+  min-height: 34px;
+  min-width: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dj-ctrl-btn:hover {
+  background: rgba(255,255,255,0.09);
+  color: var(--text-primary);
+  border-color: rgba(255,255,255,0.18);
+  text-decoration: none;
+}
+
+.dj-ctrl-cue {
+  color: #e8960a !important;
+  border-color: rgba(220,140,10,0.30) !important;
+}
+.dj-ctrl-cue:hover {
+  background: rgba(220,140,10,0.12) !important;
+  box-shadow: 0 0 10px rgba(220,140,10,0.25);
+}
+
+.dj-ctrl-sync {
+  color: #30d0a0 !important;
+  border-color: rgba(30,200,150,0.30) !important;
+}
+.dj-ctrl-sync:hover {
+  background: rgba(30,200,150,0.10) !important;
+  box-shadow: 0 0 10px rgba(30,200,150,0.22);
+}
+
+/* ─── Custom cosmic volume slider ────────────────────────── */
+.dj-vol-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-sm);
+}
+
+.dj-vol-label {
+  font-size: 0.65rem;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  min-width: 28px;
+  font-family: var(--font-display);
+}
+
+.dj-vol-pct {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  min-width: 36px;
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+/* Custom range slider */
+.dj-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 4px;
+  border-radius: var(--radius-full);
+  outline: none;
+  cursor: pointer;
+  min-height: 18px; /* larger touch area */
+  background: transparent;
+  position: relative;
+}
+
+/* Gold slider (Deck A / EQ A) */
+.dj-slider-gold {
+  background: linear-gradient(to right,
+    rgba(200,140,20,0.70) 0%,
+    rgba(200,140,20,0.70) var(--val, 80%),
+    rgba(255,255,255,0.08) var(--val, 80%),
+    rgba(255,255,255,0.08) 100%
+  );
+}
+
+/* Cyan slider (Deck B / EQ B) */
+.dj-slider-cyan {
+  background: linear-gradient(to right,
+    rgba(0,150,220,0.70) 0%,
+    rgba(0,150,220,0.70) var(--val, 80%),
+    rgba(255,255,255,0.08) var(--val, 80%),
+    rgba(255,255,255,0.08) 100%
+  );
+}
+
+/* Neutral slider (Master EQ) */
+.dj-slider-neutral {
+  background: linear-gradient(to right,
+    rgba(140,100,200,0.65) 0%,
+    rgba(140,100,200,0.65) var(--val, 50%),
+    rgba(255,255,255,0.08) var(--val, 50%),
+    rgba(255,255,255,0.08) 100%
+  );
+}
+
+.dj-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.40);
+  background: var(--avenora-ivory);
+  box-shadow: 0 0 8px rgba(255,255,255,0.30);
+  cursor: pointer;
+  transition: box-shadow 150ms ease, transform 150ms ease;
+}
+.dj-slider::-moz-range-thumb {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.40);
+  background: var(--avenora-ivory);
+  box-shadow: 0 0 8px rgba(255,255,255,0.30);
+  cursor: pointer;
+}
+
+.dj-slider-gold::-webkit-slider-thumb { background: #f0c050; border-color: rgba(220,170,40,0.70); box-shadow: 0 0 10px rgba(200,150,20,0.60); }
+.dj-slider-cyan::-webkit-slider-thumb  { background: #50c8f0; border-color: rgba(0,170,230,0.70);  box-shadow: 0 0 10px rgba(0,160,220,0.55); }
+.dj-slider-gold::-moz-range-thumb      { background: #f0c050; border-color: rgba(220,170,40,0.70); box-shadow: 0 0 10px rgba(200,150,20,0.60); }
+.dj-slider-cyan::-moz-range-thumb       { background: #50c8f0; border-color: rgba(0,170,230,0.70);  box-shadow: 0 0 10px rgba(0,160,220,0.55); }
+
+.dj-slider:hover::-webkit-slider-thumb,
+.dj-slider:focus::-webkit-slider-thumb { transform: scale(1.2); }
+
+/* ─── Load Track button ──────────────────────────────────── */
+.dj-load-btn {
+  width: 100%;
+  margin-top: var(--space-sm);
+  font-family: var(--font-display);
+  font-size: 0.75rem;
+  letter-spacing: 0.18em;
+  padding: 9px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255,255,255,0.10);
+  background: rgba(255,255,255,0.04);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 180ms ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 42px;
+}
+.dj-load-btn:hover {
+  border-color: rgba(200,155,40,0.45);
+  color: #e8b840;
+  background: rgba(200,150,30,0.10);
+  box-shadow: 0 0 12px rgba(200,140,20,0.20);
+  text-decoration: none;
+}
+
+/* ─── Queue button in deck header ────────────────────────── */
+.dj-queue-btn {
+  font-size: 0.68rem;
+  letter-spacing: 0.12em;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid rgba(255,255,255,0.10);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+.dj-queue-btn:hover {
+  border-color: rgba(255,255,255,0.22);
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+/* ─── Mixer panel ────────────────────────────────────────── */
+.dj-mixer-panel {
+  border-color: rgba(80,60,160,0.35) !important;
+  box-shadow:
+    0 2px 32px rgba(0,0,0,0.65),
+    0 0 0 1px rgba(80,60,160,0.10),
+    inset 0 1px 0 rgba(140,100,200,0.06) !important;
+}
+
+.dj-mixer-title {
+  font-family: var(--font-display);
+  font-size: 0.80rem;
+  letter-spacing: 0.22em;
+  color: #a888d4;
+  text-shadow: 0 0 12px rgba(140,100,200,0.45);
+  text-transform: uppercase;
+  text-align: center;
+  margin-bottom: var(--space-md);
+}
+
+/* EQ row */
+.dj-eq-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.dj-eq-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  min-width: 52px;
+  text-align: right;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-family: var(--font-display);
+}
+
+.dj-eq-val {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  min-width: 32px;
+  text-align: right;
+  font-family: var(--font-mono);
+}
+
+/* ─── Crossfader ─────────────────────────────────────────── */
+.dj-crossfader-wrap {
+  width: 100%;
+  margin-top: var(--space-sm);
+}
+
+.dj-crossfader-label {
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  text-align: center;
+  margin-bottom: 6px;
+  font-family: var(--font-display);
+}
+
+.dj-crossfader-track {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dj-cf-a {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #e8b840;
+  font-family: var(--font-display);
+  text-shadow: 0 0 8px rgba(220,170,40,0.55);
+  min-width: 12px;
+}
+
+.dj-cf-b {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #30c0ff;
+  font-family: var(--font-display);
+  text-shadow: 0 0 8px rgba(0,170,240,0.55);
+  min-width: 12px;
+  text-align: right;
+}
+
+/* Special crossfader slider */
+.dj-slider-crossfader {
+  -webkit-appearance: none;
+  appearance: none;
+  flex: 1;
+  height: 6px;
+  border-radius: var(--radius-full);
+  outline: none;
+  cursor: pointer;
+  background: linear-gradient(to right,
+    rgba(200,150,30,0.75) 0%,
+    rgba(150,60,180,0.50) 50%,
+    rgba(0,150,220,0.75) 100%
+  );
+  min-height: 24px; /* large touch target */
+}
+
+.dj-slider-crossfader::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffffff, #d0d8f0);
+  border: 2px solid rgba(255,255,255,0.50);
+  box-shadow:
+    0 0 12px rgba(180,180,255,0.55),
+    0 2px 6px rgba(0,0,0,0.50);
+  cursor: grab;
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+.dj-slider-crossfader::-moz-range-thumb {
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #ffffff, #d0d8f0);
+  border: 2px solid rgba(255,255,255,0.50);
+  box-shadow: 0 0 12px rgba(180,180,255,0.55), 0 2px 6px rgba(0,0,0,0.50);
+  cursor: grab;
+}
+.dj-slider-crossfader:active::-webkit-slider-thumb { cursor: grabbing; transform: scale(1.15); }
+
+/* ─── Broadcast panel ────────────────────────────────────── */
+.dj-broadcast-panel {
+  border-color: rgba(255,100,40,0.35) !important;
+  box-shadow:
+    0 2px 32px rgba(0,0,0,0.60),
+    inset 0 1px 0 rgba(255,120,50,0.06) !important;
+  max-width: 600px;
+  margin: 0 auto var(--space-lg);
+}
+
+.dj-bc-title {
+  font-family: var(--font-display);
+  font-size: 0.88rem;
+  letter-spacing: 0.18em;
+  color: #ff7040;
+  text-shadow: 0 0 14px rgba(255,100,40,0.45);
+  text-transform: uppercase;
+  margin-bottom: var(--space-md);
+}
+
+.dj-bc-timer {
+  font-family: var(--font-mono);
+  font-size: 1.5rem;
+  color: #ff7040;
+  letter-spacing: 0.12em;
+  text-align: center;
+  margin-bottom: var(--space-md);
+}
+
+/* LIVE badge */
+.dj-live-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  background: rgba(200,30,30,0.22);
+  border: 1px solid rgba(220,50,50,0.45);
+  color: #ff4444;
+  font-size: 0.70rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  font-family: var(--font-display);
+}
+.dj-live-badge::before {
+  content: '';
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #ff4444;
+  animation: dj-bc-blink 1s step-start infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .dj-live-badge::before { animation: none; }
+}
+
+/* ─── Visualizer panel ───────────────────────────────────── */
+.dj-viz-panel {
+  margin-bottom: var(--space-lg);
+  border-color: rgba(60,90,160,0.30) !important;
+}
+
+.dj-viz-title {
+  font-family: var(--font-display);
+  font-size: 0.80rem;
+  letter-spacing: 0.22em;
+  color: #6090d8;
+  text-transform: uppercase;
+}
+
+/* ─── Library / Music cards ──────────────────────────────── */
+.dj-library-panel {
+  border-color: rgba(60,90,160,0.28) !important;
+}
+
+.dj-library-title {
+  font-family: var(--font-display);
+  font-size: 0.80rem;
+  letter-spacing: 0.18em;
+  color: #6090d8;
+  text-transform: uppercase;
+}
+
+.dj-playlist-panel {
+  border-color: rgba(60,160,100,0.28) !important;
+}
+
+.dj-playlist-title {
+  font-family: var(--font-display);
+  font-size: 0.80rem;
+  letter-spacing: 0.18em;
+  color: #50b880;
+  text-transform: uppercase;
+}
+
+/* ─── Divider in mixer ───────────────────────────────────── */
+.dj-mixer-divider {
+  height: 1px;
+  background: rgba(140,100,200,0.20);
+  margin: var(--space-sm) 0;
+}
+
+/* ─── Decks grid ─────────────────────────────────────────── */
+#dj-decks-grid {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: var(--space-md);
+  margin-bottom: var(--space-lg);
+}
+
+/* Mixer column constraints */
+#dj-mixer-col {
+  min-width: 150px;
+  max-width: 190px;
+}
+
+/* ─── Responsive ─────────────────────────────────────────── */
+@media (max-width: 900px) {
+  #dj-decks-grid {
+    grid-template-columns: 1fr !important;
+  }
+  #dj-mixer-col {
+    max-width: 100%;
+  }
+}
+
+@media (max-width: 600px) {
+  .dj-ctrl-btn {
+    padding: 7px 8px;
+    font-size: 0.68rem;
+    min-width: 36px;
+  }
+  .dj-brand-title {
+    font-size: clamp(1.6rem, 10vw, 2.8rem);
+  }
+}
