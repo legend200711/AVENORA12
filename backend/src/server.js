@@ -281,7 +281,9 @@ _checkSupabaseConfig();
   }
   if (!process.env.FOUNDER_EMAIL) warn('FOUNDER_EMAIL', 'Founder/admin access will not work.');
   if (process.env.NODE_ENV === 'production' && (!process.env.MONGODB_URI || process.env.MONGODB_URI.includes('localhost'))) {
-    logger.error('❌ MONGODB_URI is pointing to localhost in production mode. The server will exit.');
+    logger.error('❌ MONGODB_URI is not configured or points to localhost in production.');
+    logger.error('   Set MONGODB_URI to a MongoDB Atlas URI in the Render dashboard → Environment → Secrets.');
+    logger.error('   The HTTP server will start but all MongoDB routes will fail until MONGODB_URI is set.');
   }
   if (process.env.NODE_ENV === 'production' && (!process.env.FRONTEND_URL || process.env.FRONTEND_URL.includes('your-'))) {
     logger.warn('⚠️  FRONTEND_URL is not set for production. CORS may block the frontend.');
@@ -308,30 +310,45 @@ _checkSupabaseConfig();
 })();
 
 async function start() {
+  // Database connection — non-fatal: the server must start even if MongoDB is
+  // unavailable so that GET /health is reachable and the operator can diagnose
+  // the issue without a complete service outage.
   try {
     await connectDatabase();
-
-    // Ensure Supabase Storage buckets exist
-    try {
-      const { ensureBuckets } = require('./services/storage/supabaseStorage');
-      await ensureBuckets();
-      logger.info('✅ Supabase Storage buckets verified');
-    } catch (storageErr) {
-      logger.warn(`⚠️  Supabase Storage bucket setup failed: ${storageErr.message}`);
-      logger.warn('   Uploads will return HTTP 503 until SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set in backend/.env');
-    }
-
-    // Initialize Socket.io for real-time features
-    initializeSocketServer(server);
-
-    server.listen(PORT, () => {
-      logger.info(`🌅 AVENORA API running on port ${PORT}`);
-      logger.info(`Environment: ${process.env.NODE_ENV}`);
-    });
-  } catch (err) {
-    logger.error('Failed to start server:', err);
-    process.exit(1);
+  } catch (dbErr) {
+    logger.error(`⚠️  Database connection failed at startup: ${dbErr.message}`);
+    logger.error('   The server will start without a database connection.');
+    logger.error('   MongoDB-dependent routes will return HTTP 503 until MONGODB_URI is set.');
+    // Do NOT exit — fall through and start the HTTP server
   }
+
+  // Ensure Supabase Storage buckets exist (non-fatal)
+  try {
+    const { ensureBuckets } = require('./services/storage/supabaseStorage');
+    await ensureBuckets();
+    logger.info('✅ Supabase Storage buckets verified');
+  } catch (storageErr) {
+    logger.warn(`⚠️  Supabase Storage bucket setup failed: ${storageErr.message}`);
+    logger.warn('   Uploads will return HTTP 503 until SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set.');
+  }
+
+  // Initialize Socket.io for real-time features (non-fatal)
+  try {
+    initializeSocketServer(server);
+  } catch (socketErr) {
+    logger.warn(`⚠️  Socket.io initialization failed: ${socketErr.message}`);
+  }
+
+  // Start HTTP server — this MUST succeed; if it fails, there is nothing to do
+  server.listen(PORT, () => {
+    logger.info(`🌅 AVENORA API running on port ${PORT}`);
+    logger.info(`Environment: ${process.env.NODE_ENV}`);
+  });
+
+  server.on('error', (err) => {
+    logger.error(`HTTP server error: ${err.message}`);
+    process.exit(1);
+  });
 }
 
 start();

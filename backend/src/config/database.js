@@ -53,14 +53,28 @@ async function connectDatabase() {
     logger.warn('Local MongoDB not available — falling back to in-process database.');
   }
 
-  // 3. Fallback: mongodb-memory-server (dev only — data resets on restart)
-  // Block this fallback in production — if the database is not available in production,
-  // we must fail fast so the operator knows to fix the MONGODB_URI configuration.
+  // 3. Fallback in production: log clearly but DO NOT exit — the server must stay
+  //    up so that GET /health is reachable and the operator can diagnose the issue
+  //    from the Render dashboard, browser DevTools, or an uptime monitor.
+  //    All MongoDB-dependent routes will return HTTP 503 while the DB is unavailable.
   if (process.env.NODE_ENV === 'production') {
-    logger.error('❌ Database connection failed in production mode. Server cannot start safely.');
-    logger.error('   Set MONGODB_URI to a valid MongoDB Atlas URI in your deployment environment.');
-    process.exit(1);
+    logger.error('');
+    logger.error('══════════════════════════════════════════════════════════════════════');
+    logger.error('❌  MONGODB_URI NOT CONFIGURED — DATABASE UNAVAILABLE');
+    logger.error('══════════════════════════════════════════════════════════════════════');
+    logger.error('   The server is starting WITHOUT a database connection.');
+    logger.error('   All routes that require MongoDB will return HTTP 503.');
+    logger.error('');
+    logger.error('   To fix:');
+    logger.error('   1. Go to Render dashboard → avenora-backend → Environment');
+    logger.error('   2. Add secret: MONGODB_URI = mongodb+srv://<user>:<pass>@<cluster>.mongodb.net/legend_universe');
+    logger.error('   3. Save — Render will redeploy automatically');
+    logger.error('   GET /health will still respond OK so you can verify the server is alive.');
+    logger.error('══════════════════════════════════════════════════════════════════════');
+    logger.error('');
+    return; // Server continues without DB — NOT process.exit()
   }
+  // 4. Development fallback: mongodb-memory-server (data resets on restart)
   try {
     const { MongoMemoryServer } = require('mongodb-memory-server');
     const memServer = await MongoMemoryServer.create({ instance: { dbName: 'legend_universe' } });
