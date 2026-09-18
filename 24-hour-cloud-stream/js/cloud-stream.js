@@ -73,7 +73,7 @@ let _API_BASE = (() => {
  * Attaches the Firebase ID token from the current user.
  */
 async function _apiRequest(method, path, body) {
-  if (!_API_BASE) throw new Error('Backend URL not configured (window.LU_CONFIG.apiUrl). The cloud radio server cannot be reached.');
+  if (!_API_BASE) throw new Error('Backend URL not configured — expected in Firebase+Supabase-only mode. The backend engine is not available.');
   const token = _user ? await _user.getIdToken().catch(() => null) : null;
   if (!token) throw new Error('Authentication required — Firebase ID token unavailable');
   const opts = {
@@ -652,9 +652,10 @@ window.csrStartBroadcast = async function() {
         _renderHandoffStep(3, 'Engine offline — using local playback…');
       }
     } else {
-      engineError = 'Backend API URL not configured. Set window.LU_CONFIG.apiUrl.';
-      console.warn('[CSR] _API_BASE is null — backend engine cannot be started. ' + engineError);
-      _renderHandoffStep(3, 'No backend configured — using local playback…');
+      // No backend configured — expected in Firebase+Supabase-only architecture.
+      engineError = null;
+      console.info('[CSR] No backend API configured — running in client-side (Firestore) playback mode.');
+      _renderHandoffStep(3, 'Starting broadcast (Firestore-synced playback)…');
     }
 
     // 9. Mark active + publish to liveRooms feed

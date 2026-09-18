@@ -159,7 +159,7 @@
     listenAuthState(callback) {
       return new Promise(async (resolve) => {
         // Safety timeout: if Firebase auth takes longer than 8 seconds to fire
-        // its first onAuthStateChanged (e.g. slow CDN, Render cold start, network issues)
+        // its first onAuthStateChanged (e.g. slow CDN, network issues)
         // we unblock the app so the loading spinner never spins forever.
         // The UI renders as if the user is logged out; the listener continues
         // running in the background and will update state when Firebase responds.

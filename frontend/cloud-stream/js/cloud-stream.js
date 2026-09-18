@@ -104,7 +104,7 @@ let _API_BASE = (() => {
  * Returns the parsed JSON response, or throws on network/HTTP error.
  */
 async function _apiRequest(method, path, body) {
-  if (!_API_BASE) throw new Error('Backend URL not configured (window.LU_CONFIG.apiUrl). The cloud radio server cannot be reached.');
+  if (!_API_BASE) throw new Error('Backend URL not configured — this is expected in Firebase+Supabase-only mode. The backend engine is not available.');
   const token = _user ? await _user.getIdToken().catch(() => null) : null;
   if (!token) throw new Error('Authentication required — Firebase ID token unavailable');
   const opts = {
@@ -789,9 +789,12 @@ window.csrStartBroadcast = async function() {
         _renderHandoffStep(3, 'Engine offline — using local playback…');
       }
     } else {
-      engineError = 'Backend API URL not configured. Set window.LU_CONFIG.apiUrl.';
-      console.warn('[CSR] _API_BASE is null — backend engine cannot be started. ' + engineError);
-      _renderHandoffStep(3, 'No backend configured — using local playback…');
+      // No backend configured — this is expected in Firebase+Supabase-only architecture.
+      // The broadcast runs in client-side mode: Firestore handles Now Playing state
+      // and the browser plays audio directly from the CDN URLs in the queue.
+      engineError = null; // not an error — expected operating mode
+      console.info('[CSR] No backend API configured — running in client-side (Firestore) playback mode.');
+      _renderHandoffStep(3, 'Starting broadcast (Firestore-synced playback)…');
     }
 
     // 9. Mark active + publish to liveRooms feed
@@ -861,7 +864,7 @@ window.csrStartBroadcast = async function() {
       }, { merge: true });
     }
 
-    _renderHandoffStep(4, engineStarted ? 'Broadcast is LIVE! Engine running 24/7.' : 'Broadcast is LIVE! (local playback mode)');
+    _renderHandoffStep(4, 'Broadcast is LIVE!');
     await _sleep(800);
 
     _show('csrStartingProgress', false);
@@ -871,10 +874,10 @@ window.csrStartBroadcast = async function() {
     if (engineStarted) {
       _toast('&#9925; Cloud Radio is LIVE! The server will keep playing even when you close this tab.', 'success');
     } else if (engineError) {
-      _toast('&#9888; Cloud Radio started in local mode. Engine error: ' + engineError, 'warn');
-      console.error('[CSR] Engine start error (full):', engineError);
+      _toast('&#9888; Cloud Radio started — note: ' + engineError, 'warn');
+      console.warn('[CSR] Engine start note:', engineError);
     } else {
-      _toast('&#9925; Cloud Radio is LIVE!', 'success');
+      _toast('&#9925; Cloud Radio is LIVE! Playing via Firestore-synced client mode.', 'success');
     }
 
   } catch (e) {

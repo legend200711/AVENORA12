@@ -1383,8 +1383,7 @@
 
   // ─── Health ───────────────────────────────────────────────
   // Checks reachability of the backend and Supabase.
-  // Uses AbortController with a 10 s timeout so the check never hangs
-  // indefinitely on Render cold starts.
+  // Uses AbortController with a 10 s timeout so the check never hangs.
   const HealthAPI = {
     check: () => {
       function _timedFetch(url, options, timeoutMs) {

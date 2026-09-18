@@ -44,8 +44,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v13';
-const CACHE_NAME  = 'avenora-cache-v13';
+const SW_VERSION  = 'v14';
+const CACHE_NAME  = 'avenora-cache-v14';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -64,6 +64,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v10', // v10 — evict: API URL fix, error diagnostics
   'avenora-cache-v11', // v11 — evict: backend API URL, video delete, dashboard fixes
   'avenora-cache-v12', // v12 — evict: music queue advance, upload URL, reset-password, push setup
+  'avenora-cache-v13', // v13 — evict: Render URL removal, Firebase+Supabase-only architecture
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',

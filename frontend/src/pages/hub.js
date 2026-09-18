@@ -477,96 +477,53 @@ async function loadAnnouncements() {
 }
 
 async function checkApiStatus() {
-  // Ping the backend health endpoint. If unreachable (Render free-tier cold
-  // start, misconfiguration, no internet), show a dismissible banner.
+  // Architecture: Firebase + Supabase only — no Render/Express backend.
+  // This function checks Firebase and Supabase reachability and shows a
+  // status banner only when those services actually fail.
   // Never blocks the page — runs fire-and-forget after paint.
-  //
-  // Cold-start handling:
-  //   Render free-tier services sleep after 15 min of inactivity and take
-  //   30–90 s to wake up. On the first health check after sleep the request
-  //   times out. We automatically retry once after 25 s with a 35 s timeout
-  //   so that the server has time to finish booting before we declare it down.
-  if (!window.LU_CONFIG?.apiUrl) return;
 
   function _showBanner(msg) {
     const el   = document.getElementById('hub-backend-status');
     const text = document.getElementById('hub-backend-status-text');
     if (el && text) { text.textContent = msg; el.style.display = 'flex'; }
-    const dot  = document.getElementById('api-status-dot');
-    const txt  = document.getElementById('api-status-text');
-    const sEl  = document.getElementById('api-status');
-    if (sEl && dot && txt) {
-      dot.style.background = 'var(--neon-red,#c0394a)';
-      txt.textContent = msg;
-      sEl.style.display = 'flex';
-    }
   }
 
   function _hideBanner() {
     const el = document.getElementById('hub-backend-status');
     if (el) el.style.display = 'none';
-    const sEl = document.getElementById('api-status');
-    if (sEl) sEl.style.display = 'none';
   }
 
-  // Show a gentle "waking up" notice while we wait — not an error yet.
-  function _showWakingBanner() {
-    const el   = document.getElementById('hub-backend-status');
-    const text = document.getElementById('hub-backend-status-text');
-    if (el && text) {
-      text.textContent = 'Server is starting up… this may take up to 30 seconds on a cold start.';
-      el.style.display = 'flex';
-      // Make the dot amber instead of red
-      const dot = el.querySelector('span[style*="border-radius:50%"]');
-      if (dot) dot.style.background = 'var(--avenora-gold,#c8923a)';
+  // Check Supabase reachability (anon key, public HEAD request)
+  const SUPABASE_URL = 'https://licuiqxkkfboqezzmsqu.supabase.co';
+  const SUPABASE_ANON_KEY = (
+    typeof window !== 'undefined' &&
+    window.LU_SUPABASE_ANON_KEY
+  ) || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpY3VpcXhra2Zib3Flenptc3F1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNTYxMDQsImV4cCI6MjEwNDkzMjEwNH0.tsYOyCI7skF6Otz2W0oNYhxM63-0551lrqIDCO8NoJo';
+
+  try {
+    const ac = new AbortController();
+    const tid = setTimeout(() => ac.abort(), 8000);
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/`, {
+      method: 'HEAD',
+      headers: { apikey: SUPABASE_ANON_KEY },
+      signal: ac.signal,
+    }).finally(() => clearTimeout(tid));
+    // 200, 401, or 404 all mean Supabase is reachable
+    if (!r.ok && r.status !== 401 && r.status !== 404) {
+      _showBanner('Supabase service unavailable — some features may be limited.');
+      return;
     }
-  }
-
-  // Single attempt: resolve with { ok: bool, error?: string }
-  async function _attempt(timeoutMs) {
-    try {
-      const result = await LegendAPI.health.check();
-      const svc = result.services?.find(s => s.service === 'Backend');
-      if (!svc) return { ok: true }; // no backend configured — not an error
-      if (svc.status === 'ok') return { ok: true };
-      return { ok: false, error: svc.error || 'Backend unreachable' };
-    } catch {
-      return { ok: false, error: 'Failed to fetch' };
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      _showBanner('Supabase service is slow to respond — some features may be limited.');
+    } else {
+      _showBanner('Supabase service unavailable — check your internet connection.');
     }
-  }
-
-  // First attempt — 15 s timeout (matches the api.js default).
-  const first = await _attempt(15000);
-
-  if (first.ok) {
-    _hideBanner();
     return;
   }
 
-  // First attempt failed.
-  // If the error looks like a network/timeout issue (not a config problem)
-  // show the "waking up" notice and retry once after 25 s.
-  const isNetworkError = !first.error || first.error.includes('fetch') ||
-    first.error.includes('timeout') || first.error.includes('starting');
-
-  if (isNetworkError) {
-    _showWakingBanner();
-    await new Promise(r => setTimeout(r, 25000));
-
-    // If the user navigated away while we were waiting, the banner element
-    // may no longer exist — do nothing.
-    if (!document.getElementById('hub-backend-status')) return;
-
-    const retry = await _attempt(35000);
-    if (retry.ok) {
-      _hideBanner();
-      return;
-    }
-    _showBanner('Backend offline — some features may be unavailable. Server did not respond after retry.');
-  } else {
-    // Non-network error (e.g. misconfiguration) — show immediately, no retry.
-    _showBanner('Backend offline — some features may be unavailable. ' + first.error);
-  }
+  // All services reachable — hide any previous banner.
+  _hideBanner();
 }
 
 /* ─── Build / PWA Diagnostic Panel ──────────────────────── */
