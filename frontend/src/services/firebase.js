@@ -126,6 +126,19 @@
       return { message: 'Password reset email sent. Check your inbox.' };
     },
 
+    /**
+     * Complete a Firebase password reset using the oobCode from the email link.
+     * The reset URL looks like: ?oobCode=xxx&mode=resetPassword
+     * app.js calls this when the hash contains a reset token.
+     * For Firebase, the "token" in the URL is the oobCode.
+     */
+    async resetPassword(oobCode, newPassword) {
+      const auth = await getFirebaseAuth();
+      const { confirmPasswordReset } = await loadModule('auth');
+      await confirmPasswordReset(auth, oobCode, newPassword);
+      return { success: true };
+    },
+
     isLoggedIn() {
       return !!(sessionStorage.getItem('lu_uid') || localStorage.getItem('lu_uid'));
     },
@@ -744,7 +757,19 @@
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * VAPID public key for Web Push notifications.
+   * Convert a URL-safe base64 string to a Uint8Array.
+   * Required by PushManager.subscribe({ applicationServerKey: ... }).
+   */
+  function _urlBase64ToUint8Array(base64String) {
+    const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+    const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+    const raw     = atob(base64);
+    return Uint8Array.from([...raw].map(c => c.charCodeAt(0)));
+  }
+
+  /**
+   * VAPID public key for Firebase Cloud Messaging Web Push.
+   * This is the FCM VAPID key from the Firebase console.
    */
   const VAPID_KEY = 'BON0v9rTj7Zd9CCFbldD-dEtVSx0oa7ZgC-wJNdwpEjpEI9ikzL7PvQmKU5Ie2ZHeRKI9inq7hIuiKMZgHRqTeE';
 
@@ -773,11 +798,40 @@
       if (!('serviceWorker' in navigator)) return;
       const permission = await MessagingService.requestPermission();
       if (permission !== 'granted') return;
+
+      // ── Firebase Cloud Messaging token ──────────────────────
       const token = await MessagingService.getToken();
       if (token) {
-        // Persist token — send to your backend if you want server-initiated pushes
         localStorage.setItem('lu_fcm_token', token);
         console.log('[FCM] Token registered');
+      }
+
+      // ── Web Push (VAPID) subscription ───────────────────────
+      // Also register a standalone Web Push subscription with the backend so
+      // the server can send push notifications via the /api/push/send endpoint.
+      // This is a best-effort operation — failure does not break FCM pushes.
+      try {
+        const vapidData = await (window.LegendAPI?.push?.getVapidKey?.() ?? Promise.resolve(null));
+        const vapidKey = vapidData?.vapidPublicKey;
+        if (vapidKey && 'PushManager' in window) {
+          const reg = await navigator.serviceWorker.ready;
+          // Check for existing subscription first to avoid unnecessary re-subscription
+          let sub = await reg.pushManager.getSubscription();
+          if (!sub) {
+            sub = await reg.pushManager.subscribe({
+              userVisibleOnly: true,
+              applicationServerKey: _urlBase64ToUint8Array(vapidKey),
+            });
+          }
+          if (sub && window.LegendAPI?.push?.subscribe) {
+            await window.LegendAPI.push.subscribe(sub).catch(e => {
+              console.warn('[Push] Could not save Web Push subscription to backend:', e.message);
+            });
+            console.log('[Push] Web Push subscription registered');
+          }
+        }
+      } catch (e) {
+        console.warn('[Push] Web Push setup failed (non-critical):', e.message);
       }
     },
 

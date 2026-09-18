@@ -190,17 +190,42 @@ window.executeDeleteAccount = async function () {
   }
 
   try {
-    // Server-side deletion endpoint — to be implemented in users route
-    await LegendAPI.request('DELETE', '/users/me/account');
+    // For Firebase-authenticated accounts: delete via Firebase Auth then call backend
+    const fbUser = window.AvenoraFirebase?.Auth?.getUser?.();
+    if (fbUser) {
+      // Delete application data via backend first (best effort)
+      try {
+        await LegendAPI.request('DELETE', '/users/me/account');
+      } catch (backendErr) {
+        // 422 means Firebase-only account — backend can't delete the Firebase auth record,
+        // but we can still delete the Firebase account below.
+        if (backendErr.status !== 422) {
+          console.warn('[AVN] Backend account deletion error:', backendErr.message);
+        }
+      }
+      // Delete the Firebase Authentication account
+      const { getAuth, deleteUser } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
+      const auth = getAuth();
+      if (auth.currentUser) {
+        await deleteUser(auth.currentUser);
+      }
+    } else {
+      // MongoDB-only account
+      await LegendAPI.request('DELETE', '/users/me/account');
+    }
+
     Modal.close('delete-account-modal');
-    await LegendAPI.auth.logout();
-    Toast.info('Your account has been deleted.');
+    // Sign out and clear local state
+    try { await LegendAPI.auth.logout(); } catch {}
+    Toast.info('Your account has been permanently deleted.');
     navigateTo('hub');
   } catch (err) {
-    // If endpoint not yet implemented, at minimum log out
     console.warn('[AVN] Account delete error:', err);
-    Toast.error('Account deletion is temporarily unavailable. Please contact support.');
-    Modal.close('delete-account-modal');
+    // Firebase "requires-recent-login" means user must re-authenticate first
+    const msg = (err.code === 'auth/requires-recent-login')
+      ? 'Please sign out and sign back in, then try deleting your account again.'
+      : 'Account deletion failed. Please try again or contact support.';
+    if (errEl) { errEl.textContent = msg; errEl.classList.remove('hidden'); }
   }
 };
 

@@ -501,7 +501,7 @@
       }
       return post('/auth/forgot-password', { email });
     },
-    resetPassword: (token, password) => post('/auth/reset-password', { token, password }),
+    resetPassword: (token, email, password) => post('/auth/reset-password', { token, email, password }),
     isLoggedIn() { return !!TokenStore.getAccess(); },
     getUser() { return LegendState.get('user'); },
   };
@@ -1150,6 +1150,24 @@
     markAllRead: () => put('/notifications/read-all', {}),
   };
 
+  // ─── Web Push API ─────────────────────────────────────────
+  const PushAPI = {
+    /** Fetch the VAPID public key from the backend (no auth required). */
+    getVapidKey: () => get('/push/vapid-public-key').catch(() => null),
+
+    /**
+     * Register a Web Push subscription with the backend.
+     * @param {PushSubscription} subscription — from PushManager.subscribe()
+     */
+    subscribe: (subscription) => post('/push/subscribe', { subscription: subscription.toJSON() }),
+
+    /**
+     * Unregister a Web Push subscription from the backend.
+     * @param {string} endpoint
+     */
+    unsubscribe: (endpoint) => request('DELETE', '/push/subscribe', { endpoint }),
+  };
+
   // ─── Reports API ─────────────────────────────────────────
   const ReportsAPI = {
     submit: (targetType, targetId, reason, details) =>
@@ -1632,6 +1650,7 @@
     users: UsersAPI,
     upload: UploadAPI,
     notifications: NotificationsAPI,
+    push: PushAPI,
     reports: ReportsAPI,
     stories: StoriesAPI,
     music: MusicAPI,

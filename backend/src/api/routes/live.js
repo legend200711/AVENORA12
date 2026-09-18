@@ -104,6 +104,23 @@ router.get('/', optionalAuth, async (req, res, next) => {
 // GET /api/live/health-check
 // Check whether MediaMTX is reachable (admin/founder only).
 // ─────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────
+// GET /api/live/my/sessions
+// Get the current user's own streams (authenticated).
+// MUST be before GET /:id to prevent 'my' being treated as an id.
+// ─────────────────────────────────────────────────────────
+router.get('/my/sessions', authenticate, async (req, res, next) => {
+  try {
+    const streams = await Stream.find({ streamer: req.user.id })
+      .select('-liveSession')
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
+
+    res.json({ success: true, streams });
+  } catch (err) { next(err); }
+});
+
 router.get('/health-check', authenticate, requireFounder, async (req, res, next) => {
   try {
     const result = await liveSvc.checkMediaMTXHealth();
@@ -408,22 +425,6 @@ router.get('/:id/viewers', optionalAuth, async (req, res, next) => {
       peakViewerCount: stream.peakViewerCount,
       live:           stream.status === 'live',
     });
-  } catch (err) { next(err); }
-});
-
-// ─────────────────────────────────────────────────────────
-// GET /api/live/my/sessions
-// Get the current user's own streams (authenticated).
-// ─────────────────────────────────────────────────────────
-router.get('/my/sessions', authenticate, async (req, res, next) => {
-  try {
-    const streams = await Stream.find({ streamer: req.user.id })
-      .select('-liveSession')
-      .sort({ createdAt: -1 })
-      .limit(20)
-      .lean();
-
-    res.json({ success: true, streams });
   } catch (err) { next(err); }
 });
 

@@ -105,7 +105,8 @@ router.post('/audio', authenticate, uploadRateLimiter, createUploader('audio').s
       buffer: req.file.buffer,
       mimetype: req.file.mimetype,
     });
-    const url = result.signedUrl || await storage.getSignedUrl('music', storagePath);
+    // music bucket is public — use publicUrl directly
+    const url = result.publicUrl || result.signedUrl;
     res.json({
       success: true,
       url,
@@ -128,7 +129,8 @@ router.post('/video', authenticate, uploadRateLimiter, createUploader('video').s
       buffer: req.file.buffer,
       mimetype: req.file.mimetype,
     });
-    const url = result.signedUrl || await storage.getSignedUrl('videos', storagePath);
+    // videos bucket is public — use publicUrl directly
+    const url = result.publicUrl || result.signedUrl;
     res.json({
       success: true,
       url,
@@ -177,17 +179,22 @@ router.get('/status', (req, res) => {
   });
 });
 
-// GET /api/upload/signed-url?bucket=music&path=uid/file.mp3
-// Refresh a signed URL for a private file — never exposes service-role key.
+// GET /api/upload/signed-url?bucket=avatars&path=uid/avatar.jpg
+// Refresh a signed URL for a PRIVATE file — only the avatars bucket is private.
+// Public buckets (music, videos, gallery, thumbnails, stream-media) use permanent
+// public URLs; callers should use getPublicUrl() for those, not this endpoint.
 router.get('/signed-url', authenticate, async (req, res, next) => {
   try {
     const { bucket, path: storagePath } = req.query;
     if (!bucket || !storagePath) {
       return res.status(400).json({ error: true, message: 'bucket and path query params required' });
     }
-    const PRIVATE_BUCKETS = new Set(['avatars', 'music', 'videos', 'stream-media']);
+    // Only avatars is a private bucket — all other buckets are public.
+    const PRIVATE_BUCKETS = new Set(['avatars']);
     if (!PRIVATE_BUCKETS.has(bucket)) {
-      return res.status(400).json({ error: true, message: `Bucket "${bucket}" does not use signed URLs` });
+      // For public buckets, return the stable public URL instead of a signed URL.
+      const publicUrl = storage.getPublicUrl(bucket, storagePath);
+      return res.json({ success: true, signedUrl: publicUrl, publicUrl, isPublic: true });
     }
     const signedUrl = await storage.getSignedUrl(bucket, storagePath, 3600);
     res.json({ success: true, signedUrl });

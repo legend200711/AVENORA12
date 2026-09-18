@@ -372,6 +372,45 @@
     return 'Something went wrong. Please try again.';
   }
 
+  // ─── Password reset handler (for reset links from email) ──
+  window.handleResetPassword = async function (token, email) {
+    const pw   = document.getElementById('reset-new-password')?.value || '';
+    const errEl = document.getElementById('reset-error');
+    const succEl = document.getElementById('reset-success');
+    const btn   = document.getElementById('reset-submit-btn');
+
+    if (errEl) errEl.classList.add('hidden');
+    if (succEl) succEl.classList.add('hidden');
+
+    if (pw.length < 8) {
+      if (errEl) { errEl.textContent = 'Password must be at least 8 characters.'; errEl.classList.remove('hidden'); }
+      return;
+    }
+    if (btn) { btn.disabled = true; btn.textContent = 'RESETTING...'; }
+
+    try {
+      // Firebase users: use Firebase's built-in password reset (oobCode flow)
+      // Legacy MongoDB users: use the backend reset endpoint
+      if (window.AvenoraFirebase?.Auth?.resetPassword) {
+        await window.AvenoraFirebase.Auth.resetPassword(token, pw);
+      } else {
+        const data = await LegendAPI.auth.resetPassword(token, email, pw);
+        if (!data.success) throw new Error(data.message || 'Reset failed');
+      }
+      if (succEl) {
+        succEl.textContent = 'Password reset! You can now sign in with your new password.';
+        succEl.classList.remove('hidden');
+      }
+      Toast.success('Password reset successfully!');
+      setTimeout(() => { switchAuthTab('login'); }, 2000);
+    } catch (err) {
+      const msg = err.message || 'Reset failed. The link may have expired.';
+      if (errEl) { errEl.textContent = msg; errEl.classList.remove('hidden'); }
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = 'RESET PASSWORD'; }
+    }
+  };
+
   // Override btn-auth to open modal instead of navigate
   function initAuthButton() {
     const btn = document.getElementById('btn-auth');
@@ -458,6 +497,15 @@
       Toast.info('You have been signed out.');
     });
 
+    // Service worker message handler — respond to GET_API_URL requests (used by
+    // the background sync handler to know which API endpoint to use).
+    navigator.serviceWorker?.addEventListener('message', (event) => {
+      if (event.data?.type === 'GET_API_URL' && event.ports?.[0]) {
+        event.ports[0].postMessage({ apiUrl: window.LU_CONFIG?.apiUrl || null });
+      }
+      // SW_UPDATED is handled separately in index.html
+    });
+
     // ── FCM push notifications ──────────────────────────────
     if (window.AvenoraFirebase?.Messaging) {
       window.AvenoraFirebase.Messaging.setup().catch(() => {});
@@ -467,6 +515,62 @@
         const body  = payload.notification?.body  || '';
         Toast.info(`🔔 ${title}${body ? ': ' + body : ''}`);
       });
+    }
+
+    // ── Password-reset link handling ────────────────────────
+    // Emails link to: #reset-password?token=<tok>&email=<email>
+    // We intercept this before rendering the page, show the auth modal
+    // with the reset form, and navigate to hub.
+    const _hash = location.hash || '';
+    if (_hash.startsWith('#reset-password')) {
+      const _params = new URLSearchParams(_hash.replace('#reset-password', '').replace(/^\?/, ''));
+      const _rstToken = _params.get('token');
+      const _rstEmail = _params.get('email');
+      if (_rstToken && _rstEmail) {
+        // Navigate away from the reset-password hash before showing modal
+        history.replaceState(null, '', location.pathname + '#hub');
+        await renderPage('hub');
+        // Show reset password form in the auth modal
+        setTimeout(() => {
+          Modal.open('auth-modal');
+          switchAuthTab('login'); // ensure modal is visible
+          const authModal = document.getElementById('auth-modal');
+          if (authModal) {
+            const resetSection = document.getElementById('forgot-form');
+            if (resetSection) {
+              // Swap forgot form for a reset form
+              resetSection.innerHTML = `
+                <h4 style="margin-bottom:12px;font-family:var(--font-display);letter-spacing:0.1em">SET NEW PASSWORD</h4>
+                <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:12px">Enter a new password for <strong>${escapeHtml(decodeURIComponent(_rstEmail))}</strong>.</p>
+                <div class="form-group">
+                  <input type="password" id="reset-new-password" class="form-input" placeholder="New password (min 8 chars)" minlength="8" autocomplete="new-password">
+                </div>
+                <div id="reset-error" class="hidden" style="color:var(--neon-red);font-size:0.85rem;margin-bottom:8px"></div>
+                <div id="reset-success" class="hidden" style="color:var(--neon-green);font-size:0.85rem;margin-bottom:8px"></div>
+                <button type="button" class="btn btn-primary w-full" id="reset-submit-btn"
+                  onclick="handleResetPassword('${escapeHtml(_rstToken)}','${escapeHtml(decodeURIComponent(_rstEmail))}')">
+                  RESET PASSWORD
+                </button>
+                <p style="margin-top:8px;font-size:0.82rem;text-align:center">
+                  <a href="#" onclick="switchAuthTab('login');return false" style="color:var(--text-muted)">Back to Sign In</a>
+                </p>`;
+              switchAuthTab('forgot');
+            }
+          }
+        }, 200);
+        // Skip normal renderPage — hub was already rendered above
+        // Set up hash change listener before returning
+        window.addEventListener('hashchange', async () => {
+          const newPage = getPageFromHash();
+          if (newPage !== currentPage) {
+            await renderPage(newPage);
+            if (window.AvenoraFirebase?.Analytics) {
+              window.AvenoraFirebase.Analytics.logPageView(newPage);
+            }
+          }
+        });
+        return; // do not fall through to the normal renderPage call
+      }
     }
 
     // Initial route

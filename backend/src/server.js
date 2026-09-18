@@ -41,6 +41,7 @@ const preferencesRoutes = require('./api/routes/preferences');
 const cloudStreamRoutes = require('./api/routes/cloudStream');
 const cloudRadioRoutes  = require('./api/routes/cloudRadio');
 const liveRoutes = require('./api/routes/live');
+const pushRoutes = require('./api/routes/push');
 
 // Middleware
 const { globalRateLimiter } = require('./api/middleware/rateLimiter');
@@ -165,6 +166,7 @@ app.use('/api/preferences', preferencesRoutes);
 app.use('/api/admin/cloud-stream', cloudStreamRoutes);
 app.use('/api/cloud-radio', cloudRadioRoutes);
 app.use('/api/live', liveRoutes);
+app.use('/api/push', pushRoutes);
 
 // ─── Public: Published Theme Tokens (no auth required) ───────
 // Returns only the CSS token values of the current live theme.
@@ -276,6 +278,25 @@ _checkSupabaseConfig();
   }
   if (process.env.NODE_ENV === 'production' && (!process.env.FRONTEND_URL || process.env.FRONTEND_URL.includes('your-'))) {
     logger.warn('⚠️  FRONTEND_URL is not set for production. CORS may block the frontend.');
+  }
+  if (!process.env.RESEND_API_KEY) {
+    logger.warn('⚠️  RESEND_API_KEY is not set. Password reset emails will NOT be sent.');
+    logger.warn('   Get a key at https://resend.com and set RESEND_API_KEY in Render dashboard secrets.');
+  } else {
+    logger.info('[Email] ✅ RESEND_API_KEY detected — password reset emails enabled');
+  }
+  if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
+    logger.warn('⚠️  VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY not set. Web Push notifications will not work.');
+    logger.warn('   Generate keys: npx web-push generate-vapid-keys');
+    logger.warn('   Then set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT in Render dashboard secrets.');
+  } else {
+    logger.info('[Push] ✅ VAPID keys detected — Web Push notifications enabled');
+  }
+  if (!process.env.MEDIAMTX_WHIP_URL || !process.env.MEDIAMTX_HLS_URL) {
+    logger.warn('⚠️  MEDIAMTX_WHIP_URL / MEDIAMTX_HLS_URL not set. Browser-based live streaming will not work.');
+    logger.warn('   Deploy MediaMTX and set MEDIAMTX_BASE_URL, MEDIAMTX_WHIP_URL, MEDIAMTX_HLS_URL, MEDIAMTX_API_URL.');
+  } else {
+    logger.info('[Live] ✅ MediaMTX URLs detected — live streaming enabled');
   }
 })();
 

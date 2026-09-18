@@ -44,8 +44,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v12';
-const CACHE_NAME  = 'avenora-cache-v12';
+const SW_VERSION  = 'v13';
+const CACHE_NAME  = 'avenora-cache-v13';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -63,6 +63,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v9', // v9 — evict: UID/model fixes, cloud stream skip fix
   'avenora-cache-v10', // v10 — evict: API URL fix, error diagnostics
   'avenora-cache-v11', // v11 — evict: backend API URL, video delete, dashboard fixes
+  'avenora-cache-v12', // v12 — evict: music queue advance, upload URL, reset-password, push setup
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
@@ -247,9 +248,102 @@ self.addEventListener('sync', (event) => {
   }
 });
 
+/**
+ * Reads queued offline posts from IndexedDB and submits them to the API.
+ * The main thread writes to the 'offline-posts' store when the network is down.
+ * This background sync handler fires when connectivity is restored.
+ */
 async function syncOfflinePosts() {
   console.log(`[SW ${SW_VERSION}] Syncing offline posts…`);
-  // TODO: read from IndexedDB, POST to API when back online
+
+  let db;
+  try {
+    db = await new Promise((resolve, reject) => {
+      const req = indexedDB.open('avenora-offline', 1);
+      req.onupgradeneeded = (e) => {
+        const _db = e.target.result;
+        if (!_db.objectStoreNames.contains('offline-posts')) {
+          _db.createObjectStore('offline-posts', { keyPath: 'id', autoIncrement: true });
+        }
+      };
+      req.onsuccess = (e) => resolve(e.target.result);
+      req.onerror   = (e) => reject(e.target.error);
+    });
+  } catch (err) {
+    console.warn(`[SW ${SW_VERSION}] Could not open offline DB:`, err.message);
+    return;
+  }
+
+  // Read all pending posts
+  let pending = [];
+  try {
+    pending = await new Promise((resolve, reject) => {
+      const tx    = db.transaction('offline-posts', 'readonly');
+      const store = tx.objectStore('offline-posts');
+      const req   = store.getAll();
+      req.onsuccess = (e) => resolve(e.target.result || []);
+      req.onerror   = (e) => reject(e.target.error);
+    });
+  } catch (err) {
+    console.warn(`[SW ${SW_VERSION}] Could not read offline posts:`, err.message);
+    return;
+  }
+
+  if (!pending.length) {
+    console.log(`[SW ${SW_VERSION}] No offline posts to sync`);
+    return;
+  }
+
+  // Try to get the API base URL from the main client's config
+  const clients = await self.clients.matchAll({ type: 'window' });
+  let apiBase = null;
+  for (const client of clients) {
+    try {
+      // Post a message and wait for the client to reply with the API URL
+      const ch = new MessageChannel();
+      const reply = await new Promise((resolve) => {
+        ch.port1.onmessage = (e) => resolve(e.data);
+        client.postMessage({ type: 'GET_API_URL' }, [ch.port2]);
+        setTimeout(() => resolve(null), 2000);
+      });
+      if (reply?.apiUrl) { apiBase = reply.apiUrl; break; }
+    } catch {}
+  }
+
+  if (!apiBase) {
+    console.warn(`[SW ${SW_VERSION}] Could not determine API URL for offline sync`);
+    return;
+  }
+
+  let synced = 0;
+  for (const post of pending) {
+    try {
+      const res = await fetch(`${apiBase}/posts`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(post.token ? { 'Authorization': `Bearer ${post.token}` } : {}),
+        },
+        body: JSON.stringify({ content: post.content, mediaUrls: post.mediaUrls || [], tags: post.tags || [] }),
+      });
+
+      if (res.ok) {
+        // Remove from offline store on success
+        await new Promise((resolve, reject) => {
+          const tx    = db.transaction('offline-posts', 'readwrite');
+          const store = tx.objectStore('offline-posts');
+          const req   = store.delete(post.id);
+          req.onsuccess = () => resolve();
+          req.onerror   = (e) => reject(e.target.error);
+        });
+        synced++;
+      }
+    } catch (err) {
+      console.warn(`[SW ${SW_VERSION}] Failed to sync post ${post.id}:`, err.message);
+    }
+  }
+
+  console.log(`[SW ${SW_VERSION}] Synced ${synced}/${pending.length} offline posts`);
 }
 
 // ── Push notifications ────────────────────────────────────────────────────────

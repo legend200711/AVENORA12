@@ -9,6 +9,7 @@ const User = require('../../models/User');
 const Post = require('../../models/Post');
 const Follow = require('../../models/Follow');
 const { NotFoundError, AppError } = require('../middleware/errorHandler');
+const logger = require('../../utils/logger');
 
 // PUT /api/users/profile - Update own profile
 // Note: express route matching — this must come BEFORE /:username
@@ -97,29 +98,112 @@ router.get('/:username/posts', optionalAuth, async (req, res, next) => {
   }
 });
 
-// DELETE /api/users/me/account — self-deletion with confirmation
+// DELETE /api/users/me/account — self-deletion with full data cleanup
+//
+// For MongoDB-registered users: soft-deletes the User record (anonymises PII),
+// soft-deletes all their posts, removes follow relationships, cleans up
+// notifications, and attempts to remove Supabase Storage media.
+//
+// For Firebase-only users: the Firebase Auth account must be deleted via the
+// Firebase SDK (done in the frontend). This route handles all MongoDB-side
+// cleanup for data authored by that Firebase UID.
 router.delete('/me/account', authenticate, async (req, res, next) => {
   try {
     const mongoose = require('mongoose');
+    const Video = require('../../models/Video');
+    const Notification = require('../../models/Notification');
+    const Track = require('../../models/Track');
     const userId = req.user.id;
+    const isMongoId = mongoose.Types.ObjectId.isValid(userId) && userId.length === 24;
 
-    // Firebase users (non-ObjectId UID) cannot be soft-deleted via this route
-    // — their Firebase account must be deleted via the Firebase Auth SDK.
-    if (!mongoose.Types.ObjectId.isValid(userId)) {
-      return res.status(422).json({ error: true, message: 'Firebase accounts must be deleted via the Firebase Auth SDK or Firebase console.' });
+    logger.info(`[Auth] Account deletion requested for user ${userId} (mongoId=${isMongoId})`);
+
+    // ── 1. Soft-delete all posts authored by this user ───────────────────────
+    try {
+      await Post.updateMany(
+        { author: userId, isDeleted: false },
+        { $set: { isDeleted: true, deletedAt: new Date(), content: '[deleted]', mediaUrls: [] } }
+      );
+    } catch (e) {
+      logger.warn(`[Auth] Post cleanup failed for ${userId}: ${e.message}`);
     }
 
-    // Soft-delete user account
-    await User.findByIdAndUpdate(userId, {
-      'status.isActive': false,
-      'status.isSuspended': false,
-      username: `deleted_${Date.now()}`, // Free up the username
-      email: `deleted_${Date.now()}@deleted.legenduniverse.com`,
-    });
+    // ── 2. Remove all follow relationships for this user ─────────────────────
+    try {
+      await Follow.deleteMany({ $or: [{ follower: userId }, { following: userId }] });
+    } catch (e) {
+      logger.warn(`[Auth] Follow cleanup failed for ${userId}: ${e.message}`);
+    }
 
-    // Invalidate all sessions
-    await User.findByIdAndUpdate(userId, { $set: { refreshTokens: [] } });
+    // ── 3. Remove all notifications sent to or by this user ──────────────────
+    try {
+      await Notification.deleteMany({ $or: [{ recipient: userId }, { sender: userId }] });
+    } catch (e) {
+      logger.warn(`[Auth] Notification cleanup failed for ${userId}: ${e.message}`);
+    }
 
+    // ── 4. Soft-delete videos uploaded by this user ───────────────────────────
+    let videoStoragePaths = [];
+    try {
+      const videos = await Video.find({ uploader: userId, isDeleted: false })
+        .select('storagePath').lean();
+      videoStoragePaths = videos.map(v => v.storagePath).filter(Boolean);
+      await Video.updateMany(
+        { uploader: userId, isDeleted: false },
+        { $set: { isDeleted: true, deletedAt: new Date() } }
+      );
+    } catch (e) {
+      logger.warn(`[Auth] Video cleanup failed for ${userId}: ${e.message}`);
+    }
+
+    // ── 5. Soft-delete music tracks uploaded by this user ─────────────────────
+    let trackStoragePaths = [];
+    try {
+      const tracks = await Track.find({ uploader: userId })
+        .select('storagePath').lean();
+      trackStoragePaths = tracks.map(t => t.storagePath).filter(Boolean);
+      await Track.updateMany({ uploader: userId }, { $set: { isDeleted: true, deletedAt: new Date() } });
+    } catch (e) {
+      logger.warn(`[Auth] Track cleanup failed for ${userId}: ${e.message}`);
+    }
+
+    // ── 6. Attempt to remove Supabase Storage media (best-effort) ─────────────
+    try {
+      const storageService = require('../../services/storage/supabaseStorage');
+      const allPaths = [...videoStoragePaths, ...trackStoragePaths];
+      // Also try to delete avatar
+      allPaths.push(`${userId}/avatar.jpg`, `${userId}/avatar.png`, `${userId}/avatar.webp`);
+      for (const sp of allPaths) {
+        if (sp) {
+          const bucket = sp.includes('/avatar') ? 'avatars'
+            : videoStoragePaths.includes(sp) ? 'videos'
+            : trackStoragePaths.includes(sp) ? 'music' : null;
+          if (bucket) {
+            await storageService.deleteFile(bucket, sp).catch(() => {});
+          }
+        }
+      }
+    } catch (e) {
+      logger.warn(`[Auth] Storage media cleanup failed for ${userId}: ${e.message}`);
+    }
+
+    // ── 7. MongoDB-user-specific: anonymise and invalidate the User record ────
+    if (isMongoId) {
+      const ts = Date.now();
+      await User.findByIdAndUpdate(userId, {
+        'status.isActive': false,
+        'status.isSuspended': false,
+        username: `deleted_${ts}`,
+        email: `deleted_${ts}@deleted.legenduniverse.com`,
+        'profile.displayName': 'Deleted User',
+        'profile.bio': '',
+        'profile.avatarUrl': null,
+        'profile.bannerUrl': null,
+        $set: { refreshTokens: [] },
+      });
+    }
+
+    logger.info(`[Auth] Account deletion completed for user ${userId}`);
     res.json({ success: true, message: 'Account deleted' });
   } catch (err) {
     next(err);

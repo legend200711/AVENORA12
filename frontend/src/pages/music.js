@@ -1575,11 +1575,11 @@ function mpHandleEnded() {
     const next = MP.currentIndex + 1;
     if (MP.shuffle) {
       const randIdx = Math.floor(Math.random() * MP.backendTracks.length);
-      window.mpLoadBackendTrack(MP.backendTracks[randIdx], randIdx, MP.backendQueue);
+      window.mpLoadBackendTrack(MP.backendTracks[randIdx], randIdx, MP.backendQueue, MP.backendTracks);
       return;
     }
     if (next < MP.backendTracks.length) {
-      window.mpLoadBackendTrack(MP.backendTracks[next], next, MP.backendQueue);
+      window.mpLoadBackendTrack(MP.backendTracks[next], next, MP.backendQueue, MP.backendTracks);
     }
     // else end of backend queue — stop
     return;
@@ -1734,7 +1734,7 @@ window.mpPrev = function () {
   // Backend tracks mode
   if (MP.backendTracks && MP.backendTracks.length > 0) {
     const prev = MP.currentIndex <= 0 ? MP.backendTracks.length - 1 : MP.currentIndex - 1;
-    window.mpLoadBackendTrack(MP.backendTracks[prev], prev, MP.backendQueue);
+    window.mpLoadBackendTrack(MP.backendTracks[prev], prev, MP.backendQueue, MP.backendTracks);
     return;
   }
 
@@ -1748,7 +1748,7 @@ window.mpNext = function () {
     const next = MP.shuffle
       ? Math.floor(Math.random() * MP.backendTracks.length)
       : (MP.currentIndex + 1) % MP.backendTracks.length;
-    window.mpLoadBackendTrack(MP.backendTracks[next], next, MP.backendQueue);
+    window.mpLoadBackendTrack(MP.backendTracks[next], next, MP.backendQueue, MP.backendTracks);
     return;
   }
 

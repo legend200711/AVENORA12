@@ -20,9 +20,31 @@ const roomUsers = new Map();   // roomId -> Set<userId>
 const userBlockedSets = new Map(); // userId -> Set<userId(string)>
 
 function initializeSocketServer(httpServer) {
+  // Mirror the same origin-matching logic as the HTTP CORS config in server.js.
+  // Accept any github.io subdomain so all GitHub Pages previews work, plus
+  // the configured FRONTEND_URL, FRONTEND_URL_2, and localhost for dev.
+  const _socketOriginFn = (origin, callback) => {
+    if (!origin) return callback(null, true); // curl / SSR / same-host
+    const envUrls = [
+      process.env.FRONTEND_URL,
+      process.env.FRONTEND_URL_2,
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://localhost:3001',
+      'http://127.0.0.1:3000',
+      'http://127.0.0.1:5173',
+    ].filter(Boolean).map(u => u.replace(/\/$/, ''));
+    if (envUrls.includes(origin)) return callback(null, true);
+    if (/^https:\/\/[^.]+\.github\.io$/.test(origin)) return callback(null, true);
+    if (/^http:\/\/localhost(:\d+)?$/.test(origin)) return callback(null, true);
+    if (/^http:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)) return callback(null, true);
+    logger.warn(`[Socket.io] Blocked origin: ${origin}`);
+    return callback(new Error(`Socket.io: origin '${origin}' not allowed`));
+  };
+
   io = new Server(httpServer, {
     cors: {
-      origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+      origin: _socketOriginFn,
       credentials: true,
     },
     pingTimeout: 20000,

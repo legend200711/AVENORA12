@@ -101,6 +101,12 @@ const userSchema = new mongoose.Schema({
     mutedTopics: { type: [String], default: () => [] },
   },
   refreshTokens: [{ type: String, select: false }], // Hashed refresh tokens
+  // Password reset — token hash stored server-side, never returned to browser
+  passwordReset: {
+    tokenHash:  { type: String, select: false },
+    expiresAt:  { type: Date,   select: false },
+    usedAt:     { type: Date,   select: false },
+  },
   chat: {
     blockedUsers: [{ type: String }],   // Firebase UIDs
     mutedUsers:   [{ type: String }],   // Firebase UIDs

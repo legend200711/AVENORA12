@@ -79,12 +79,19 @@ function getNextTrack() {
   const list = getActiveList();
   if (!list.length) return null;
 
-  if (CONFIG.shuffle) {
-    return list[Math.floor(Math.random() * list.length)];
-  }
-
+  // When shuffle is on, the list was already shuffled once at start() (for the
+  // scanned playlist) — just advance sequentially through the shuffled order.
+  // Using Math.random() per-track can repeat the same track many times in a row
+  // and does not guarantee all tracks are played before repeating.
   const track = list[currentIndex % list.length];
   currentIndex++;
+
+  // If we've looped around AND shuffle is on, re-shuffle for the next pass
+  if (CONFIG.shuffle && currentIndex > 0 && currentIndex % list.length === 0) {
+    list.sort(() => Math.random() - 0.5);
+    currentIndex = 0;
+  }
+
   return track;
 }
 
@@ -439,8 +446,9 @@ function removeFromQueue(index) {
   if (index < 0 || index >= queue.length) return { ok: false, message: 'Index out of range' };
   const removed = queue.splice(index, 1)[0];
   if (currentIndex > index) currentIndex--;
-  logger.info(`[CloudStream] Removed from queue: ${path.basename(removed)}`);
-  return { ok: true, removed: path.basename(removed) };
+  const removedName = removed.name || path.basename(removed.filePath || removed.storagePath || 'unknown');
+  logger.info(`[CloudStream] Removed from queue: ${removedName}`);
+  return { ok: true, removed: removedName };
 }
 
 function reorderQueue(fromIndex, toIndex) {
