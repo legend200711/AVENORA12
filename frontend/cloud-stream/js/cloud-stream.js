@@ -25,16 +25,16 @@
 'use strict';
 
 import { initializeApp, getApps, getApp }
-  from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+  from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-app.js';
 import {
   getAuth, onAuthStateChanged, browserLocalPersistence, setPersistence
-} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+} from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-auth.js';
 import {
   getFirestore,
   doc, getDoc, getDocs, setDoc, updateDoc, addDoc,
   collection, query, orderBy, limit, where, onSnapshot,
   serverTimestamp, documentId
-} from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+} from 'https://www.gstatic.com/firebasejs/12.18.0/firebase-firestore.js';
 
 /* ── Firebase config — Avenora (avenora-6e147) ─────────────────────── */
 const _CFG = {
@@ -54,43 +54,13 @@ const _db   = getFirestore(_app);
 
 setPersistence(_auth, browserLocalPersistence).catch(() => {});
 
-/* ── Correct back-button href at runtime using the basePath ─────────────
-   On GitHub Pages (/AVENORA1/) the relative "../index.html" falls back
-   to the correct URL.  But when the parent SPA is open we want to navigate
-   the parent frame instead of doing a full page reload.
-   When inside an iframe, intercept the click and use parent.navigateTo.       */
-(function _fixBackLinks() {
-  const fixLink = (id) => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('click', (e) => {
-      if (window.parent && window.parent !== window && typeof window.parent.navigateTo === 'function') {
-        e.preventDefault();
-        window.parent.navigateTo('cloudstream');
-      }
-    });
-    // Also patch href for correct basePath
-    const base =
-      (window.parent && window.parent !== window && window.parent.AVENORA_BUILD?.basePath) ||
-      window.AVENORA_BUILD?.basePath || '/';
-    el.href = base.replace(/\/$/, '') + '/index.html#cloudstream';
-  };
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { fixLink('csrBackBtn'); fixLink('csrAuthGateBackBtn'); });
-  } else {
-    fixLink('csrBackBtn'); fixLink('csrAuthGateBackBtn');
-  }
-})();
-
 /* ── Avenora Backend URL ─────────────────────────────────────────────── */
 // Resolved from runtime config.
 // Priority: window.LU_CONFIG (set by the SPA's index.html) → postMessage AVN_CONFIG
 // from the parent SPA frame → null (degraded / local mode).
-// NOTE: When this page runs inside an <iframe> inside the AVENORA SPA, the
-// parent's window.LU_CONFIG is NOT accessible (iframes have isolated windows).
-// The parent sends it via postMessage { type: 'AVN_CONFIG', apiUrl } on load.
-// We store the resolved value in a mutable variable so the postMessage handler
-// can update it before csrStartBroadcast runs.
+// NOTE: When this page runs inside an <iframe> the parent's window.LU_CONFIG is
+// NOT accessible (iframes have isolated windows). The parent sends it via
+// postMessage { type: 'AVN_CONFIG', apiUrl } on load.
 let _API_BASE = (() => {
   const raw = (typeof window !== 'undefined' && window.LU_CONFIG && window.LU_CONFIG.apiUrl)
     ? window.LU_CONFIG.apiUrl.replace(/\/api\/?$/, '') + '/api'
@@ -101,10 +71,9 @@ let _API_BASE = (() => {
 /**
  * Make an authenticated request to the AVENORA backend.
  * Attaches the Firebase ID token from the current user.
- * Returns the parsed JSON response, or throws on network/HTTP error.
  */
 async function _apiRequest(method, path, body) {
-  if (!_API_BASE) throw new Error('Backend URL not configured — this is expected in Firebase+Supabase-only mode. The backend engine is not available.');
+  if (!_API_BASE) throw new Error('Backend URL not configured — expected in Firebase+Supabase-only mode. The backend engine is not available.');
   const token = _user ? await _user.getIdToken().catch(() => null) : null;
   if (!token) throw new Error('Authentication required — Firebase ID token unavailable');
   const opts = {
@@ -129,6 +98,11 @@ let _artworkDataUrl = null; // base64 cover artwork
 // Set to true after POST /api/cloud-radio/start succeeds so the client-side
 // auto-advance queue writer knows the server engine is managing the queue.
 let _engineRunning = false;
+
+// Set to true when the parent SPA sends AVN_AUTH_TOKEN confirming sign-in.
+let _parentConfirmedAuth = false;
+// Set to true once we have called _startApp (prevents double-init).
+let _appInitialised = false;
 
 /* Listener player state */
 let _player = {
@@ -164,14 +138,6 @@ let _confirmCallback = null;
    BOOT
 ═══════════════════════════════════════════════════════ */
 
-// Track whether the app has already been initialised for a user so the
-// postMessage auth path doesn't double-initialise.
-let _appInitialised = false;
-
-// Set to true when the parent SPA sends AVN_AUTH_TOKEN confirming sign-in.
-// Prevents the auth gate from showing while Firebase hydrates from localStorage.
-let _parentConfirmedAuth = false;
-
 async function _startApp(user) {
   if (_appInitialised) return;
   _appInitialised = true;
@@ -186,7 +152,6 @@ async function _startApp(user) {
 
   _setAuthBadge(_userData ? (_userData.displayName || _userData.username || 'You') : 'You');
 
-  // Check URL params — are we in listener mode?
   const params = new URLSearchParams(window.location.search);
   const watchId = params.get('id') || params.get('watch') || params.get('stream');
 
@@ -200,88 +165,14 @@ async function _startApp(user) {
   }
 }
 
-// Tracks the pending auth-gate timer so it can be cancelled when auth resolves.
 let _authGateTimer = null;
 
-onAuthStateChanged(_auth, async user => {
-  // Cancel any pending auth-gate timer the moment Firebase resolves auth state.
-  if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
-
-  if (user) {
-    // Also keep _user up to date so _apiRequest always has the current Firebase user
-    // (needed for token refresh — Firebase rotates ID tokens every hour).
-    _user = user;
-    await _startApp(user);
-  } else if (!_appInitialised) {
-    // Firebase persistence is async — the first `null` callback means
-    // "still reading localStorage", not "definitely logged out".
-    //
-    // • When embedded in the SPA (_parentConfirmedAuth is set) we know the
-    //   user IS signed in — do not start the gate timer at all; wait for
-    //   Firebase to finish hydrating (the _awaitCurrentUser poll below handles it).
-    // • Standalone (no parent): wait 10 s then show the gate if still unresolved.
-    if (!_parentConfirmedAuth) {
-      _authGateTimer = setTimeout(() => {
-        _authGateTimer = null;
-        if (!_appInitialised && !_parentConfirmedAuth) {
-          _show('csrLoading', false);
-          _show('csrAuthGate', true);
-          _show('csrApp', false);
-          _setAuthBadge('Sign In');
-        }
-      }, 10000);
-    }
-    // If _parentConfirmedAuth is already true, just keep the loading spinner.
-  }
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Parent SPA → iframe postMessage bridge
-//
-// The parent now subscribes to Firebase onIdTokenChanged and forwards the token
-// as soon as it is available (not just on iframe load).  The iframe:
-//
-//   1. Validates the message origin — only accepts messages from the same origin.
-//   2. Validates the message has a non-empty idToken string and uid string.
-//   3. ACKs the message so the parent stops forwarding until the next refresh.
-//   4. If _auth.currentUser is already available, starts the app immediately.
-//   5. If _auth.currentUser is not yet available, polls every 100 ms for up to
-//      5 s — Firebase WILL set currentUser once it finishes reading localStorage.
-//      This eliminates the 10-30 s gate timer race entirely.
-//   6. If a new AVN_AUTH_TOKEN arrives after app init (token refresh), updates
-//      _user so _apiRequest continues to use a fresh token.
-//
-// Why we do NOT attempt signInWithCustomToken:
-//   Both pages are same-origin and share Firebase's localStorage key-value store.
-//   The session already exists — we just need to wait for Firebase to read it.
-//   Polling _auth.currentUser is a reliable and safe way to detect hydration.
-// ─────────────────────────────────────────────────────────────────────────────
-
-// Poll for _auth.currentUser until it is set (Firebase hydration) or timeout.
-// Resolves with the user object or null on timeout.
-function _awaitCurrentUser(maxMs) {
-  return new Promise((resolve) => {
-    const deadline = Date.now() + maxMs;
-    const check = () => {
-      if (_auth.currentUser) return resolve(_auth.currentUser);
-      if (Date.now() >= deadline) return resolve(null);
-      setTimeout(check, 100);
-    };
-    check();
-  });
-}
-
+// Parent SPA → iframe postMessage bridge (same as frontend/cloud-stream version).
+// Also handles standalone open (no parent frame) where AVN_AUTH_TOKEN never arrives.
 window.addEventListener('message', async (event) => {
   try {
     if (!event.data) return;
 
-    // ── Origin validation ─────────────────────────────────────────
-    // Only trust messages from our own origin (same-origin iframe).
-    // Allow null origin for file:// during local dev (same-origin semantics).
-    const senderOrigin = event.origin;
-    if (senderOrigin !== 'null' && senderOrigin !== location.origin) return;
-
-    // ── Runtime config injection ──────────────────────────────────
     if (event.data.type === 'AVN_CONFIG') {
       const apiUrl = event.data.apiUrl || '';
       if (apiUrl && !_API_BASE) {
@@ -290,60 +181,41 @@ window.addEventListener('message', async (event) => {
       return;
     }
 
-    // ── Auth token ────────────────────────────────────────────────
-    if (event.data.type !== 'AVN_AUTH_TOKEN') return;
-
-    // Basic structural validation — must have a non-empty string token and uid.
-    const receivedToken = typeof event.data.idToken === 'string' && event.data.idToken.trim();
-    const receivedUid   = typeof event.data.uid === 'string' && event.data.uid.trim();
-    if (!receivedToken || !receivedUid) return;
-
-    // Acknowledge so the parent stops forwarding (until next token refresh).
-    if (event.source) {
-      try { event.source.postMessage({ type: 'AVN_AUTH_ACK' }, location.origin); } catch(_) {}
-    }
-
-    // ── Token refresh path: app already running ───────────────────
-    // The parent forwards a new token on each Firebase ID-token refresh (~1 h).
-    // Update _user so _apiRequest picks up the new token automatically.
-    if (_appInitialised && _user) {
-      // _auth.currentUser is the live Firebase user object which always returns
-      // a fresh token from getIdToken(); reassigning _user keeps the reference
-      // current so subsequent _apiRequest calls work after the old token expires.
-      if (_auth.currentUser && _auth.currentUser.uid === receivedUid) {
-        _user = _auth.currentUser;
+    if (event.data.type === 'AVN_AUTH_TOKEN') {
+      // Acknowledge so the parent stops retrying.
+      if (event.source) {
+        try { event.source.postMessage({ type: 'AVN_AUTH_ACK' }, '*'); } catch(_) {}
       }
-      return;
+      _parentConfirmedAuth = true;
+      if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
+      if (!_appInitialised) {
+        _show('csrLoading', true);
+        _show('csrAuthGate', false);
+        if (_auth.currentUser) await _startApp(_auth.currentUser);
+      }
     }
-
-    // ── Initial auth path: app not yet started ────────────────────
-    _parentConfirmedAuth = true;
-
-    // Cancel any pending gate timer — parent has confirmed the user is signed in.
-    if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
-
-    _show('csrLoading', true);
-    _show('csrAuthGate', false);
-
-    // Fast path: Firebase has already hydrated currentUser synchronously.
-    if (_auth.currentUser) {
-      await _startApp(_auth.currentUser);
-      return;
-    }
-
-    // Slow path: Firebase is still reading from localStorage.
-    // Poll every 100 ms for up to 5 s instead of a long passive wait.
-    // This guarantees the app starts within ~100 ms of hydration completing.
-    const hydratedUser = await _awaitCurrentUser(5000);
-    if (hydratedUser && !_appInitialised) {
-      await _startApp(hydratedUser);
-      return;
-    }
-
-    // If Firebase still has not hydrated after 5 s, keep the loading spinner
-    // visible (onAuthStateChanged will fire when the SDK finally resolves).
-    // Do not show the auth gate — the parent confirmed the user is logged in.
   } catch (_) {}
+});
+
+onAuthStateChanged(_auth, async user => {
+  if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
+
+  if (user) {
+    await _startApp(user);
+  } else if (!_appInitialised) {
+    // Standalone page: show loading, then gate after delay.
+    // When embedded in the SPA, _parentConfirmedAuth prevents the gate.
+    const gateDelay = _parentConfirmedAuth ? 30000 : 10000;
+    _authGateTimer = setTimeout(() => {
+      _authGateTimer = null;
+      if (!_appInitialised && !_parentConfirmedAuth) {
+        _show('csrLoading', false);
+        _show('csrAuthGate', true);
+        _show('csrApp', false);
+        _setAuthBadge('Sign In');
+      }
+    }, gateDelay);
+  }
 });
 
 /* ═══════════════════════════════════════════════════════
@@ -465,7 +337,6 @@ async function _checkHealth() {
         backendAnswered = true;
         if (data.success && data.status) {
           const s = data.status;
-          // Update running flag so auto-advance stays suppressed
           if (s.status === 'running') _engineRunning = true;
           _el('csrInfoWorker').textContent = s.status || 'running';
           if (s.currentTrack) {
@@ -474,18 +345,15 @@ async function _checkHealth() {
             _el('csrNpNext').textContent   = s.nextTrack ? 'Next: ' + s.nextTrack.title : '';
           }
         } else if (data.success && !data.running) {
-          // Engine not running on backend — session may have been stopped or server restarted
           _engineRunning = false;
           _el('csrInfoWorker').textContent = 'offline';
         }
       } catch (_apiErr) {
-        // Backend unreachable — fall through to Firestore
         backendAnswered = false;
       }
     }
 
     // Firestore: read cloudStreams for status + listener count.
-    // Always run — gives us status badge and listener count even when backend answers.
     const cloudSnap = await getDoc(doc(_db, 'cloudStreams', _streamId));
     if (cloudSnap.exists()) {
       const cs = cloudSnap.data();
@@ -495,11 +363,9 @@ async function _checkHealth() {
       }
       _setStatusBadge(cs.status);
       _el('csrInfoListeners').textContent = cs.viewerCount || '0';
-      // Worker badge: prefer backend answer; fall back to Firestore workerStatus field
       if (!backendAnswered) {
         const wStatus = cs.workerStatus || 'pending';
         _el('csrInfoWorker').textContent = wStatus;
-        // If Firestore says running, reflect that in the engine flag
         if (wStatus === 'running') _engineRunning = true;
       }
     }
@@ -602,7 +468,7 @@ function _renderPlaylistSelector() {
   const el = _el('csrPlaylistSelector');
   if (!el) return;
   if (!_creator.playlists.length) {
-    el.innerHTML = '<div class="csr-hint">No playlists found. <a class="csr-link" href="#" onclick="event.preventDefault();csrGoToCreatorStudio()">Go to Creator Studio</a> to create a playlist and upload tracks.</div>';
+    el.innerHTML = '<div class="csr-hint">No playlists found. <a class="csr-link" href="/frontend/index.html#dj">Go to 24-Hour Studio</a> to create a playlist and upload tracks.</div>';
     return;
   }
   el.innerHTML = _creator.playlists.map(pl => {
@@ -729,7 +595,7 @@ window.csrStartBroadcast = async function() {
     _show('csrValidationError', false);
     _renderHandoffStep(0, 'Preparing broadcast…');
 
-    // 6. Create Firestore record (status: starting, workerStatus: pending)
+    // 6. Create Firestore record
     await setDoc(doc(_db, 'cloudStreams', streamId), {
       uid:            _user.uid,
       displayName:    _userData?.displayName || _userData?.username || '',
@@ -750,12 +616,12 @@ window.csrStartBroadcast = async function() {
     });
     _streamData = { uid: _user.uid, streamName: title, status: 'starting', durationMinutes };
     _renderHandoffStep(1, 'Saving broadcast configuration…');
-    await _sleep(300);
+    await _sleep(400);
 
-    // 7. Build music queue
+    // 7. Build music queue — no longer calls Cloudflare Worker
     _renderHandoffStep(2, 'Configuring broadcast…');
     const musicQueue = validTracks.map(t => ({
-      id:          t.id,
+      id:       t.id,
       title:       t.title    || t.name   || 'Untitled',
       artist:      t.artist   || t.artist_name || '',
       url:         t.url      || t.downloadURL || t.musicUrl || '',
@@ -764,14 +630,12 @@ window.csrStartBroadcast = async function() {
     }));
 
     // 8. Start the real server-side cloud radio engine via the AVENORA backend.
-    //    The backend will write Now Playing to studioCloudStreamMusic and update
-    //    workerStatus. The broadcast is not marked LIVE until the backend confirms.
     let engineStarted = false;
     let engineError   = null;
     if (_API_BASE) {
       try {
         _renderHandoffStep(2, 'Starting cloud radio engine…');
-        const startResult = await _apiRequest('POST', '/cloud-radio/start', {
+        await _apiRequest('POST', '/cloud-radio/start', {
           streamId,
           uid:             _user.uid,
           queue:           musicQueue,
@@ -785,14 +649,11 @@ window.csrStartBroadcast = async function() {
       } catch (apiErr) {
         engineError = apiErr.message;
         console.error('[CSR] Backend engine start failed:', apiErr.message);
-        // Do NOT throw — degrade to client-side playback so the user can still broadcast
         _renderHandoffStep(3, 'Engine offline — using local playback…');
       }
     } else {
-      // No backend configured — this is expected in Firebase+Supabase-only architecture.
-      // The broadcast runs in client-side mode: Firestore handles Now Playing state
-      // and the browser plays audio directly from the CDN URLs in the queue.
-      engineError = null; // not an error — expected operating mode
+      // No backend configured — expected in Firebase+Supabase-only architecture.
+      engineError = null;
       console.info('[CSR] No backend API configured — running in client-side (Firestore) playback mode.');
       _renderHandoffStep(3, 'Starting broadcast (Firestore-synced playback)…');
     }
@@ -838,9 +699,7 @@ window.csrStartBroadcast = async function() {
       displayName: _userData?.displayName || ''
     };
 
-    // 10. If the server engine is NOT running, seed the initial Now Playing in Firestore
-    //     so the client-side player has something to show until the backend picks up.
-    //     (When the backend IS running, it writes its own Now Playing via the engine.)
+    // 10. If server engine is NOT running, seed initial Now Playing in Firestore.
     if (!engineStarted && musicQueue.length) {
       const first = musicQueue[0];
       await setDoc(doc(_db, 'studioCloudStreamMusic', streamId), {
@@ -864,7 +723,7 @@ window.csrStartBroadcast = async function() {
       }, { merge: true });
     }
 
-    _renderHandoffStep(4, 'Broadcast is LIVE!');
+    _renderHandoffStep(4, engineStarted ? 'Broadcast is LIVE! Engine running 24/7.' : 'Broadcast is LIVE! (local playback mode)');
     await _sleep(800);
 
     _show('csrStartingProgress', false);
@@ -874,10 +733,10 @@ window.csrStartBroadcast = async function() {
     if (engineStarted) {
       _toast('&#9925; Cloud Radio is LIVE! The server will keep playing even when you close this tab.', 'success');
     } else if (engineError) {
-      _toast('&#9888; Cloud Radio started — note: ' + engineError, 'warn');
-      console.warn('[CSR] Engine start note:', engineError);
+      _toast('&#9888; Cloud Radio started in local mode. Engine error: ' + engineError, 'warn');
+      console.error('[CSR] Engine start error (full):', engineError);
     } else {
-      _toast('&#9925; Cloud Radio is LIVE! Playing via Firestore-synced client mode.', 'success');
+      _toast('&#9925; Cloud Radio is LIVE!', 'success');
     }
 
   } catch (e) {
@@ -935,15 +794,13 @@ async function _stopBroadcast() {
   _stopHealthMonitor();
   _engineRunning = false;
 
-  const sid = _streamId; // capture before we clear
+  const sid = _streamId;
 
   // 1. Stop the server-side engine
   if (_API_BASE && sid) {
     try {
       await _apiRequest('POST', '/cloud-radio/stop', { streamId: sid });
-    } catch (_) {
-      // Engine may already be stopped or backend unreachable — continue regardless
-    }
+    } catch (_) {}
   }
 
   // 2. Update Firestore records
@@ -979,13 +836,13 @@ async function _stopBroadcast() {
 window.csrSkipTrack = async function() {
   if (!_streamId || !_user) return;
   try {
-    // First try the server-side engine — it updates Firestore authoritatively
+    // First try the server-side engine
     if (_API_BASE) {
-      const data = await _apiRequest('POST', '/cloud-radio/skip', { streamId: _streamId });
+      await _apiRequest('POST', '/cloud-radio/skip', { streamId: _streamId });
       _toast('Skipping to next track…', 'info');
       return;
     }
-    // Fallback (no backend): advance Firestore directly for client-side playback
+    // Fallback: advance Firestore directly for client-side playback
     const musicSnap = await getDoc(doc(_db, 'studioCloudStreamMusic', _streamId));
     if (!musicSnap.exists()) { _toast('No active music state found.', 'error'); return; }
     const ms = musicSnap.data();
@@ -1023,21 +880,8 @@ window.csrScrollToStream = function() {
   if (el) el.scrollIntoView({ behavior: 'smooth' });
 };
 window.csrScrollToPlaylist = function() {
-  csrGoToCreatorStudio();
-};
-window.csrGoToCreatorStudio = function() {
-  // Navigate to Creator Studio in the parent SPA (this page runs in an iframe).
-  // If embedded in the SPA, use the parent's navigateTo; otherwise fall back to
-  // a hash-based navigation on the top-level page.
-  if (window.parent && window.parent !== window && typeof window.parent.navigateTo === 'function') {
-    window.parent.navigateTo('cloudstudio');
-  } else {
-    // Direct navigation: resolve relative to deployment base
-    const base = (window.parent && window.parent.AVENORA_BUILD && window.parent.AVENORA_BUILD.basePath)
-      || (typeof window !== 'undefined' && window.AVENORA_BUILD && window.AVENORA_BUILD.basePath)
-      || '/';
-    window.top.location.href = base.replace(/\/$/, '') + '/index.html#cloudstudio';
-  }
+  // Navigate back to the 24-Hour Studio page in the Avenora SPA
+  window.location.href = '/frontend/index.html#dj';
 };
 window.csrOpenExistingStream = function() {
   _show('csrDuplicateWarn', false);
@@ -1149,15 +993,11 @@ function _syncListenerToNowPlaying(d) {
     _player.trackUrl  = url;
     _player.trackId   = d.currentTrackId || '';
     _player.trackDur  = dur;
-
     // Use engine's trackStartedAt (epoch ms) for accurate clock-sync.
-    // The engine publishes this on every track start; fall back to updatedAt
-    // then to serverTime (Firestore write time), then to local clock.
     _player.trackStartedAt =
       (typeof d.trackStartedAt === 'number' && d.trackStartedAt > 0)
         ? d.trackStartedAt
         : (d.updatedAt?.toMillis ? d.updatedAt.toMillis() : Date.now());
-
     _loadAndPlayTrack(url, dur);
   }
 }
@@ -1221,9 +1061,8 @@ function _onTrackEnded() {
  * Advance the Now Playing queue by one track.
  * Only the creator's client writes to studioCloudStreamMusic — and only when
  * the server engine is NOT running (local/fallback mode).
- * When _engineRunning is true the server engine handles all track advancement
- * via its own setTimeout scheduler and Firestore writes; the client must not
- * interfere or the two will race and cause double-skips.
+ * When _engineRunning is true the server engine handles all track advancement;
+ * the client must not interfere or they will race and cause double-skips.
  */
 async function _autoAdvanceQueue() {
   if (!_streamId || !_user) return;

@@ -44,8 +44,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v16';
-const CACHE_NAME  = 'avenora-cache-v16';
+const SW_VERSION  = 'v17';
+const CACHE_NAME  = 'avenora-cache-v17';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -67,6 +67,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v13', // v13 — evict: Render URL removal, Firebase+Supabase-only architecture
   'avenora-cache-v14', // v14 — evict: CloudStream/Theme/Video still called old backend
   'avenora-cache-v15', // v15 — evict: add dj-cosmic.css to cache, cosmic UI upgrade
+  'avenora-cache-v16', // v16 — evict: global cosmic design system, avenora-cosmic.css
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
@@ -81,6 +82,7 @@ const STATIC_ASSETS = [
   `${BASE}/index.html`,
   `${BASE}/offline.html`,
   `${BASE}/manifest.json`,
+  `${BASE}/src/styles/avenora-cosmic.css`,
   `${BASE}/src/styles/theme.css`,
   `${BASE}/src/styles/visual.css`,
   `${BASE}/src/styles/social.css`,
