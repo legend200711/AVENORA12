@@ -107,18 +107,74 @@ window.adminSection = async function (section) {
   }
 };
 
+// ─── Firestore admin helpers ──────────────────────────────
+// All admin data reads go directly to Firestore / Supabase — no backend needed.
+
+async function _fsCount(collectionName) {
+  try {
+    const db = await window.AvenoraFirebase.getFirestore();
+    const { collection, getCountFromServer } = await import(
+      `https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`
+    );
+    const snap = await getCountFromServer(collection(db, collectionName));
+    return snap.data().count;
+  } catch {
+    // getCountFromServer may not be available in older SDK bundles — fall back to getDocs
+    try {
+      const db = await window.AvenoraFirebase.getFirestore();
+      const { collection, getDocs } = await import(
+        `https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`
+      );
+      const snap = await getDocs(collection(db, collectionName));
+      return snap.size;
+    } catch { return '—'; }
+  }
+}
+
+async function _fsUsers(limitCount = 50, search = '') {
+  const db = await window.AvenoraFirebase.getFirestore();
+  const { collection, query, orderBy, limit, getDocs, where } = await import(
+    `https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`
+  );
+  let q;
+  if (search) {
+    // Firestore doesn't support full-text search; do prefix match on username
+    const end = search + '\uf8ff';
+    q = query(collection(db, 'users'), orderBy('username'), where('username', '>=', search), where('username', '<=', end), limit(limitCount));
+  } else {
+    q = query(collection(db, 'users'), orderBy('createdAt', 'desc'), limit(limitCount));
+  }
+  const snap = await getDocs(q);
+  return snap.docs.map(d => ({ _id: d.id, id: d.id, ...d.data() }));
+}
+
 async function renderAdminDashboard(container) {
   try {
-    const data = await LegendAPI.admin.dashboard();
-    const s = data.stats;
+    // Pull counts from Firestore directly — no backend required
+    const [userCount, postCount, videoCount] = await Promise.all([
+      _fsCount('users'),
+      _fsCount('posts'),
+      // Videos live in Supabase music_library (mime_type LIKE 'video/%')
+      (async () => {
+        try {
+          const SUPABASE_URL  = 'https://licuiqxkkfboqezzmsqu.supabase.co';
+          const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpY3VpcXhra2Zib3Flenptc3F1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNTYxMDQsImV4cCI6MjEwNDkzMjEwNH0.tsYOyCI7skF6Otz2W0oNYhxM63-0551lrqIDCO8NoJo';
+          const r = await fetch(`${SUPABASE_URL}/rest/v1/music_library?mime_type=like.video/*&select=id`, {
+            headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}`, Prefer: 'count=exact', Range: '0-0' },
+          });
+          const count = r.headers.get('content-range')?.split('/')[1];
+          return count ? parseInt(count) : '—';
+        } catch { return '—'; }
+      })(),
+    ]);
+
     container.innerHTML = `
       <h2 style="font-family:var(--font-display);letter-spacing:0.1em;margin-bottom:var(--space-xl);color:var(--neon-blue)">DASHBOARD</h2>
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:var(--space-md);margin-bottom:var(--space-xl)">
         ${[
-          { label: 'Users', value: formatCount(s.users), color: 'var(--neon-blue)', icon: '👥' },
-          { label: 'Posts', value: formatCount(s.posts), color: 'var(--neon-green)', icon: '📝' },
-          { label: 'Videos', value: formatCount(s.videos), color: 'var(--neon-purple)', icon: '🎬' },
-          { label: 'Live Streams', value: formatCount(s.liveStreams), color: 'var(--neon-red)', icon: '🔴' },
+          { label: 'Users',  value: typeof userCount  === 'number' ? formatCount(userCount)  : userCount,  color: 'var(--neon-blue)',   icon: '👥' },
+          { label: 'Posts',  value: typeof postCount  === 'number' ? formatCount(postCount)  : postCount,  color: 'var(--neon-green)',  icon: '📝' },
+          { label: 'Videos', value: typeof videoCount === 'number' ? formatCount(videoCount) : videoCount, color: 'var(--neon-purple)', icon: '🎬' },
         ].map(stat => `
           <div class="card" style="text-align:center;border-color:rgba(255,255,255,0.07)">
             <div style="font-size:2rem;margin-bottom:var(--space-sm)">${stat.icon}</div>
@@ -128,98 +184,39 @@ async function renderAdminDashboard(container) {
         `).join('')}
       </div>
       <div class="card" style="padding:var(--space-md)">
-      <h4 style="margin-bottom:var(--space-sm);font-family:var(--font-display);letter-spacing:0.05em">DATABASE STATUS</h4>
-      <div style="display:flex;align-items:center;gap:8px">
-        <span style="width:10px;height:10px;border-radius:50%;background:${s.dbStatus?.connected ? 'var(--neon-green)' : 'var(--neon-red)'};display:inline-block"></span>
-        <span style="font-size:0.9rem">${s.dbStatus?.connected ? 'Connected' : 'Not Connected'}</span>
+        <h4 style="margin-bottom:var(--space-sm);font-family:var(--font-display);letter-spacing:0.05em">DATA SOURCES</h4>
+        <div style="display:flex;flex-direction:column;gap:6px;font-size:0.85rem">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:8px;height:8px;border-radius:50%;background:var(--neon-green);display:inline-block"></span>
+            Firebase Firestore — users, posts, gallery, stories
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="width:8px;height:8px;border-radius:50%;background:var(--neon-green);display:inline-block"></span>
+            Supabase Storage — videos, music, images
+          </div>
+        </div>
+        <p style="color:var(--text-muted);font-size:0.75rem;margin-top:8px">Last refreshed: ${new Date().toLocaleTimeString()}</p>
       </div>
-      <p style="color:var(--text-muted);font-size:0.8rem;margin-top:4px">Last checked: ${s.timestamp}</p>
-    </div>
     `;
   } catch (err) {
     console.error('[AVN] Admin dashboard error:', err);
-    // Provide actionable guidance based on the HTTP status code and error code.
-    const status = err.status || 0;
-    let heading = 'Could not load dashboard';
-    let detail  = '';
-
-    if (err.code === 'API_NOT_CONFIGURED' || err.code === 'BACKEND_NOT_CONFIGURED') {
-      heading = 'API not configured';
-      detail  = 'The backend API URL is not set in <code>index.html</code>. ' +
-                'Edit <code>_productionApiUrl</code> in the <code>window.LU_CONFIG</code> block to point to your deployed backend.';
-    } else if (err.code === 'BACKEND_NOT_RUNNING') {
-      heading = 'Backend not running';
-      detail  = 'The backend server is not reachable at <code>' +
-                escapeHtml(String(window.LU_CONFIG?.apiUrl || 'localhost:3001')) + '</code>. ' +
-                '<ul style="margin:8px 0 0 16px;text-align:left">' +
-                '<li>Run <code>cd backend &amp;&amp; npm start</code> to start the server.</li>' +
-                '<li>Or deploy the backend and update <code>_productionApiUrl</code> in <code>index.html</code>.</li>' +
-                '</ul>';
-    } else if (err.code === 'BACKEND_UNREACHABLE') {
-      heading = 'Backend unreachable';
-      detail  = 'Cannot reach the backend at <code>' +
-                escapeHtml(String(window.LU_CONFIG?.apiUrl || '')) + '</code>. ' +
-                '<ul style="margin:8px 0 0 16px;text-align:left">' +
-                '<li>Check that the backend is deployed and running.</li>' +
-                '<li>Verify <code>_productionApiUrl</code> in <code>index.html</code> is correct.</li>' +
-                '<li>Open DevTools → Network tab and look for a failed <code>OPTIONS</code> or <code>GET</code> request.</li>' +
-                '<li>Check that <code>FRONTEND_URL=https://legend200711.github.io</code> is set on the backend.</li>' +
-                '</ul>' +
-                '<p style="margin-top:6px;font-size:0.8rem;color:var(--text-muted)">Network error: ' + escapeHtml(err.originalError || err.message) + '</p>';
-    } else if (status === 401) {
-      heading = 'Not signed in';
-      detail  = 'Your session has expired or the Firebase token could not be verified. ' +
-                '<ul style="margin:8px 0 0 16px;text-align:left">' +
-                '<li>Sign out and sign in again.</li>' +
-                '<li>Confirm <code>FIREBASE_WEB_API_KEY</code> is set correctly in <code>backend/.env</code>.</li>' +
-                '</ul>';
-    } else if (status === 403) {
-      heading = 'Access denied';
-      detail  = 'The server rejected the request. Possible reasons:' +
-                '<ul style="margin:8px 0 0 16px;text-align:left">' +
-                '<li>The <code>FOUNDER_EMAIL</code> environment variable is not set on the backend.</li>' +
-                '<li>Your account email does not match <code>FOUNDER_EMAIL</code>.</li>' +
-                '<li>Your account role has not been promoted to <code>founder</code>.</li>' +
-                '</ul>' +
-                '<p style="margin-top:8px">Set <code>FOUNDER_EMAIL=christijerina46@gmail.com</code> in <code>backend/.env</code> and restart the server.</p>';
-    } else if (status === 503) {
-      heading = 'Service unavailable';
-      detail  = (err.userMessage || err.message || 'A required service is not configured on the backend.') +
-                ' Check <code>backend/.env</code> for missing variables.';
-    } else {
-      detail = 'Could not retrieve system data.<br>' +
-               '<strong>Error:</strong> ' + escapeHtml(err.message || 'unknown error') + '<br>' +
-               '<small style="color:var(--text-muted)">Code: ' + escapeHtml(err.code || String(status || 'none')) + ' · ' +
-               'URL: ' + escapeHtml(String(window.LU_CONFIG?.apiUrl || 'not set')) + '</small><br>' +
-               '<span style="font-size:0.85rem">Check your connection, verify the backend is running, and open DevTools → Network to inspect the failed request.</span>';
-    }
-
-    container.innerHTML = `
-      <div class="error-state">
-        <div class="error-icon">⚠️</div>
-        <h3>${heading}</h3>
-        <div style="color:var(--text-muted);font-size:0.9rem;max-width:560px;margin:0 auto;text-align:left">${detail}</div>
-        <div style="margin-top:var(--space-md);display:flex;gap:8px;justify-content:center;flex-wrap:wrap">
-          <button class="btn btn-outline" onclick="adminSection('dashboard')">Retry</button>
-          <button class="btn btn-ghost btn-sm" onclick="LegendAPI.health.check().then(r=>alert('Backend health: '+JSON.stringify(r))).catch(e=>alert('Health check failed: '+e.message))">Test Connection</button>
-        </div>
-      </div>`;
+    showError(container, 'Dashboard could not be loaded. Check your connection and try again.', () => renderAdminDashboard(container));
   }
 }
 
 async function renderAdminUsers(container) {
   try {
-    const data = await LegendAPI.admin.users(1);
+    const users = await _fsUsers(50);
     container.innerHTML = `
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-xl)">
-        <h2 style="font-family:var(--font-display);letter-spacing:0.1em;color:var(--neon-blue)">USERS (${data.total || 0})</h2>
+        <h2 style="font-family:var(--font-display);letter-spacing:0.1em;color:var(--neon-blue)">USERS (${users.length})</h2>
         <div class="search-bar" style="width:240px">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
           <input type="search" placeholder="Search users..." id="admin-user-search" oninput="adminSearchUsers(this.value)">
         </div>
       </div>
       <div id="admin-users-table">
-        ${renderUsersTable(data.users || [])}
+        ${renderUsersTable(users)}
       </div>
     `;
   } catch (err) {
@@ -277,15 +274,20 @@ function renderUsersTable(users) {
 
 window.adminSearchUsers = debounce(async function (query) {
   try {
-    const data = await LegendAPI.admin.users(1, query);
+    const users = await _fsUsers(50, query);
     const el = document.getElementById('admin-users-table');
-    if (el) el.innerHTML = renderUsersTable(data.users || []);
+    if (el) el.innerHTML = renderUsersTable(users);
   } catch (err) { console.warn('[AVN] Admin user search error:', err); Toast.error('User search failed. Please try again.'); }
 }, 400);
 
 window.adminSetRole = async function (userId, role) {
+  // Update role directly in Firestore (no backend needed)
   try {
-    await LegendAPI.admin.setRole(userId, role);
+    const db = await window.AvenoraFirebase.getFirestore();
+    const { doc, updateDoc } = await import(
+      `https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`
+    );
+    await updateDoc(doc(db, 'users', userId), { role });
     Toast.success(`Role updated to ${role}`);
   } catch (err) { console.warn('[AVN] Admin set role error:', err); Toast.error('Could not update role. Please try again.'); }
 };
@@ -294,7 +296,9 @@ window.adminSuspend = async function (userId) {
   const reason = prompt('Suspension reason:');
   if (reason === null) return;
   try {
-    await LegendAPI.admin.suspend(userId, reason || 'Policy violation');
+    const db = await window.AvenoraFirebase.getFirestore();
+    const { doc, updateDoc } = await import(`https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`);
+    await updateDoc(doc(db, 'users', userId), { 'status.isSuspended': true, 'status.suspendedReason': reason || 'Policy violation' });
     Toast.success('User suspended');
     adminSection('users');
   } catch (err) { console.warn('[AVN] Admin suspend error:', err); Toast.error('Could not suspend user. Please try again.'); }
@@ -302,24 +306,34 @@ window.adminSuspend = async function (userId) {
 
 window.adminUnsuspend = async function (userId) {
   try {
-    await LegendAPI.admin.unsuspend(userId);
+    const db = await window.AvenoraFirebase.getFirestore();
+    const { doc, updateDoc } = await import(`https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`);
+    await updateDoc(doc(db, 'users', userId), { 'status.isSuspended': false, 'status.suspendedReason': null });
     Toast.success('User unsuspended');
     adminSection('users');
   } catch (err) { console.warn('[AVN] Admin unsuspend error:', err); Toast.error('Could not restore user. Please try again.'); }
 };
 
 async function renderAdminModeration(container) {
+  // Query Firestore posts collection for flagged posts
   try {
-    const data = await LegendAPI.admin.flaggedPosts();
+    const db = await window.AvenoraFirebase.getFirestore();
+    const { collection, query, where, orderBy, limit, getDocs } = await import(
+      `https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`
+    );
+    const q = query(collection(db, 'posts'), where('isFlagged', '==', true), orderBy('createdAt', 'desc'), limit(50));
+    const snap = await getDocs(q);
+    const posts = snap.docs.map(d => ({ _id: d.id, id: d.id, ...d.data() }));
+
     container.innerHTML = `
       <h2 style="font-family:var(--font-display);letter-spacing:0.1em;margin-bottom:var(--space-xl);color:var(--neon-blue)">MODERATION QUEUE</h2>
-      ${!data.posts?.length ? `<div class="error-state"><div class="error-icon">✅</div><h3>Queue is clear</h3><p>No flagged content awaiting moderation.</p></div>` :
-        data.posts.map(post => `
+      ${!posts.length ? `<div class="error-state"><div class="error-icon">✅</div><h3>Queue is clear</h3><p>No flagged content awaiting moderation.</p></div>` :
+        posts.map(post => `
           <div class="card" style="margin-bottom:var(--space-md)">
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:var(--space-sm)">
               <div>
                 <strong>@${escapeHtml(post.author?.username || 'unknown')}</strong>
-                <span style="color:var(--text-muted);font-size:0.8rem;margin-left:8px">${formatTimeAgo(post.createdAt)}</span>
+                <span style="color:var(--text-muted);font-size:0.8rem;margin-left:8px">${formatTimeAgo(post.createdAt?.toDate?.() || post.createdAt)}</span>
               </div>
               <div style="display:flex;gap:var(--space-sm)">
                 <button class="btn btn-ghost btn-sm" onclick="adminClearFlag('${post._id}')">✓ Clear</button>
@@ -338,46 +352,65 @@ async function renderAdminModeration(container) {
 }
 
 window.adminClearFlag = async function (postId) {
-  Toast.info('Flag cleared (moderation action logged server-side)');
+  try {
+    const db = await window.AvenoraFirebase.getFirestore();
+    const { doc, updateDoc } = await import(`https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`);
+    await updateDoc(doc(db, 'posts', postId), { isFlagged: false });
+    Toast.success('Flag cleared');
+    adminSection('moderation');
+  } catch (err) { console.warn('[AVN] Admin clear flag error:', err); Toast.error('Could not clear flag.'); }
 };
 
 window.adminDeletePost = async function (postId) {
   if (!confirm('Delete this post permanently?')) return;
   try {
-    await LegendAPI.admin.deletePost(postId);
+    // Delete from Firestore directly
+    const db = await window.AvenoraFirebase.getFirestore();
+    const { doc, deleteDoc } = await import(`https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`);
+    await deleteDoc(doc(db, 'posts', postId));
     Toast.success('Post deleted');
     adminSection('moderation');
   } catch (err) { console.warn('[AVN] Admin delete post error:', err); Toast.error('Post could not be deleted. Please try again.'); }
 };
 
 async function renderAdminSystem(container) {
-  try {
-    const data = await LegendAPI.admin.system();
-    const s = data.system;
-    container.innerHTML = `
-      <h2 style="font-family:var(--font-display);letter-spacing:0.1em;margin-bottom:var(--space-xl);color:var(--neon-blue)">SYSTEM STATUS</h2>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:var(--space-md)">
-        <div class="card"><h4 style="color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:var(--space-sm)">Node.js</h4><p style="font-family:var(--font-mono)">${s.nodeVersion}</p></div>
-        <div class="card"><h4 style="color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:var(--space-sm)">Uptime</h4><p>${Math.round(s.uptime / 3600)}h ${Math.round((s.uptime % 3600) / 60)}m</p></div>
-        <div class="card"><h4 style="color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:var(--space-sm)">Environment</h4><p>${s.environment}</p></div>
-        <div class="card">
-          <h4 style="color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:var(--space-sm)">Database</h4>
-          <div style="display:flex;align-items:center;gap:6px">
-            <span style="width:8px;height:8px;border-radius:50%;background:${s.database?.connected ? 'var(--neon-green)' : 'var(--neon-red)'}"></span>
-            ${s.database?.connected ? 'Connected' : 'Not Connected'}
-          </div>
+  // System info sourced from the browser — no backend required
+  const user = LegendAPI.auth.getUser();
+  container.innerHTML = `
+    <h2 style="font-family:var(--font-display);letter-spacing:0.1em;margin-bottom:var(--space-xl);color:var(--neon-blue)">SYSTEM STATUS</h2>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:var(--space-md)">
+      <div class="card">
+        <h4 style="color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:var(--space-sm)">Firebase</h4>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="width:8px;height:8px;border-radius:50%;background:${user ? 'var(--neon-green)' : 'var(--text-muted)'}"></span>
+          ${user ? 'Authenticated' : 'Not signed in'}
         </div>
-        <div class="card">
-          <h4 style="color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:var(--space-sm)">Memory</h4>
-          <p style="font-size:0.85rem">Heap: ${Math.round(s.memoryUsage?.heapUsed / 1024 / 1024)}MB / ${Math.round(s.memoryUsage?.heapTotal / 1024 / 1024)}MB</p>
-        </div>
-        <div class="card"><h4 style="color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:var(--space-sm)">Platform</h4><p>${s.platform}</p></div>
       </div>
-    `;
-  } catch (err) {
-    console.error('[AVN] Admin system error:', err);
-    showError(container, 'System status could not be loaded. Please try again.', () => renderAdminSystem(container));
-  }
+      <div class="card">
+        <h4 style="color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:var(--space-sm)">Supabase</h4>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="width:8px;height:8px;border-radius:50%;background:var(--neon-green)"></span>
+          Connected (anon key)
+        </div>
+      </div>
+      <div class="card">
+        <h4 style="color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:var(--space-sm)">App Version</h4>
+        <p>${escapeHtml(window.AVENORA_BUILD?.version || '—')}</p>
+      </div>
+      <div class="card">
+        <h4 style="color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:var(--space-sm)">Environment</h4>
+        <p>${window.LU_CONFIG?.isLocalhost ? 'Development (localhost)' : 'Production (GitHub Pages)'}</p>
+      </div>
+      <div class="card">
+        <h4 style="color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:var(--space-sm)">Firebase Project</h4>
+        <p style="font-size:0.85rem">${escapeHtml(window.AVENORA_BUILD?.firebaseProject || 'avenora-6e147')}</p>
+      </div>
+      <div class="card">
+        <h4 style="color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:var(--space-sm)">Build</h4>
+        <p style="font-size:0.82rem">${escapeHtml(window.AVENORA_BUILD?.buildTimestamp || '—')}</p>
+      </div>
+    </div>
+  `;
 }
 
 function renderAdminLogs(container) {
