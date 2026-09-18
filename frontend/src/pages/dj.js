@@ -283,8 +283,8 @@ const DJ = {
   // MediaStreamAudioDestinationNode — taps the master mix for recording
   streamDest:  null,
   decks: {
-    A: { audio: null, gainNode: null, bassFilter: null, midFilter: null, trebleFilter: null, isPlaying: false, cuePoint: 0, queue: [], queueIndex: -1 },
-    B: { audio: null, gainNode: null, bassFilter: null, midFilter: null, trebleFilter: null, isPlaying: false, cuePoint: 0, queue: [], queueIndex: -1 },
+    A: { audio: null, gainNode: null, bassFilter: null, midFilter: null, trebleFilter: null, isPlaying: false, cuePoint: 0, queue: [], queueIndex: -1, bpm: null },
+    B: { audio: null, gainNode: null, bassFilter: null, midFilter: null, trebleFilter: null, isPlaying: false, cuePoint: 0, queue: [], queueIndex: -1, bpm: null },
   },
   masterGain:      null,
   crossfadeValue:  50,
@@ -721,11 +721,12 @@ window.djLoadTrackToDeck = function (deck, trackId) {
 
   audio.src = track.url;
   audio.load();
+  d.bpm = null; // reset BPM for the new track
 
   const title = document.getElementById(`deck-${deck.toLowerCase()}-title`);
-  const bpm   = document.getElementById(`deck-${deck.toLowerCase()}-bpm`);
+  const bpmEl = document.getElementById(`deck-${deck.toLowerCase()}-bpm`);
   if (title) title.textContent = track.name + (track.artist ? ` — ${track.artist}` : '');
-  if (bpm)   bpm.textContent   = 'BPM: detecting...';
+  if (bpmEl) bpmEl.textContent = 'BPM: analysing…';
 
   // Set this track into the deck queue at position 0, retaining subsequent tracks
   if (!d.queue.find(qt => qt.id === trackId)) {
@@ -736,6 +737,12 @@ window.djLoadTrackToDeck = function (deck, trackId) {
   }
 
   Toast.info(`"${track.name}" loaded to Deck ${deck}`);
+
+  // Auto-detect BPM in the background — updates label when done
+  _djDetectBPM(deck).catch(() => {
+    const el = document.getElementById(`deck-${deck.toLowerCase()}-bpm`);
+    if (el && el.textContent.includes('analysing')) el.textContent = 'BPM: —';
+  });
 };
 
 window.djLoadToDecks = function (deck) { djImportToSpecificDeck(deck); };
@@ -889,8 +896,145 @@ window.djCue = function (deck) {
 };
 
 window.djSync = function (deck) {
-  Toast.info('BPM sync: detecting BPM requires audio analysis — feature available with Essentia.js integration.');
+  const d     = DJ.decks[deck];
+  const other = deck === 'A' ? 'B' : 'A';
+  const dOther = DJ.decks[other];
+
+  // Both decks must have audio loaded
+  if (!d.audio || !d.audio.src) {
+    Toast.warn(`Deck ${deck}: no track loaded.`);
+    return;
+  }
+
+  // If this deck's BPM is already known, attempt to tempo-match immediately
+  if (d.bpm && dOther.bpm) {
+    _djApplySync(deck, d.bpm, dOther.bpm);
+    return;
+  }
+
+  // Detect BPM on the deck that is missing it, then sync
+  const needsDetection = d.bpm ? other : deck;
+  Toast.info(`Deck ${needsDetection}: analysing BPM…`);
+  _djDetectBPM(needsDetection).then(() => {
+    if (d.bpm && dOther.bpm) {
+      _djApplySync(deck, d.bpm, dOther.bpm);
+    } else if (d.bpm) {
+      Toast.success(`Deck ${deck}: ${Math.round(d.bpm)} BPM — load a track on Deck ${other} to sync.`);
+    }
+  }).catch(err => {
+    Toast.error(`BPM detection failed: ${err.message}`);
+  });
 };
+
+/**
+ * Detect BPM for a deck using the Web Audio API's OfflineAudioContext.
+ *
+ * Algorithm:
+ *  1. Fetch the audio file into an ArrayBuffer.
+ *  2. Decode via OfflineAudioContext, apply a low-pass filter to isolate kick energy.
+ *  3. Rectify and downsample to an energy envelope at ~172 Hz.
+ *  4. Autocorrelate the envelope over the BPM range 60–180.
+ *  5. Pick the lag with the highest autocorrelation peak → BPM.
+ *  6. Store on DJ.decks[deck].bpm and update the UI label.
+ *
+ * Returns a Promise that resolves when BPM has been stored.
+ */
+async function _djDetectBPM(deck) {
+  const audio = DJ.decks[deck].audio;
+  if (!audio || !audio.src) throw new Error('no track loaded');
+
+  // --- 1. Fetch raw audio bytes ---
+  const resp = await fetch(audio.src);
+  if (!resp.ok) throw new Error(`fetch failed: ${resp.status}`);
+  const arrayBuf = await resp.arrayBuffer();
+
+  // --- 2. Decode at reduced sample rate (22050 Hz is plenty for beat analysis) ---
+  const sampleRate = 22050;
+  // Decode at native rate first (OfflineAudioContext requires a length)
+  const tmpCtx = new OfflineAudioContext(1, 1, sampleRate);
+  const decoded = await new AudioContext({ sampleRate }).decodeAudioData(arrayBuf.slice(0));
+
+  const numSamples = Math.floor(decoded.duration * sampleRate);
+  const offlineCtx = new OfflineAudioContext(1, numSamples, sampleRate);
+
+  const bufSrc = offlineCtx.createBufferSource();
+  // Re-decode at the target sample rate via the offline context
+  const decodedOffline = await offlineCtx.decodeAudioData(arrayBuf.slice(0));
+  bufSrc.buffer = decodedOffline;
+
+  // --- 3. Low-pass filter to ~200 Hz — isolates kick/bass transients ---
+  const lpf = offlineCtx.createBiquadFilter();
+  lpf.type            = 'lowpass';
+  lpf.frequency.value = 200;
+  lpf.Q.value         = 0.5;
+
+  bufSrc.connect(lpf);
+  lpf.connect(offlineCtx.destination);
+  bufSrc.start(0);
+
+  const rendered = await offlineCtx.startRendering();
+  const raw = rendered.getChannelData(0);
+
+  // --- 4. Build energy envelope by downsampling ---
+  // Hop = ~5.8 ms at 22050 Hz → ~172 envelope frames per second
+  const hopSize   = 128;
+  const envLen    = Math.floor(raw.length / hopSize);
+  const envelope  = new Float32Array(envLen);
+  for (let i = 0; i < envLen; i++) {
+    let sum = 0;
+    const start = i * hopSize;
+    const end   = Math.min(start + hopSize, raw.length);
+    for (let j = start; j < end; j++) sum += raw[j] * raw[j];
+    envelope[i] = Math.sqrt(sum / (end - start));
+  }
+
+  // --- 5. Autocorrelation over BPM range 60–180 ---
+  const envRate = sampleRate / hopSize;           // ~172.3 frames/sec
+  const lagMin  = Math.floor(envRate * 60 / 180); // lag for 180 BPM
+  const lagMax  = Math.ceil(envRate * 60 / 60);   // lag for  60 BPM
+  const acLen   = Math.min(envLen, 10 * envRate);  // analyse first 10 s
+
+  let bestLag   = lagMin;
+  let bestScore = -Infinity;
+
+  for (let lag = lagMin; lag <= lagMax; lag++) {
+    let score = 0;
+    const n = acLen - lag;
+    for (let i = 0; i < n; i++) score += envelope[i] * envelope[i + lag];
+    // Normalise by overlap length
+    score /= n;
+    if (score > bestScore) { bestScore = score; bestLag = lag; }
+  }
+
+  const bpm = (envRate / bestLag) * 60;
+
+  // Clamp to sensible range (handles half/double-time artefacts)
+  let finalBpm = bpm;
+  if (finalBpm < 60)  finalBpm *= 2;
+  if (finalBpm > 180) finalBpm /= 2;
+
+  DJ.decks[deck].bpm = finalBpm;
+
+  // Update the BPM label in the UI
+  const bpmEl = document.getElementById(`deck-${deck.toLowerCase()}-bpm`);
+  if (bpmEl) bpmEl.textContent = `BPM: ${Math.round(finalBpm)}`;
+}
+
+/**
+ * Apply tempo sync: adjust the playbackRate of the source deck so its
+ * effective BPM matches the target deck.
+ */
+function _djApplySync(sourceDeck, sourceBpm, targetBpm) {
+  const audio = DJ.decks[sourceDeck].audio;
+  if (!audio) return;
+  const ratio = targetBpm / sourceBpm;
+  audio.playbackRate = ratio;
+  // Keep stored BPM in sync with the new rate
+  DJ.decks[sourceDeck].bpm = targetBpm;
+  const bpmEl = document.getElementById(`deck-${sourceDeck.toLowerCase()}-bpm`);
+  if (bpmEl) bpmEl.textContent = `BPM: ${Math.round(targetBpm)} (synced)`;
+  Toast.success(`Deck ${sourceDeck} synced to ${Math.round(targetBpm)} BPM`);
+}
 
 window.djCrossfade = function (val) {
   DJ.crossfadeValue = parseInt(val);
