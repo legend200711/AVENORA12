@@ -849,6 +849,7 @@ window.csrSkipTrack = async function() {
     if (!queue.length) { _toast('Queue is empty.', 'info'); return; }
     const nextIndex = ((ms.queueIndex || 0) + 1) % queue.length;
     const nextTrack = queue[nextIndex] || {};
+    const _afterSkip = queue[(nextIndex + 1) % queue.length] || {};
     await updateDoc(doc(_db, 'studioCloudStreamMusic', _streamId), {
       queueIndex:      nextIndex,
       currentTrackId:  nextTrack.id        || '',
@@ -858,8 +859,9 @@ window.csrSkipTrack = async function() {
       currentDuration: nextTrack.duration  || 0,
       trackStartedAt:  Date.now(),
       currentElapsed:  0,
-      nextTitle:       (queue[(nextIndex + 1) % queue.length] || {}).title || '',
-      nextArtist:      (queue[(nextIndex + 1) % queue.length] || {}).artist || '',
+      nextTrackId:     _afterSkip.id       || '',
+      nextTitle:       _afterSkip.title    || '',
+      nextArtist:      _afterSkip.artist   || '',
       status:          'playing',
       updatedAt:       serverTimestamp()
     });
@@ -1093,6 +1095,9 @@ async function _autoAdvanceQueue() {
       currentArtist:    nextTrack.artist    || '',
       currentTrackUrl:  nextTrack.url       || '',
       currentDuration:  nextTrack.duration  || 0,
+      trackStartedAt:   Date.now(),
+      currentElapsed:   0,
+      nextTrackId:      afterNext.id        || '',
       nextTitle:        afterNext.title     || '',
       nextArtist:       afterNext.artist    || '',
       status:           'playing',

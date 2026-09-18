@@ -88,18 +88,11 @@ registerPage('cloudstream', {
     let _ackReceived     = false;
     let _unsubIdToken    = null;  // Firebase onIdTokenChanged unsubscribe fn
 
-    // ── Helper: send config + auth token to iframe (fire-and-forget) ────────
+    // ── Helper: send auth token to iframe (fire-and-forget) ────────────────
     const _pushToFrame = (token, uid) => {
       if (!frame.contentWindow || !_frameLoaded) return;
       try {
-        // 1. Runtime config (idempotent — iframe ignores dupes)
-        if (window.LU_CONFIG) {
-          frame.contentWindow.postMessage(
-            { type: 'AVN_CONFIG', apiUrl: window.LU_CONFIG.apiUrl || '', socketUrl: window.LU_CONFIG.socketUrl || '' },
-            _targetOrigin
-          );
-        }
-        // 2. Auth token — only if we have one
+        // Auth token — only if we have one
         if (token && uid) {
           frame.contentWindow.postMessage(
             { type: 'AVN_AUTH_TOKEN', idToken: token, uid },
@@ -145,18 +138,9 @@ registerPage('cloudstream', {
     };
     _startTokenSubscription();
 
-    // ── On iframe load: send config + any already-available token ───────────
+    // ── On iframe load: send any already-available token ────────────────────
     frame.addEventListener('load', () => {
       _frameLoaded = true;
-      // Always send config first
-      if (window.LU_CONFIG && frame.contentWindow) {
-        try {
-          frame.contentWindow.postMessage(
-            { type: 'AVN_CONFIG', apiUrl: window.LU_CONFIG.apiUrl || '', socketUrl: window.LU_CONFIG.socketUrl || '' },
-            _targetOrigin
-          );
-        } catch (_) {}
-      }
       // If we already have a token from onIdTokenChanged, send it now.
       // If not, onIdTokenChanged will fire shortly and push it.
       if (_latestToken && _latestUid) {

@@ -259,23 +259,21 @@
 
   <!-- ═══════ RUNTIME CONFIG ════════════════════════════════════ -->
   <!--
-    PRODUCTION BACKEND URL
+    AVENORA RUNTIME CONFIG
     ────────────────────────────────────────────────────────────────
-    This must point to your deployed Render backend.
-    The Render service is named "avenora-backend" → https://avenora-backend.onrender.com
-    If the service URL is different (check your Render dashboard), update the value below.
-
-    DO NOT use '/api' here — that is a relative URL which resolves to the GitHub Pages
-    origin (https://legend200711.github.io/api) and will never reach the backend.
+    Architecture: Firebase (Auth, Firestore, Realtime DB, Storage)
+                + Supabase (Storage, Edge Functions)
+    No external REST backend required.
+    apiUrl is intentionally null — all backend operations use
+    Firebase or Supabase Edge Functions directly.
   -->
   <script>
     (function () {
-      // Detect whether we are running locally (so developers don't have to change this)
-      var _isLocal = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-      var _productionApiUrl = 'https://avenora-backend.onrender.com';
       window.LU_CONFIG = window.LU_CONFIG || {};
-      window.LU_CONFIG.apiUrl    = _isLocal ? 'http://localhost:3001' : _productionApiUrl;
-      window.LU_CONFIG.socketUrl = window.LU_CONFIG.apiUrl;
+      // No Render/Express backend — Firebase + Supabase architecture only.
+      // apiUrl is null; any code that needs a backend uses Supabase Edge Functions.
+      window.LU_CONFIG.apiUrl    = null;
+      window.LU_CONFIG.socketUrl = null;
     })();
   </script>
 

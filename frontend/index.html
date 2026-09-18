@@ -264,21 +264,9 @@
     Deployment: GitHub Pages  →  https://legend200711.github.io/AVENORA1/
     Firebase project:            avenora-6e147
     ────────────────────────────────────────────────────────────────
-    API base URL MUST point to the actual deployed backend server.
-
-    ⚠️  HOW TO UPDATE THE BACKEND URL:
-        1. Deploy the backend (Render, Railway, Fly.io, etc.)
-        2. Find the deployed URL, e.g. https://avenora-backend.onrender.com
-        3. Replace _productionApiUrl below with that URL (no trailing slash, no /api)
-        4. Commit and push — GitHub Pages will serve the updated index.html
-
-    Common deployment examples:
-      Render:  https://avenora-XXXX.onrender.com
-      Railway: https://avenora-production.up.railway.app
-      Fly.io:  https://avenora.fly.dev
-
-    NEVER use 'https://api.avenora.app' unless that domain is actually
-    pointing at a running Avenora backend server.
+    Architecture: Firebase (Auth, Firestore, Realtime DB, Storage)
+                + Supabase (Storage, Edge Functions)
+    No external Render/Express backend is used or required.
   -->
   <script>
     // ── Build / version metadata ──────────────────────────────
@@ -292,17 +280,8 @@
     };
 
     // ── Runtime API config ────────────────────────────────────
-    // DO NOT pass /api here — api.js appends it automatically.
-    // Only pass the base server URL (scheme + host + optional port).
-    //
-    // Resolution order:
-    //   1. localhost / 127.0.0.1 / 0.0.0.0 → development URL
-    //   2. Everything else (GitHub Pages, installed PWA) → production URL
-    //
-    // ── SET YOUR BACKEND URL HERE ─────────────────────────────
-    // Replace _productionApiUrl with your actual deployed backend.
-    // Do NOT include a trailing slash or /api path.
-    // ─────────────────────────────────────────────────────────
+    // Architecture: Firebase + Supabase only. No Render/Express backend.
+    // apiUrl is null — backend operations use Firebase and Supabase Edge Functions.
     (function () {
       var _isPWA = window.matchMedia('(display-mode: standalone)').matches ||
                    window.navigator.standalone === true;
@@ -310,45 +289,19 @@
                          location.hostname === '127.0.0.1' ||
                          location.hostname === '0.0.0.0';
 
-      // ▼▼▼ PRODUCTION BACKEND URL ▼▼▼
-      // Render service name: avenora-backend → https://avenora-backend.onrender.com
-      // If your Render URL is different, update this line and redeploy.
-      var _productionApiUrl  = 'https://avenora-backend.onrender.com';
-      // ▲▲▲ DO NOT include /api — api.js adds it automatically ▲▲▲
-
-      var _developmentApiUrl = 'http://localhost:3001';
-      var _apiBase = _isLocalhost ? _developmentApiUrl : _productionApiUrl;
-
-      // Normalise: strip trailing slash, do NOT append /api here.
-      // api.js handles /api normalisation to avoid double /api/api paths.
-      _apiBase = _apiBase.replace(/\/+$/, '');
-
       window.LU_CONFIG = {
-        // Pass the base URL only — api.js will append /api
-        apiUrl:      _apiBase,
-        socketUrl:   _apiBase,
+        apiUrl:      null,   // Firebase + Supabase only — no Render/Express backend
+        socketUrl:   null,
         isPWA:       _isPWA,
         isLocalhost: _isLocalhost,
       };
 
-      // ── Startup diagnostic (safe — no secrets logged) ──────
-      var _apiConfigured = _apiBase && !_apiBase.includes('api.avenora.app');
-      if (!_apiConfigured && !_isLocalhost) {
-        console.warn(
-          '[AVENORA] ⚠️  Backend URL is still set to the placeholder "https://api.avenora.app".\n' +
-          '  Dashboard and uploads WILL FAIL until you replace _productionApiUrl in index.html\n' +
-          '  with your actual deployed backend URL (e.g. https://avenora-backend.onrender.com).\n' +
-          '  See the comment above window.LU_CONFIG for instructions.'
-        );
-      }
       console.info(
-        '[AVENORA] API config resolved',
+        '[AVENORA] Config loaded — Firebase + Supabase architecture',
         {
-          apiUrl:          window.LU_CONFIG.apiUrl,
-          socketUrl:       window.LU_CONFIG.socketUrl,
+          firebaseProject: 'avenora-6e147',
           isPWA:           _isPWA,
           isLocalhost:     _isLocalhost,
-          backendReachable: _apiConfigured || _isLocalhost,
           origin:          location.origin,
           href:            location.href,
         }

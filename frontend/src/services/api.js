@@ -79,9 +79,9 @@
     };
   }
 
-  // Legacy BASE_URL — kept so all non-migrated routes still resolve cleanly.
-  // If a separate REST backend is ever deployed, set window.LU_CONFIG.apiUrl
-  // to its URL and this will pick it up.
+  // BASE_URL — resolved from window.LU_CONFIG.apiUrl if set.
+  // Architecture: Firebase + Supabase. apiUrl is normally null.
+  // Only set if a Supabase Edge Function or custom REST service is configured.
   const _rawApiUrl =
     (window.LU_CONFIG && window.LU_CONFIG.apiUrl) ||
     (typeof __VITE_API_BASE_URL__ !== 'undefined' ? __VITE_API_BASE_URL__ : null) ||
@@ -98,28 +98,11 @@
       _hasApiSuffix = /\/api(\/|$)/.test(_url);
     }
     BASE_URL = _hasApiSuffix ? _url : _url + '/api';
-
-    // Suppress the placeholder warning — we now use Edge Functions directly
-    // so requests no longer go to api.avenora.app
-    try {
-      const _host = new URL(BASE_URL).hostname;
-      if (_host === 'api.avenora.app') {
-        // Edge Functions handle the critical paths — suppress the fatal warning
-        console.info(
-          '[AVENORA] Legacy apiUrl is still the placeholder "api.avenora.app". ' +
-          'Critical routes (save-meta, dashboard, videos) now use Supabase Edge Functions directly. ' +
-          'Non-critical backend routes will gracefully fail until a backend is deployed.'
-        );
-      }
-    } catch {}
   } else {
     BASE_URL = null;
-    // Edge Functions cover the critical paths — this is no longer fatal
-    console.info(
-      '[AVENORA] No legacy API URL configured. ' +
-      'Supabase Edge Functions handle save-meta, dashboard, and video listing. ' +
-      'Set window.LU_CONFIG.apiUrl to enable additional backend features.'
-    );
+    // No external API configured — Firebase + Supabase handle all operations.
+    console.info('[AVENORA] apiUrl not configured (Firebase + Supabase architecture). ' +
+      'Direct Supabase/Firebase calls handle all backend operations.');
   }
 
   // ─── Token management (Firebase shim) ─────────────────────
@@ -171,33 +154,27 @@
 
   // ─── _diagNetworkError: classify "Failed to fetch" ───────
   // "Failed to fetch" is the browser's generic error for:
-  //   - server not running / wrong URL
+  //   - service not reachable / wrong URL
   //   - CORS preflight failure (browser suppresses the response body)
   //   - no internet connection
-  // We classify the error, log a rich diagnostic, and return a typed Error
+  // We classify the error, log a diagnostic, and return a typed Error
   // so the UI can show a specific message instead of "Failed to fetch".
   function _diagNetworkError(networkErr, method, fullUrl) {
     const isLocalhost = fullUrl.includes('localhost') || fullUrl.includes('127.0.0.1');
-    const isPlaceholder = fullUrl.includes('api.avenora.app');
-    const backendHost = (() => {
+    const serviceHost = (() => {
       try { return new URL(fullUrl).origin; } catch { return fullUrl; }
     })();
     let msg;
-    if (isPlaceholder) {
-      msg = `Backend URL is not configured — ${method} ${fullUrl}. ` +
-            'The URL "api.avenora.app" is a placeholder. ' +
-            'Replace _productionApiUrl in frontend/index.html with your actual deployed backend URL ' +
-            '(e.g. https://avenora-backend.onrender.com).';
-    } else if (isLocalhost) {
-      msg = `Backend unavailable — ${method} ${fullUrl}. ` +
-            'Start the backend server: run "npm start" inside the backend/ folder.';
+    if (isLocalhost) {
+      msg = `Service unavailable (local) — ${method} ${fullUrl}. ` +
+            'Make sure the local service is running.';
     } else {
-      msg = `Cannot reach backend — ${method} ${fullUrl}. ` +
-            'Possible causes: (1) the backend server is not deployed, ' +
-            '(2) the URL "' + backendHost + '" is wrong (edit _productionApiUrl in index.html), ' +
-            '(3) CORS blocked the preflight (check FRONTEND_URL env var on backend), ' +
+      msg = `Cannot reach service — ${method} ${fullUrl}. ` +
+            'Possible causes: (1) the service is not reachable, ' +
+            '(2) the URL "' + serviceHost + '" is wrong, ' +
+            '(3) CORS blocked the request, ' +
             '(4) no internet connection. ' +
-            'Open DevTools → Network tab and check for a failed OPTIONS or ' + method + ' request.';
+            'Open DevTools → Network tab and check for the failed request.';
     }
     console.error(
       '[AVENORA] Network error — ' + method + ' ' + fullUrl,
@@ -205,19 +182,12 @@
         originalError: networkErr.message,
         requestUrl:    fullUrl,
         method,
-        backendHost,
-        isPlaceholder,
-        configuredApiUrl: window.LU_CONFIG?.apiUrl || 'not set',
-        suggestedFix:  isPlaceholder
-          ? 'Replace _productionApiUrl in frontend/index.html with the real backend URL'
-          : isLocalhost
-            ? 'Run: cd backend && npm start'
-            : 'Verify _productionApiUrl in frontend/index.html matches the deployed backend URL',
+        serviceHost,
         fullMessage: msg,
       }
     );
     const err = new Error(msg);
-    err.code = isPlaceholder ? 'BACKEND_NOT_CONFIGURED' : (isLocalhost ? 'BACKEND_NOT_RUNNING' : 'BACKEND_UNREACHABLE');
+    err.code = isLocalhost ? 'SERVICE_NOT_RUNNING' : 'SERVICE_UNREACHABLE';
     err.originalError = networkErr.message;
     return err;
   }
@@ -240,30 +210,7 @@
       throw cfgErr;
     }
 
-    // Guard: warn loudly if still using the placeholder backend URL.
-    // Requests will always fail with a network error against this host.
-    try {
-      const _host = new URL(BASE_URL).hostname;
-      if (_host === 'api.avenora.app') {
-        console.error(
-          '[AVENORA] ⛔ Blocked API request — backend URL is the placeholder "api.avenora.app".\n' +
-          '  ' + method + ' ' + BASE_URL + path + '\n' +
-          '  This URL is not a real server. Replace _productionApiUrl in index.html with\n' +
-          '  your actual deployed backend URL and redeploy the frontend.'
-        );
-        const phErr = new Error(
-          'Backend URL is not configured. ' +
-          'Replace the _productionApiUrl placeholder in index.html with your actual deployed backend URL ' +
-          '(e.g. https://avenora-backend.onrender.com). ' +
-          'See the comment in index.html for step-by-step instructions.'
-        );
-        phErr.code = 'BACKEND_NOT_CONFIGURED';
-        throw phErr;
-      }
-    } catch (e) {
-      if (e.code === 'BACKEND_NOT_CONFIGURED') throw e;
-      // URL parse error — continue; the network error will surface naturally
-    }
+    // (No placeholder guard needed — apiUrl is null in Firebase+Supabase architecture.)
 
     const fullUrl = `${BASE_URL}${path}`;
     const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
@@ -289,9 +236,6 @@
     const _uid  = _user?.uid || _user?.id || null;
 
     // ── Request timeout ──────────────────────────────────────
-    // Render free tier sleeps after inactivity. Without a timeout, the browser
-    // fetch() hangs indefinitely when the backend is waking up, causing the
-    // loading spinner to spin forever ("Cannot reach the backend" / "Failed to fetch").
     // Default: 15 s for regular requests, 30 s for uploads (set opts._timeoutMs).
     const _timeoutMs = opts._timeoutMs || 15000;
     const _aborter = new AbortController();

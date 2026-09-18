@@ -1810,18 +1810,11 @@ function initUploadForm() {
       let errMsg = err.message || 'Your video could not be uploaded. Please try again.';
       let retryHtml = '';
 
-      if (err.code === 'BACKEND_NOT_CONFIGURED') {
-        errMsg = 'Backend URL is not configured. ' +
-                 'Replace _productionApiUrl in index.html with your actual deployed backend URL ' +
-                 '(e.g. https://avenora-backend.onrender.com). See the comment in index.html for instructions.';
-      } else if (err.code === 'BACKEND_NOT_RUNNING' || err.code === 'BACKEND_UNREACHABLE') {
-        errMsg = 'Cannot reach the backend server (' + escapeHtml(String(window.LU_CONFIG?.apiUrl || 'unknown URL')) + '). ' +
-                 'Start the backend (npm start in the backend/ folder) or ' +
-                 'update _productionApiUrl in index.html to point to your deployed server. ' +
+      if (err.code === 'BACKEND_NOT_CONFIGURED' || err.code === 'API_NOT_CONFIGURED') {
+        errMsg = 'Video upload service is not configured. Please use Supabase Storage for uploads.';
+      } else if (err.code === 'SERVICE_NOT_RUNNING' || err.code === 'SERVICE_UNREACHABLE') {
+        errMsg = 'Cannot reach the upload service. ' +
                  'Network error: ' + escapeHtml(err.originalError || '');
-      } else if (err.code === 'API_NOT_CONFIGURED') {
-        errMsg = 'The backend API URL is not configured. ' +
-                 'Edit _productionApiUrl in the window.LU_CONFIG block in index.html.';
       } else if (err.code === 'UNAUTHORIZED') {
         errMsg = 'Your session has expired. Please sign in again, then retry your upload.';
       } else if (err.code === 'FORBIDDEN') {
