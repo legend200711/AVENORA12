@@ -200,6 +200,8 @@ function renderDeckHTML(deck) {
 
   return `
     <div class="dj-panel ${deckClass}" id="deck-${d}">
+      <!-- Cosmic orbital ring decoration -->
+      <div class="dj-deck-orb" aria-hidden="true"></div>
       <!-- Deck header -->
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:var(--space-md)">
         <div>
