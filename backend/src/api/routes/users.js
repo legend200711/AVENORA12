@@ -1,252 +1,168 @@
 /**
- * User Routes - Avenora
+ * User Routes — Firestore-backed
  */
+'use strict';
 
 const express = require('express');
-const router = express.Router();
+const router  = express.Router();
 const { authenticate, optionalAuth } = require('../middleware/auth');
-const User = require('../../models/User');
-const Post = require('../../models/Post');
-const Follow = require('../../models/Follow');
+const { getDb, FieldValue } = require('../../config/firestore');
 const { NotFoundError, AppError } = require('../middleware/errorHandler');
-const logger = require('../../utils/logger');
+const logger  = require('../../utils/logger');
 
-// PUT /api/users/profile - Update own profile
-// Note: express route matching — this must come BEFORE /:username
+// PUT /api/users/profile
 router.put('/profile', authenticate, async (req, res, next) => {
   try {
-    const mongoose = require('mongoose');
     const { displayName, bio, location, website, avatarUrl, bannerUrl } = req.body;
     const update = {};
+    if (displayName !== undefined) update['profile.displayName'] = String(displayName).slice(0, 60);
+    if (bio        !== undefined) update['profile.bio']         = String(bio).slice(0, 500);
+    if (location   !== undefined) update['profile.location']    = String(location).slice(0, 100);
+    if (website    !== undefined) update['profile.website']     = String(website).slice(0, 200);
+    if (avatarUrl  !== undefined) update['profile.avatarUrl']   = avatarUrl;
+    if (bannerUrl  !== undefined) update['profile.bannerUrl']   = bannerUrl;
+    update.updatedAt = new Date().toISOString();
 
-    if (displayName !== undefined) update['profile.displayName'] = displayName?.slice(0, 60) || '';
-    if (bio !== undefined) update['profile.bio'] = bio?.slice(0, 500) || '';
-    if (location !== undefined) update['profile.location'] = location?.slice(0, 100) || '';
-    if (website !== undefined) update['profile.website'] = website?.slice(0, 200) || '';
-    if (avatarUrl !== undefined) update['profile.avatarUrl'] = avatarUrl;
-    if (bannerUrl !== undefined) update['profile.bannerUrl'] = bannerUrl;
-
-    // For Firebase users (non-ObjectId uid) find by email instead
-    let user;
-    if (mongoose.Types.ObjectId.isValid(req.user.id)) {
-      user = await User.findByIdAndUpdate(req.user.id, update, { new: true });
-    } else if (req.user.email) {
-      user = await User.findOneAndUpdate({ email: req.user.email.toLowerCase() }, update, { new: true });
-    }
-    if (!user) return res.status(404).json({ error: true, message: 'User not found in database. Profile updates require a MongoDB account.' });
-    res.json({ success: true, user: user.toPublicProfile() });
-  } catch (err) {
-    next(err);
-  }
+    await getDb().collection('users').doc(req.user.id).update(update);
+    const snap = await getDb().collection('users').doc(req.user.id).get();
+    const { passwordHash, passwordReset, ...safe } = snap.data();
+    res.json({ success: true, user: { id: snap.id, ...safe } });
+  } catch (err) { next(err); }
 });
 
-// GET /api/users/:username - Get user profile
+// GET /api/users/:username
 router.get('/:username', optionalAuth, async (req, res, next) => {
   try {
-    const user = await User.findOne({ username: req.params.username });
-    if (!user) return next(new NotFoundError('User'));
+    const snap = await getDb().collection('users')
+      .where('username', '==', req.params.username).limit(1).get();
+    if (snap.empty) return next(new NotFoundError('User'));
 
-    const profile = user.toPublicProfile();
+    const { passwordHash, passwordReset, ...profile } = snap.docs[0].data();
+    const userId = snap.docs[0].id;
 
-    // Check if current user follows this user
     let isFollowing = false;
     let isOwnProfile = false;
     if (req.user) {
-      isOwnProfile = req.user.id === user._id.toString();
+      isOwnProfile = req.user.id === userId;
       if (!isOwnProfile) {
-        isFollowing = !!(await Follow.exists({ follower: req.user.id, following: user._id }));
+        const fSnap = await getDb().collection('followRelationships')
+          .where('follower', '==', req.user.id).where('following', '==', userId).limit(1).get();
+        isFollowing = !fSnap.empty;
       }
     }
-
-    res.json({ success: true, user: { ...profile, isFollowing, isOwnProfile } });
-  } catch (err) {
-    next(err);
-  }
+    res.json({ success: true, user: { id: userId, ...profile, isFollowing, isOwnProfile } });
+  } catch (err) { next(err); }
 });
 
-// GET /api/users/:username/posts - Get a user's public posts
+// GET /api/users/:username/posts
 router.get('/:username/posts', optionalAuth, async (req, res, next) => {
   try {
-    const user = await User.findOne({ username: req.params.username });
-    if (!user) return next(new NotFoundError('User'));
+    const userSnap = await getDb().collection('users')
+      .where('username', '==', req.params.username).limit(1).get();
+    if (userSnap.empty) return next(new NotFoundError('User'));
+    const userId = userSnap.docs[0].id;
 
-    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const page  = Math.max(1, parseInt(req.query.page) || 1);
     const limit = Math.min(50, parseInt(req.query.limit) || 20);
-    const skip = (page - 1) * limit;
 
-    // author is stored as a Firebase UID string; match by username-looked-up user._id (MongoDB _id)
-    // but since author field is now a String (Firebase UID), we need to query by username's uid
-    // Firebase UID is not stored in MongoDB User — match by MongoDB _id string representation
-    const posts = await Post.find({ author: user._id.toString(), isDeleted: false, visibility: 'public' })
-      .sort({ createdAt: -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean();
+    // Firestore: orderBy + limit (no skip — use cursor pagination for production scale)
+    const snap = await getDb().collection('posts')
+      .where('author', '==', userId)
+      .where('isDeleted', '==', false)
+      .where('visibility', '==', 'public')
+      .orderBy('createdAt', 'desc')
+      .limit(limit * page)  // crude offset for now
+      .get();
 
+    const all  = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const posts = all.slice((page - 1) * limit, page * limit);
     const currentUserId = req.user?.id;
+
     const enriched = posts.map(p => ({
       ...p,
-      likedByMe: currentUserId ? p.likes.some(id => id.toString() === currentUserId) : false,
-      likeCount: p.likes.length,
+      likedByMe:    currentUserId ? (p.likes || []).includes(currentUserId) : false,
+      likeCount:    (p.likes || []).length,
       commentCount: (p.comments || []).filter(c => !c.isDeleted).length,
-      repostCount: (p.reposts || []).length,
+      repostCount:  (p.reposts || []).length,
     }));
-
     res.json({ success: true, posts: enriched, page, limit });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
-// DELETE /api/users/me/account — self-deletion with full data cleanup
-//
-// For MongoDB-registered users: soft-deletes the User record (anonymises PII),
-// soft-deletes all their posts, removes follow relationships, cleans up
-// notifications, and attempts to remove Supabase Storage media.
-//
-// For Firebase-only users: the Firebase Auth account must be deleted via the
-// Firebase SDK (done in the frontend). This route handles all MongoDB-side
-// cleanup for data authored by that Firebase UID.
+// DELETE /api/users/me/account
 router.delete('/me/account', authenticate, async (req, res, next) => {
   try {
-    const mongoose = require('mongoose');
-    const Video = require('../../models/Video');
-    const Notification = require('../../models/Notification');
-    const Track = require('../../models/Track');
-    const userId = req.user.id;
-    const isMongoId = mongoose.Types.ObjectId.isValid(userId) && userId.length === 24;
+    const uid = req.user.id;
+    const db  = getDb();
+    logger.info(`[Auth] Account deletion requested for ${uid}`);
 
-    logger.info(`[Auth] Account deletion requested for user ${userId} (mongoId=${isMongoId})`);
+    // Soft-delete posts
+    const postsSnap = await db.collection('posts').where('author', '==', uid).where('isDeleted', '==', false).get();
+    const batch1 = db.batch();
+    postsSnap.docs.forEach(d => batch1.update(d.ref, { isDeleted: true, deletedAt: new Date().toISOString(), content: '[deleted]', mediaUrls: [] }));
+    if (postsSnap.docs.length) await batch1.commit();
 
-    // ── 1. Soft-delete all posts authored by this user ───────────────────────
-    try {
-      await Post.updateMany(
-        { author: userId, isDeleted: false },
-        { $set: { isDeleted: true, deletedAt: new Date(), content: '[deleted]', mediaUrls: [] } }
-      );
-    } catch (e) {
-      logger.warn(`[Auth] Post cleanup failed for ${userId}: ${e.message}`);
-    }
+    // Delete follow relationships
+    const [fol, fing] = await Promise.all([
+      db.collection('followRelationships').where('follower', '==', uid).get(),
+      db.collection('followRelationships').where('following', '==', uid).get(),
+    ]);
+    const batch2 = db.batch();
+    [...fol.docs, ...fing.docs].forEach(d => batch2.delete(d.ref));
+    if (fol.docs.length + fing.docs.length) await batch2.commit();
 
-    // ── 2. Remove all follow relationships for this user ─────────────────────
-    try {
-      await Follow.deleteMany({ $or: [{ follower: userId }, { following: userId }] });
-    } catch (e) {
-      logger.warn(`[Auth] Follow cleanup failed for ${userId}: ${e.message}`);
-    }
+    // Delete notifications
+    const [nRec, nSnd] = await Promise.all([
+      db.collection('notifications').where('recipient', '==', uid).get(),
+      db.collection('notifications').where('sender', '==', uid).get(),
+    ]);
+    const batch3 = db.batch();
+    [...nRec.docs, ...nSnd.docs].forEach(d => batch3.delete(d.ref));
+    if (nRec.docs.length + nSnd.docs.length) await batch3.commit();
 
-    // ── 3. Remove all notifications sent to or by this user ──────────────────
-    try {
-      await Notification.deleteMany({ $or: [{ recipient: userId }, { sender: userId }] });
-    } catch (e) {
-      logger.warn(`[Auth] Notification cleanup failed for ${userId}: ${e.message}`);
-    }
+    // Anonymise user record
+    const ts = Date.now();
+    await db.collection('users').doc(uid).update({
+      'status.isActive': false,
+      username: `deleted_${ts}`,
+      email: `deleted_${ts}@deleted.avenora.app`,
+      'profile.displayName': 'Deleted User',
+      'profile.bio': '',
+      'profile.avatarUrl': null,
+      'profile.bannerUrl': null,
+      updatedAt: new Date().toISOString(),
+    });
 
-    // ── 4. Soft-delete videos uploaded by this user ───────────────────────────
-    let videoStoragePaths = [];
-    try {
-      const videos = await Video.find({ uploader: userId, isDeleted: false })
-        .select('storagePath').lean();
-      videoStoragePaths = videos.map(v => v.storagePath).filter(Boolean);
-      await Video.updateMany(
-        { uploader: userId, isDeleted: false },
-        { $set: { isDeleted: true, deletedAt: new Date() } }
-      );
-    } catch (e) {
-      logger.warn(`[Auth] Video cleanup failed for ${userId}: ${e.message}`);
-    }
-
-    // ── 5. Soft-delete music tracks uploaded by this user ─────────────────────
-    let trackStoragePaths = [];
-    try {
-      const tracks = await Track.find({ uploader: userId })
-        .select('storagePath').lean();
-      trackStoragePaths = tracks.map(t => t.storagePath).filter(Boolean);
-      await Track.updateMany({ uploader: userId }, { $set: { isDeleted: true, deletedAt: new Date() } });
-    } catch (e) {
-      logger.warn(`[Auth] Track cleanup failed for ${userId}: ${e.message}`);
-    }
-
-    // ── 6. Attempt to remove Supabase Storage media (best-effort) ─────────────
-    try {
-      const storageService = require('../../services/storage/supabaseStorage');
-      const allPaths = [...videoStoragePaths, ...trackStoragePaths];
-      // Also try to delete avatar
-      allPaths.push(`${userId}/avatar.jpg`, `${userId}/avatar.png`, `${userId}/avatar.webp`);
-      for (const sp of allPaths) {
-        if (sp) {
-          const bucket = sp.includes('/avatar') ? 'avatars'
-            : videoStoragePaths.includes(sp) ? 'videos'
-            : trackStoragePaths.includes(sp) ? 'music' : null;
-          if (bucket) {
-            await storageService.deleteFile(bucket, sp).catch(() => {});
-          }
-        }
-      }
-    } catch (e) {
-      logger.warn(`[Auth] Storage media cleanup failed for ${userId}: ${e.message}`);
-    }
-
-    // ── 7. MongoDB-user-specific: anonymise and invalidate the User record ────
-    if (isMongoId) {
-      const ts = Date.now();
-      await User.findByIdAndUpdate(userId, {
-        'status.isActive': false,
-        'status.isSuspended': false,
-        username: `deleted_${ts}`,
-        email: `deleted_${ts}@deleted.legenduniverse.com`,
-        'profile.displayName': 'Deleted User',
-        'profile.bio': '',
-        'profile.avatarUrl': null,
-        'profile.bannerUrl': null,
-        $set: { refreshTokens: [] },
-      });
-    }
-
-    logger.info(`[Auth] Account deletion completed for user ${userId}`);
+    logger.info(`[Auth] Account deletion completed for ${uid}`);
     res.json({ success: true, message: 'Account deleted' });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
-// POST /api/users/:id/follow - Legacy follow route (delegates to social router)
-// Kept for backward compatibility with existing frontend API calls
+// POST /api/users/:id/follow
 router.post('/:id/follow', authenticate, async (req, res, next) => {
   try {
     const targetId = req.params.id;
-    if (!targetId || typeof targetId !== 'string' || targetId.length < 5) {
-      return next(new AppError('Invalid user ID', 422, 'INVALID_ID'));
-    }
-    if (targetId === req.user.id) {
-      return next(new AppError('You cannot follow yourself', 422, 'SELF_FOLLOW'));
-    }
+    if (!targetId || targetId.length < 5) return next(new AppError('Invalid user ID', 422, 'INVALID_ID'));
+    if (targetId === req.user.id) return next(new AppError('You cannot follow yourself', 422, 'SELF_FOLLOW'));
 
-    const existing = await Follow.findOne({ follower: req.user.id, following: targetId });
-    if (existing) {
-      return res.json({ success: true, following: true, message: 'Already following' });
-    }
+    const db  = getDb();
+    const key = `${req.user.id}_${targetId}`;
+    const existing = await db.collection('followRelationships').doc(key).get();
+    if (existing.exists) return res.json({ success: true, following: true, message: 'Already following' });
 
-    await Follow.create({ follower: req.user.id, following: targetId });
-
-    // Update stats for MongoDB-backed users only (non-critical)
+    await db.collection('followRelationships').doc(key).set({
+      follower: req.user.id, following: targetId, createdAt: new Date().toISOString(),
+    });
+    // Increment counters (non-critical)
     try {
-      const mongoose = require('mongoose');
-      const isMongoId = (id) => mongoose.Types.ObjectId.isValid(id) && id.length === 24;
       await Promise.all([
-        isMongoId(req.user.id)
-          ? User.findByIdAndUpdate(req.user.id, { $inc: { 'stats.followingCount': 1 } })
-          : User.findOneAndUpdate({ email: req.user.email }, { $inc: { 'stats.followingCount': 1 } }),
-        isMongoId(targetId)
-          ? User.findByIdAndUpdate(targetId, { $inc: { 'stats.followersCount': 1 } })
-          : Promise.resolve(),
+        db.collection('users').doc(req.user.id).update({ 'stats.followingCount': FieldValue.increment(1) }),
+        db.collection('users').doc(targetId).update({ 'stats.followersCount': FieldValue.increment(1) }),
       ]);
-    } catch (_) { /* non-critical */ }
+    } catch (_) {}
 
     res.status(201).json({ success: true, following: true, followingId: targetId });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
 module.exports = router;

@@ -1,146 +1,112 @@
 /**
- * Story Routes - Avenora
- * POST   /api/stories          - Create a story (auth required)
- * GET    /api/stories          - List active stories from followed users (+ own)
- * GET    /api/stories/:userId  - Stories for a specific user
- * DELETE /api/stories/:id      - Delete own story
- * POST   /api/stories/:id/view - Mark story as viewed
+ * Stories Routes — Firestore-backed
  */
+'use strict';
 
 const express = require('express');
-const router = express.Router();
+const router  = express.Router();
 const { authenticate, optionalAuth } = require('../middleware/auth');
-const Story = require('../../models/Story');
-const Follow = require('../../models/Follow');
+const { getDb, FieldValue } = require('../../config/firestore');
 const { NotFoundError, ForbiddenError } = require('../middleware/errorHandler');
 
-const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-const ALLOWED_VIDEO_TYPES = ['video/mp4', 'video/webm'];
-const STORY_DURATION_MS = 24 * 60 * 60 * 1000; // 24 hours
+const STORY_DURATION_MS = 24 * 60 * 60 * 1000;
 
-// GET /api/stories - Active stories from followed users
+// GET /api/stories — followed users' stories
 router.get('/', authenticate, async (req, res, next) => {
   try {
-    const now = new Date();
+    const db  = getDb();
+    const now = new Date().toISOString();
 
-    // Get IDs of users the current user follows
-    const follows = await Follow.find({ follower: req.user.id }).lean();
-    const followingIds = follows.map(f => f.following);
+    const folSnap  = await db.collection('followRelationships').where('follower', '==', req.user.id).get();
+    const followingIds = folSnap.docs.map(d => d.data().following);
+    const authorIds    = [req.user.id, ...followingIds];
 
-    // Include own stories too
-    const authorIds = [req.user.id, ...followingIds];
+    // Firestore 'in' query supports up to 30 values; chunk if needed
+    const chunks = [];
+    for (let i = 0; i < authorIds.length; i += 30) chunks.push(authorIds.slice(i, i + 30));
 
-    const stories = await Story.find({
-      author: { $in: authorIds },
-      expiresAt: { $gt: now },
-      isDeleted: false,
-    })
-      .sort({ createdAt: -1 })
-      .populate('author', 'username profile.displayName profile.avatarUrl')
-      .lean();
+    let stories = [];
+    for (const chunk of chunks) {
+      const snap = await db.collection('stories')
+        .where('author', 'in', chunk)
+        .where('expiresAt', '>', now)
+        .where('isDeleted', '==', false)
+        .orderBy('expiresAt')
+        .orderBy('createdAt', 'desc')
+        .get();
+      stories.push(...snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    }
 
-    // Mark which stories the current user has viewed
     const withViewed = stories.map(s => ({
       ...s,
-      viewedByMe: s.viewers.some(v => v.toString() === req.user.id),
-      viewCount: s.viewers.length,
+      viewedByMe: (s.viewers || []).includes(req.user.id),
+      viewCount:  (s.viewers || []).length,
     }));
-
     res.json({ success: true, stories: withViewed });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
-// GET /api/stories/:userId - Stories for a specific user
+// GET /api/stories/:userId
 router.get('/:userId', optionalAuth, async (req, res, next) => {
   try {
-    const now = new Date();
-    const stories = await Story.find({
-      author: req.params.userId,
-      expiresAt: { $gt: now },
-      isDeleted: false,
-    })
-      .sort({ createdAt: -1 })
-      .populate('author', 'username profile.displayName profile.avatarUrl')
-      .lean();
-
-    const currentUserId = req.user?.id;
-    const withViewed = stories.map(s => ({
-      ...s,
-      viewedByMe: currentUserId ? s.viewers.some(v => v.toString() === currentUserId) : false,
-      viewCount: s.viewers.length,
-    }));
-
-    res.json({ success: true, stories: withViewed });
-  } catch (err) {
-    next(err);
-  }
+    const now  = new Date().toISOString();
+    const snap = await getDb().collection('stories')
+      .where('author', '==', req.params.userId)
+      .where('expiresAt', '>', now)
+      .where('isDeleted', '==', false)
+      .orderBy('expiresAt')
+      .orderBy('createdAt', 'desc')
+      .get();
+    const uid      = req.user?.id;
+    const stories  = snap.docs.map(d => {
+      const s = { id: d.id, ...d.data() };
+      return { ...s, viewedByMe: uid ? (s.viewers || []).includes(uid) : false, viewCount: (s.viewers || []).length };
+    });
+    res.json({ success: true, stories });
+  } catch (err) { next(err); }
 });
 
-// POST /api/stories - Create a story
+// POST /api/stories
 router.post('/', authenticate, async (req, res, next) => {
   try {
     const { mediaUrl, mediaType, caption } = req.body;
-
     if (!mediaUrl) return res.status(422).json({ error: true, message: 'Media URL required' });
-    if (!['image', 'video'].includes(mediaType)) {
-      return res.status(422).json({ error: true, message: 'mediaType must be image or video' });
-    }
+    if (!['image','video'].includes(mediaType)) return res.status(422).json({ error: true, message: 'mediaType must be image or video' });
 
-    const expiresAt = new Date(Date.now() + STORY_DURATION_MS);
-
-    const story = await Story.create({
-      author: req.user.id,
-      mediaUrl,
-      mediaType,
-      caption: caption?.slice(0, 500),
-      expiresAt,
-    });
-
-    const populated = await Story.findById(story._id)
-      .populate('author', 'username profile.displayName profile.avatarUrl');
-
-    res.status(201).json({ success: true, story: populated });
-  } catch (err) {
-    next(err);
-  }
+    const db   = getDb();
+    const ref  = db.collection('stories').doc();
+    const story = {
+      id: ref.id, author: req.user.id, mediaUrl, mediaType,
+      caption: caption?.slice(0, 500) || '',
+      viewers: [], isDeleted: false,
+      expiresAt:  new Date(Date.now() + STORY_DURATION_MS).toISOString(),
+      createdAt:  new Date().toISOString(),
+    };
+    await ref.set(story);
+    res.status(201).json({ success: true, story });
+  } catch (err) { next(err); }
 });
 
-// POST /api/stories/:id/view - Mark as viewed
+// POST /api/stories/:id/view
 router.post('/:id/view', authenticate, async (req, res, next) => {
   try {
-    const now = new Date();
-    const story = await Story.findOne({ _id: req.params.id, expiresAt: { $gt: now }, isDeleted: false });
-    if (!story) return next(new NotFoundError('Story'));
-
-    if (!story.viewers.includes(req.user.id)) {
-      story.viewers.push(req.user.id);
-      await story.save();
-    }
+    const now  = new Date().toISOString();
+    const snap = await getDb().collection('stories').doc(req.params.id).get();
+    if (!snap.exists || snap.data().isDeleted || snap.data().expiresAt <= now) return next(new NotFoundError('Story'));
+    await getDb().collection('stories').doc(snap.id).update({ viewers: FieldValue.arrayUnion(req.user.id) });
     res.json({ success: true });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
 // DELETE /api/stories/:id
 router.delete('/:id', authenticate, async (req, res, next) => {
   try {
-    const story = await Story.findById(req.params.id);
-    if (!story || story.isDeleted) return next(new NotFoundError('Story'));
-
-    if (story.author.toString() !== req.user.id) {
-      return next(new ForbiddenError());
-    }
-
-    story.isDeleted = true;
-    await story.save();
-
+    const snap = await getDb().collection('stories').doc(req.params.id).get();
+    if (!snap.exists || snap.data().isDeleted) return next(new NotFoundError('Story'));
+    if (snap.data().author !== req.user.id) return next(new ForbiddenError());
+    await getDb().collection('stories').doc(snap.id).update({ isDeleted: true });
     res.json({ success: true });
-  } catch (err) {
-    next(err);
-  }
+  } catch (err) { next(err); }
 });
 
 module.exports = router;

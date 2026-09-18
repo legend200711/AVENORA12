@@ -51,87 +51,126 @@ registerPage('cloudstream', {
 
     // ── Auth + config bridge to the cloud-stream iframe ─────────────────────
     //
-    // The iframe has an isolated window so it cannot access window.LU_CONFIG
-    // or the parent's Firebase Auth instance.  We bridge both via postMessage.
+    // ROOT CAUSE OF THE AUTH LOOP:
+    //   The old code called AvenoraFirebase.Auth.getIdToken() on every retry.
+    //   getIdToken() returns null if the parent's own Firebase Auth hasn't
+    //   hydrated from localStorage yet.  If the parent auth takes > 500 ms
+    //   (cold page load, slow CDN) the first several retries all produce null
+    //   tokens, so no AVN_AUTH_TOKEN message is ever sent.  The iframe's own
+    //   10 s gate timer then expires and shows "Sign In Required".
     //
-    // Problem this solves:
-    //   Firebase browserLocalPersistence writes auth state to localStorage.
-    //   The iframe shares the same localStorage (same origin) so it WILL
-    //   resolve auth automatically — but it is async.  On slow/cold loads
-    //   the iframe's onAuthStateChanged fires null first, and a naive timeout
-    //   shows the auth gate before persistence hydration finishes.
+    // FIX:
+    //   Subscribe to Firebase's onIdTokenChanged on the parent.  This callback
+    //   fires exactly once when auth hydration completes (with the signed-in
+    //   user's current ID token) and again on every token refresh.  We use
+    //   this as the canonical token source instead of polling getIdToken().
     //
-    //   The previous code used loading="lazy" which means the iframe only
-    //   starts loading when it enters the viewport.  The parent sent the
-    //   postMessage on the iframe's load event, but with lazy loading the
-    //   load event fires late — sometimes after the 6s gate timer already
-    //   expired inside the iframe.  The messages arrived too late and were
-    //   effectively missed.
+    //   Token-forwarding order:
+    //     1. onIdTokenChanged fires → parent pushes token to iframe immediately.
+    //     2. If iframe is not loaded yet, the token is cached and sent on load.
+    //     3. On every subsequent token refresh, the new token is forwarded.
+    //     4. The iframe ACKs receipt → parent stops forwarding until next refresh.
     //
-    // Solution:
-    //   1. Remove loading="lazy" — iframe loads immediately so the load
-    //      event fires promptly and messages arrive before the gate timer.
-    //   2. Send both AVN_CONFIG and AVN_AUTH_TOKEN on the iframe's load event.
-    //   3. Retry sending AVN_AUTH_TOKEN every 500 ms for up to 8 s so that
-    //      token refresh races are covered and the iframe always gets the
-    //      message even if it initialises slowly.
-    //   4. Stop retrying once the iframe acknowledges (AVN_AUTH_ACK).
+    //   Security:
+    //     postMessage uses the iframe's exact same-origin URL as targetOrigin
+    //     instead of '*' so the message is only delivered to the correct frame.
     //
     const frame = document.getElementById('csr-frame');
-    if (frame) {
-      let _retryTimer = null;
-      let _ackReceived = false;
+    if (!frame) return () => {};
 
-      // Listen for acknowledgement from the iframe so we can stop retrying.
-      const _ackHandler = (evt) => {
-        if (evt.data && evt.data.type === 'AVN_AUTH_ACK') {
-          _ackReceived = true;
-          if (_retryTimer) { clearInterval(_retryTimer); _retryTimer = null; }
-          window.removeEventListener('message', _ackHandler);
+    // Determine the safe targetOrigin for postMessage.
+    // Both pages are on the same origin, so we use location.origin.
+    const _targetOrigin = location.origin;
+
+    let _frameLoaded     = false;
+    let _latestToken     = null;  // most recent ID token from onIdTokenChanged
+    let _latestUid       = null;  // UID matching _latestToken
+    let _ackReceived     = false;
+    let _unsubIdToken    = null;  // Firebase onIdTokenChanged unsubscribe fn
+
+    // ── Helper: send config + auth token to iframe (fire-and-forget) ────────
+    const _pushToFrame = (token, uid) => {
+      if (!frame.contentWindow || !_frameLoaded) return;
+      try {
+        // 1. Runtime config (idempotent — iframe ignores dupes)
+        if (window.LU_CONFIG) {
+          frame.contentWindow.postMessage(
+            { type: 'AVN_CONFIG', apiUrl: window.LU_CONFIG.apiUrl || '', socketUrl: window.LU_CONFIG.socketUrl || '' },
+            _targetOrigin
+          );
         }
-      };
-      window.addEventListener('message', _ackHandler);
+        // 2. Auth token — only if we have one
+        if (token && uid) {
+          frame.contentWindow.postMessage(
+            { type: 'AVN_AUTH_TOKEN', idToken: token, uid },
+            _targetOrigin
+          );
+        }
+      } catch (_) {}
+    };
 
-      const _sendBoth = async () => {
+    // ── Listen for ACK from iframe ───────────────────────────────────────────
+    const _ackHandler = (evt) => {
+      // Only accept messages from our iframe (same origin)
+      if (!evt.data || evt.data.type !== 'AVN_AUTH_ACK') return;
+      if (evt.source !== frame.contentWindow) return;
+      _ackReceived = true;
+      window.removeEventListener('message', _ackHandler);
+    };
+    window.addEventListener('message', _ackHandler);
+
+    // ── Subscribe to Firebase token changes on the parent ───────────────────
+    // onIdTokenChanged fires immediately with the current user (or null) once
+    // Firebase resolves auth from localStorage, and again on every token refresh.
+    const _startTokenSubscription = async () => {
+      try {
+        const auth = await window.AvenoraFirebase.getFirebaseAuth();
+        const { onIdTokenChanged } = await import(
+          `https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js`
+        );
+        _unsubIdToken = onIdTokenChanged(auth, async (fbUser) => {
+          if (!fbUser) return; // user is signed out — do nothing
+          try {
+            const token = await fbUser.getIdToken();
+            _latestToken = token;
+            _latestUid   = fbUser.uid;
+            // Push to iframe immediately (if loaded); reset ACK so refresh
+            // is forwarded even after a previous successful handshake.
+            _ackReceived = false;
+            window.addEventListener('message', _ackHandler);  // re-register (idempotent)
+            _pushToFrame(token, fbUser.uid);
+          } catch (_) {}
+        });
+      } catch (_) {}
+    };
+    _startTokenSubscription();
+
+    // ── On iframe load: send config + any already-available token ───────────
+    frame.addEventListener('load', () => {
+      _frameLoaded = true;
+      // Always send config first
+      if (window.LU_CONFIG && frame.contentWindow) {
         try {
-          if (!frame.contentWindow) return;
-          // 1. Runtime config
-          if (window.LU_CONFIG) {
-            frame.contentWindow.postMessage(
-              { type: 'AVN_CONFIG', apiUrl: window.LU_CONFIG.apiUrl || '', socketUrl: window.LU_CONFIG.socketUrl || '' },
-              '*'
-            );
-          }
-          // 2. Auth token
-          if (window.AvenoraFirebase && window.AvenoraFirebase.Auth) {
-            const token = await window.AvenoraFirebase.Auth.getIdToken();
-            const user  = window.AvenoraFirebase.Auth.getUser();
-            if (token && user) {
-              frame.contentWindow.postMessage(
-                { type: 'AVN_AUTH_TOKEN', idToken: token, uid: user.uid || user.id },
-                '*'
-              );
-            }
-          }
+          frame.contentWindow.postMessage(
+            { type: 'AVN_CONFIG', apiUrl: window.LU_CONFIG.apiUrl || '', socketUrl: window.LU_CONFIG.socketUrl || '' },
+            _targetOrigin
+          );
         } catch (_) {}
-      };
+      }
+      // If we already have a token from onIdTokenChanged, send it now.
+      // If not, onIdTokenChanged will fire shortly and push it.
+      if (_latestToken && _latestUid) {
+        _pushToFrame(_latestToken, _latestUid);
+      }
+    });
 
-      frame.addEventListener('load', () => {
-        _sendBoth();
-        // Retry every 500 ms for up to 8 s in case the iframe SDK is slow to init.
-        let _retryCount = 0;
-        _retryTimer = setInterval(() => {
-          if (_ackReceived || _retryCount >= 16) {
-            clearInterval(_retryTimer);
-            _retryTimer = null;
-            return;
-          }
-          _retryCount++;
-          _sendBoth();
-        }, 500);
-      });
-    }
-
-    return () => {};
+    // ── Cleanup when the user navigates away ────────────────────────────────
+    return () => {
+      if (typeof _unsubIdToken === 'function') {
+        try { _unsubIdToken(); } catch (_) {}
+        _unsubIdToken = null;
+      }
+      window.removeEventListener('message', _ackHandler);
+    };
   }
 });

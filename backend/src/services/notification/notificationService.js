@@ -1,55 +1,45 @@
 /**
- * Notification Service - Avenora
- * Creates notifications and emits real-time events via Socket.io when available.
+ * Notification Service — Firestore-backed
  */
+'use strict';
 
-const Notification = require('../../models/Notification');
+const { getDb } = require('../../config/firestore');
 const logger = require('../../utils/logger');
 
-/**
- * Create a notification. Silently swallows errors so a notification failure
- * never breaks the main operation that triggered it.
- */
-async function createNotification({ recipient, sender, type, post, comment, message }) {
-  // Never notify yourself
-  if (recipient.toString() === sender.toString()) return null;
-
+async function createNotification({ recipient, sender, type, postId, conversationId, roomId, message }) {
+  if (!recipient || recipient === sender) return null;
   try {
-    const notif = await Notification.create({
+    const db  = getDb();
+    const ref = db.collection('notifications').doc();
+    await ref.set({
+      id:             ref.id,
       recipient,
       sender,
       type,
-      post: post || undefined,
-      comment: comment || undefined,
-      message: message || buildMessage(type),
+      postId:         postId || null,
+      conversationId: conversationId || null,
+      roomId:         roomId || null,
+      message:        message || buildMessage(type),
+      isRead:         false,
+      createdAt:      new Date().toISOString(),
     });
-
-    // Emit real-time via Socket.io if the server is available
-    const io = global.socketIo;
-    if (io) {
-      const populated = await Notification.findById(notif._id)
-        .populate('sender', 'username profile.displayName profile.avatarUrl')
-        .lean();
-      io.to(`user:${recipient.toString()}`).emit('notification:new', populated);
-    }
-
-    return notif;
+    return ref.id;
   } catch (err) {
-    logger.warn('Failed to create notification:', err.message);
+    logger.warn('[Notification] create failed:', err.message);
     return null;
   }
 }
 
 function buildMessage(type) {
   const map = {
-    follow: 'started following you',
-    like: 'liked your post',
-    comment: 'commented on your post',
-    repost: 'reposted your post',
-    mention: 'mentioned you',
-    report_resolved: 'A report you submitted has been reviewed',
+    follow:   'Someone followed you',
+    like:     'Someone liked your post',
+    comment:  'Someone commented on your post',
+    repost:   'Someone reposted your post',
+    dm:       'You have a new message',
+    room_invite: 'You were invited to a room',
   };
-  return map[type] || 'interacted with your content';
+  return map[type] || 'You have a new notification';
 }
 
 module.exports = { createNotification };

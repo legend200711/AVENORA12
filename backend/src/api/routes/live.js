@@ -1,55 +1,44 @@
 /**
- * AVENORA Live — Session API Routes
+ * AVENORA Live — Session API Routes (Firestore edition)
  *
- * Handles browser-based live streaming via WHIP → MediaMTX → HLS.
- * No OBS, Streamlabs, RTMP encoder, or third-party streaming platform.
+ * Collection: streams/{streamId}
  *
- * Mount point: /api/live
- *
- * Authentication model:
- *   - All write/control endpoints require authenticate (JWT)
- *   - Public read endpoints use optionalAuth
- *   - Ownership checked per-request (streamer field matches req.user.id)
- *   - Founders/admins can manage any stream
+ * All write/control endpoints require authenticate (JWT).
+ * Public read endpoints use optionalAuth.
  */
+
+'use strict';
 
 const express = require('express');
 const router = express.Router();
-const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 
 const { authenticate, optionalAuth, requireFounder } = require('../middleware/auth');
 const { NotFoundError, ForbiddenError, ValidationError, AppError } = require('../middleware/errorHandler');
-const Stream = require('../../models/Stream');
+const { getDb, newId, now, FieldValue } = require('../../config/firestore');
 const liveSvc = require('../../services/stream/liveSessionService');
 const logger = require('../../utils/logger');
 
 // ─── Rate limiters ────────────────────────────────────────
+
 const createLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
+  windowMs: 60 * 60 * 1000,
   max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
+  standardHeaders: true, legacyHeaders: false,
   message: { error: true, message: 'Too many live sessions created. Try again later.', code: 'RATE_LIMIT_EXCEEDED' },
   skip: () => process.env.NODE_ENV === 'test',
   keyGenerator: (req) => req.user?.id || req.ip,
 });
 
 const heartbeatLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 120, // up to 2 per second
-  standardHeaders: true,
-  legacyHeaders: false,
+  windowMs: 60 * 1000, max: 120, standardHeaders: true, legacyHeaders: false,
   message: { error: true, message: 'Heartbeat rate limit exceeded.', code: 'RATE_LIMIT_EXCEEDED' },
   skip: () => process.env.NODE_ENV === 'test',
   keyGenerator: (req) => req.user?.id || req.ip,
 });
 
 const controlLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 30,
-  standardHeaders: true,
-  legacyHeaders: false,
+  windowMs: 60 * 1000, max: 30, standardHeaders: true, legacyHeaders: false,
   message: { error: true, message: 'Too many control requests. Slow down.', code: 'RATE_LIMIT_EXCEEDED' },
   skip: () => process.env.NODE_ENV === 'test',
   keyGenerator: (req) => req.user?.id || req.ip,
@@ -58,69 +47,59 @@ const controlLimiter = rateLimit({
 // ─── Helpers ─────────────────────────────────────────────
 
 function isOwnerOrAdmin(stream, user) {
-  return (
-    stream.streamer.toString() === user.id.toString() ||
-    user.role === 'admin' ||
-    user.role === 'founder'
-  );
+  return stream.streamer === user.id || user.role === 'admin' || user.role === 'founder';
 }
 
-/**
- * Strips internal fields before sending stream to frontend.
- * Never sends: liveSession (token, ip), mediaMTXPath internal detail.
- */
 function safeStream(stream) {
-  const obj = stream.toObject ? stream.toObject() : { ...stream };
-  delete obj.liveSession;
-  return obj;
+  const s = { ...stream };
+  delete s.liveSession;
+  return s;
 }
 
-// ─────────────────────────────────────────────────────────
-// GET /api/live
-// List live streams (public).
-// ─────────────────────────────────────────────────────────
+async function _getStream(id) {
+  const db  = getDb();
+  const doc = await db.collection('streams').doc(id).get();
+  if (!doc.exists) return null;
+  return { id: doc.id, ...doc.data() };
+}
+
+// ─── GET /api/live ────────────────────────────────────────
 router.get('/', optionalAuth, async (req, res, next) => {
   try {
     const { category, status = 'live', limit = 20, page = 1 } = req.query;
+    const safeLimit = Math.min(parseInt(limit) || 20, 100);
+    const safeSkip  = (Math.max(parseInt(page) || 1, 1) - 1) * safeLimit;
 
-    const query = { status, isBanned: false };
-    if (category) query.category = category;
+    const db = getDb();
+    let q = db.collection('streams')
+      .where('status', '==', status)
+      .where('isBanned', '==', false)
+      .orderBy('viewerCount', 'desc')
+      .orderBy('startedAt', 'desc');
 
-    const safeLimit = Math.min(parseInt(limit, 10) || 20, 100);
-    const safeSkip  = (Math.max(parseInt(page, 10) || 1, 1) - 1) * safeLimit;
+    if (category) q = q.where('category', '==', category);
 
-    const streams = await Stream.find(query)
-      .populate('streamer', 'username profile.displayName profile.avatarUrl')
-      .sort({ viewerCount: -1, startedAt: -1 })
-      .skip(safeSkip)
-      .limit(safeLimit)
-      .lean();
-
+    const snap    = await q.offset(safeSkip).limit(safeLimit).get();
+    const streams = snap.docs.map(d => safeStream({ id: d.id, ...d.data() }));
     res.json({ success: true, streams });
   } catch (err) { next(err); }
 });
 
-// ─────────────────────────────────────────────────────────
-// GET /api/live/health-check
-// Check whether MediaMTX is reachable (admin/founder only).
-// ─────────────────────────────────────────────────────────
-// ─────────────────────────────────────────────────────────
-// GET /api/live/my/sessions
-// Get the current user's own streams (authenticated).
-// MUST be before GET /:id to prevent 'my' being treated as an id.
-// ─────────────────────────────────────────────────────────
+// ─── GET /api/live/my/sessions ────────────────────────────
 router.get('/my/sessions', authenticate, async (req, res, next) => {
   try {
-    const streams = await Stream.find({ streamer: req.user.id })
-      .select('-liveSession')
-      .sort({ createdAt: -1 })
+    const db   = getDb();
+    const snap = await db.collection('streams')
+      .where('streamer', '==', req.user.id)
+      .orderBy('createdAt', 'desc')
       .limit(20)
-      .lean();
-
+      .get();
+    const streams = snap.docs.map(d => safeStream({ id: d.id, ...d.data() }));
     res.json({ success: true, streams });
   } catch (err) { next(err); }
 });
 
+// ─── GET /api/live/health-check ───────────────────────────
 router.get('/health-check', authenticate, requireFounder, async (req, res, next) => {
   try {
     const result = await liveSvc.checkMediaMTXHealth();
@@ -128,209 +107,166 @@ router.get('/health-check', authenticate, requireFounder, async (req, res, next)
   } catch (err) { next(err); }
 });
 
-// ─────────────────────────────────────────────────────────
-// POST /api/live
-// Create a new live session (does NOT start publishing yet).
-// Returns safe stream info and the WHIP URL for the publisher.
-// ─────────────────────────────────────────────────────────
+// ─── POST /api/live ───────────────────────────────────────
 router.post('/', authenticate, createLimiter, async (req, res, next) => {
   try {
     const { title, description, category, tags } = req.body;
+    if (!title || typeof title !== 'string' || title.trim().length === 0) return next(new ValidationError('Stream title is required'));
+    if (title.trim().length > 200) return next(new ValidationError('Stream title must be 200 characters or fewer'));
+    if (description && description.length > 2000) return next(new ValidationError('Description must be 2000 characters or fewer'));
 
-    if (!title || typeof title !== 'string' || title.trim().length === 0) {
-      return next(new ValidationError('Stream title is required'));
-    }
-    if (title.trim().length > 200) {
-      return next(new ValidationError('Stream title must be 200 characters or fewer'));
-    }
-    if (description && typeof description === 'string' && description.length > 2000) {
-      return next(new ValidationError('Description must be 2000 characters or fewer'));
-    }
+    const db = getDb();
 
-    // Check if user already has an active live session
-    const existing = await Stream.findOne({ streamer: req.user.id, status: 'live' });
-    if (existing) {
-      return next(new AppError(
-        'You already have an active live session. End it before starting a new one.',
-        409,
-        'ALREADY_LIVE'
-      ));
+    // Check for existing active live session
+    const existing = await db.collection('streams').where('streamer', '==', req.user.id).where('status', '==', 'live').limit(1).get();
+    if (!existing.empty) {
+      return next(new AppError('You already have an active live session. End it before starting a new one.', 409, 'ALREADY_LIVE'));
     }
 
-    // Also end any stale offline sessions for this user (cleanup)
-    await Stream.updateMany(
-      { streamer: req.user.id, status: 'offline', createdAt: { $lt: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
-      { $set: { status: 'ended', endedAt: new Date() } }
-    );
-
-    const stream = await Stream.create({
-      streamer: req.user.id,
-      title: title.trim().slice(0, 200),
-      description: description?.trim().slice(0, 2000),
-      category: category?.slice(0, 100),
-      tags: Array.isArray(tags) ? tags.slice(0, 10).map(t => String(t).slice(0, 50)) : [],
+    // Clean up stale offline sessions
+    const staleSnap = await db.collection('streams')
+      .where('streamer', '==', req.user.id)
+      .where('status', '==', 'offline')
+      .get();
+    const staleDate = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const batch = db.batch();
+    staleSnap.docs.forEach(d => {
+      const createdAt = d.data().createdAt?.toDate?.() || new Date(d.data().createdAt || 0);
+      if (createdAt < staleDate) {
+        batch.update(d.ref, { status: 'ended', endedAt: now() });
+      }
     });
+    await batch.commit();
 
-    const playback = liveSvc.buildPlaybackInfo(stream, true); // include WHIP for creator
+    const id = newId();
+    const ts = now();
+    const streamData = {
+      streamer:    req.user.id,
+      title:       title.trim().slice(0, 200),
+      description: description?.trim().slice(0, 2000) || null,
+      category:    category?.slice(0, 100) || null,
+      tags:        Array.isArray(tags) ? tags.slice(0, 10).map(t => String(t).slice(0, 50)) : [],
+      status:      'offline',
+      isBanned:    false,
+      viewerCount: 0,
+      peakViewerCount: 0,
+      startedAt:   null,
+      endedAt:     null,
+      hlsUrl:      null,
+      mediaMTXPath: null,
+      thumbnailUrl: null,
+      createdAt:   ts,
+      updatedAt:   ts,
+    };
+    await db.collection('streams').doc(id).set(streamData);
 
-    logger.info(`[Live] Session created: ${stream._id} by ${req.user.username}`);
-
-    res.status(201).json({
-      success: true,
-      stream: safeStream(stream),
-      playback,
-    });
+    const stream  = { id, ...streamData };
+    const playback = liveSvc.buildPlaybackInfo(stream, true);
+    logger.info(`[Live] Session created: ${id} by ${req.user.username}`);
+    res.status(201).json({ success: true, stream: safeStream(stream), playback });
   } catch (err) { next(err); }
 });
 
-// ─────────────────────────────────────────────────────────
-// GET /api/live/:id
-// Get a single stream (public, strips internal fields).
-// ─────────────────────────────────────────────────────────
+// ─── GET /api/live/:id ────────────────────────────────────
 router.get('/:id', optionalAuth, async (req, res, next) => {
   try {
-    const stream = await Stream.findById(req.params.id)
-      .populate('streamer', 'username profile.displayName profile.avatarUrl');
-
+    const stream = await _getStream(req.params.id);
     if (!stream || stream.isBanned) return next(new NotFoundError('Stream'));
-
-    const playback = liveSvc.buildPlaybackInfo(stream, false); // no WHIP for viewers
-
+    const playback = liveSvc.buildPlaybackInfo(stream, false);
     res.json({ success: true, stream: safeStream(stream), playback });
   } catch (err) { next(err); }
 });
 
-// ─────────────────────────────────────────────────────────
-// PATCH /api/live/:id
-// Update stream title / description / category (owner only).
-// ─────────────────────────────────────────────────────────
+// ─── PATCH /api/live/:id ──────────────────────────────────
 router.patch('/:id', authenticate, controlLimiter, async (req, res, next) => {
   try {
-    const stream = await Stream.findById(req.params.id);
+    const stream = await _getStream(req.params.id);
     if (!stream) return next(new NotFoundError('Stream'));
     if (!isOwnerOrAdmin(stream, req.user)) return next(new ForbiddenError());
-    if (stream.status === 'ended') {
-      return next(new AppError('Cannot update an ended stream', 400, 'STREAM_ENDED'));
-    }
+    if (stream.status === 'ended') return next(new AppError('Cannot update an ended stream', 400, 'STREAM_ENDED'));
 
     const allowed = ['title', 'description', 'category', 'thumbnailUrl'];
-    const updates = {};
-
+    const updates = { updatedAt: now() };
     for (const field of allowed) {
       if (req.body[field] !== undefined) {
         const val = String(req.body[field] || '').trim();
-        if (field === 'title' && val.length === 0) {
-          return next(new ValidationError('title cannot be empty'));
-        }
+        if (field === 'title' && val.length === 0) return next(new ValidationError('title cannot be empty'));
         updates[field] = val.slice(0, field === 'description' ? 2000 : 200);
       }
     }
+    if (Object.keys(updates).length === 1) return next(new ValidationError('No valid fields to update'));
 
-    if (!Object.keys(updates).length) {
-      return next(new ValidationError('No valid fields to update'));
-    }
-
-    Object.assign(stream, updates);
-    await stream.save();
-
-    logger.info(`[Live] Stream ${stream._id} updated by ${req.user.username}`);
-    res.json({ success: true, stream: safeStream(stream) });
+    const db = getDb();
+    await db.collection('streams').doc(req.params.id).update(updates);
+    logger.info(`[Live] Stream ${req.params.id} updated by ${req.user.username}`);
+    res.json({ success: true, stream: safeStream({ ...stream, ...updates }) });
   } catch (err) { next(err); }
 });
 
-// ─────────────────────────────────────────────────────────
-// POST /api/live/:id/start-publishing
-// Called by the browser just before it attempts the WHIP connection.
-// Transitions status to 'live' and returns the WHIP URL.
-// Does NOT verify the WHIP connection is actually established —
-// /health is used for ongoing confirmation.
-// ─────────────────────────────────────────────────────────
+// ─── POST /api/live/:id/start-publishing ─────────────────
 router.post('/:id/start-publishing', authenticate, controlLimiter, async (req, res, next) => {
   try {
-    const stream = await Stream.findById(req.params.id).select('+liveSession.token');
+    const stream = await _getStream(req.params.id);
     if (!stream) return next(new NotFoundError('Stream'));
     if (!isOwnerOrAdmin(stream, req.user)) return next(new ForbiddenError());
-
-    if (stream.status === 'ended') {
-      return next(new AppError('Stream has ended. Create a new session.', 409, 'STREAM_ENDED'));
-    }
+    if (stream.status === 'ended') return next(new AppError('Stream has ended. Create a new session.', 409, 'STREAM_ENDED'));
     if (stream.status === 'live') {
-      // Idempotent: return existing WHIP URL if already live
       const playback = liveSvc.buildPlaybackInfo(stream, true);
       return res.json({ success: true, stream: safeStream(stream), playback, alreadyLive: true });
     }
 
-    const sessionPath = liveSvc.streamPath(stream._id.toString());
-
-    stream.status       = 'live';
-    stream.startedAt    = new Date();
-    stream.mediaMTXPath = sessionPath;
-    stream.hlsUrl       = liveSvc.buildHlsUrl(sessionPath);
-
-    stream.liveSession = {
-      startedAt:     new Date(),
-      lastHeartbeat: new Date(),
-      publisherIp:   req.ip,
-      userAgent:     req.headers['user-agent']?.slice(0, 300),
+    const sessionPath = liveSvc.streamPath(req.params.id);
+    const ts = now();
+    const updates = {
+      status:        'live',
+      startedAt:     ts,
+      mediaMTXPath:  sessionPath,
+      hlsUrl:        liveSvc.buildHlsUrl(sessionPath),
+      liveSession: {
+        startedAt:     ts,
+        lastHeartbeat: ts,
+        publisherIp:   req.ip,
+        userAgent:     req.headers['user-agent']?.slice(0, 300) || null,
+      },
+      updatedAt: ts,
     };
 
-    await stream.save();
+    const db = getDb();
+    await db.collection('streams').doc(req.params.id).update(updates);
+    liveSvc.recordPublisherHeartbeat(req.params.id);
 
-    liveSvc.recordPublisherHeartbeat(stream._id.toString());
-
-    const playback = liveSvc.buildPlaybackInfo(stream, true);
-
-    logger.info(`[Live] Publishing started: ${stream._id} (path: ${sessionPath}) by ${req.user.username}`);
-
-    res.json({ success: true, stream: safeStream(stream), playback });
+    const updated  = { ...stream, ...updates };
+    const playback = liveSvc.buildPlaybackInfo(updated, true);
+    logger.info(`[Live] Publishing started: ${req.params.id} (path: ${sessionPath}) by ${req.user.username}`);
+    res.json({ success: true, stream: safeStream(updated), playback });
   } catch (err) { next(err); }
 });
 
-// ─────────────────────────────────────────────────────────
-// POST /api/live/:id/stop-publishing
-// Called by the browser when the user clicks "Stop Live" or navigates away.
-// Transitions status to 'ended' and kicks the MediaMTX publisher.
-// ─────────────────────────────────────────────────────────
+// ─── POST /api/live/:id/stop-publishing ──────────────────
 router.post('/:id/stop-publishing', authenticate, controlLimiter, async (req, res, next) => {
   try {
-    const stream = await Stream.findById(req.params.id);
+    const stream = await _getStream(req.params.id);
     if (!stream) return next(new NotFoundError('Stream'));
     if (!isOwnerOrAdmin(stream, req.user)) return next(new ForbiddenError());
+    if (stream.status === 'ended') return res.json({ success: true, message: 'Stream already ended', stream: safeStream(stream) });
 
-    if (stream.status === 'ended') {
-      return res.json({ success: true, message: 'Stream already ended', stream: safeStream(stream) });
-    }
-
-    stream.status  = 'ended';
-    stream.endedAt = new Date();
-    await stream.save();
-
-    liveSvc.clearPublisherState(stream._id.toString());
-
-    // Tell MediaMTX to drop the publisher connection (non-fatal if server is unreachable)
-    await liveSvc.kickPublisher(stream._id.toString());
-
-    logger.info(`[Live] Publishing stopped: ${stream._id} by ${req.user.username}`);
-
-    res.json({ success: true, message: 'Stream ended', stream: safeStream(stream) });
+    const db = getDb();
+    const ts = now();
+    await db.collection('streams').doc(req.params.id).update({ status: 'ended', endedAt: ts, updatedAt: ts });
+    liveSvc.clearPublisherState(req.params.id);
+    await liveSvc.kickPublisher(req.params.id);
+    logger.info(`[Live] Publishing stopped: ${req.params.id} by ${req.user.username}`);
+    res.json({ success: true, message: 'Stream ended', stream: safeStream({ ...stream, status: 'ended' }) });
   } catch (err) { next(err); }
 });
 
-// ─────────────────────────────────────────────────────────
-// POST /api/live/:id/health
-// Browser heartbeat — sent every ~10 s while live.
-// Updates last-seen timestamp and optional metrics.
-// Body: { bitrate?: number, fps?: number, resolution?: string, errors?: number }
-// ─────────────────────────────────────────────────────────
+// ─── POST /api/live/:id/health ────────────────────────────
 router.post('/:id/health', authenticate, heartbeatLimiter, async (req, res, next) => {
   try {
-    const stream = await Stream.findById(req.params.id);
+    const stream = await _getStream(req.params.id);
     if (!stream) return next(new NotFoundError('Stream'));
     if (!isOwnerOrAdmin(stream, req.user)) return next(new ForbiddenError());
-
-    if (stream.status !== 'live') {
-      return next(new AppError('Stream is not live', 400, 'NOT_LIVE'));
-    }
+    if (stream.status !== 'live') return next(new AppError('Stream is not live', 400, 'NOT_LIVE'));
 
     const { bitrate, fps, resolution, errors } = req.body;
     const metrics = {
@@ -339,24 +275,19 @@ router.post('/:id/health', authenticate, heartbeatLimiter, async (req, res, next
       resolution: typeof resolution === 'string' ? resolution.slice(0, 20) : undefined,
       errors:     typeof errors  === 'number'    ? errors     : undefined,
     };
+    const health = liveSvc.recordPublisherHeartbeat(req.params.id, metrics);
 
-    const health = liveSvc.recordPublisherHeartbeat(stream._id.toString(), metrics);
-
-    // Update liveSession.lastHeartbeat in DB (non-blocking write)
-    Stream.findByIdAndUpdate(stream._id, { 'liveSession.lastHeartbeat': new Date() })
+    getDb().collection('streams').doc(req.params.id).update({ 'liveSession.lastHeartbeat': now() })
       .catch(e => logger.warn('[Live] heartbeat DB update failed:', e.message));
 
     res.json({ success: true, health });
   } catch (err) { next(err); }
 });
 
-// ─────────────────────────────────────────────────────────
-// POST /api/live/:id/error
-// Browser reports a WHIP or stream error for server-side logging.
-// ─────────────────────────────────────────────────────────
+// ─── POST /api/live/:id/error ─────────────────────────────
 router.post('/:id/error', authenticate, controlLimiter, async (req, res, next) => {
   try {
-    const stream = await Stream.findById(req.params.id);
+    const stream = await _getStream(req.params.id);
     if (!stream) return next(new NotFoundError('Stream'));
     if (!isOwnerOrAdmin(stream, req.user)) return next(new ForbiddenError());
 
@@ -364,29 +295,21 @@ router.post('/:id/error', authenticate, controlLimiter, async (req, res, next) =
     const message = String(req.body.message || '').slice(0, 500);
     const phase   = String(req.body.phase   || '').slice(0, 50);
 
-    logger.warn(`[Live] Stream error reported: ${stream._id} code=${code} phase=${phase} — ${message} (user: ${req.user.username})`);
-
+    logger.warn(`[Live] Stream error: ${req.params.id} code=${code} phase=${phase} — ${message} (user: ${req.user.username})`);
     res.json({ success: true });
   } catch (err) { next(err); }
 });
 
-// ─────────────────────────────────────────────────────────
-// GET /api/live/:id/playback
-// Returns HLS playback URL and current stream status (public).
-// ─────────────────────────────────────────────────────────
+// ─── GET /api/live/:id/playback ───────────────────────────
 router.get('/:id/playback', optionalAuth, async (req, res, next) => {
   try {
-    const stream = await Stream.findById(req.params.id)
-      .populate('streamer', 'username profile.displayName profile.avatarUrl');
-
+    const stream = await _getStream(req.params.id);
     if (!stream || stream.isBanned) return next(new NotFoundError('Stream'));
 
     const playback = liveSvc.buildPlaybackInfo(stream, false);
-
-    // Optionally cross-check MediaMTX for real-time publishing state
     let publisherActive = false;
     if (stream.status === 'live') {
-      const ps = await liveSvc.checkPublisherStatus(stream._id.toString());
+      const ps = await liveSvc.checkPublisherStatus(req.params.id);
       publisherActive = ps.publishing;
     }
 
@@ -395,35 +318,33 @@ router.get('/:id/playback', optionalAuth, async (req, res, next) => {
       playback,
       publisherActive,
       stream: {
-        id:          stream._id,
-        title:       stream.title,
-        description: stream.description,
-        category:    stream.category,
-        status:      stream.status,
-        viewerCount: stream.viewerCount,
-        startedAt:   stream.startedAt,
-        streamer:    stream.streamer,
+        id:           stream.id,
+        title:        stream.title,
+        description:  stream.description,
+        category:     stream.category,
+        status:       stream.status,
+        viewerCount:  stream.viewerCount,
+        startedAt:    stream.startedAt,
+        streamer:     stream.streamer,
         thumbnailUrl: stream.thumbnailUrl,
       },
     });
   } catch (err) { next(err); }
 });
 
-// ─────────────────────────────────────────────────────────
-// GET /api/live/:id/viewers
-// Current viewer count (public).
-// ─────────────────────────────────────────────────────────
+// ─── GET /api/live/:id/viewers ────────────────────────────
 router.get('/:id/viewers', optionalAuth, async (req, res, next) => {
   try {
-    const stream = await Stream.findById(req.params.id).select('status viewerCount peakViewerCount');
-    if (!stream) return next(new NotFoundError('Stream'));
-
+    const db  = getDb();
+    const doc = await db.collection('streams').doc(req.params.id).select('status', 'viewerCount', 'peakViewerCount').get();
+    if (!doc.exists) return next(new NotFoundError('Stream'));
+    const s = doc.data();
     res.json({
       success: true,
-      streamId:       stream._id,
-      viewerCount:    stream.viewerCount,
-      peakViewerCount: stream.peakViewerCount,
-      live:           stream.status === 'live',
+      streamId:        req.params.id,
+      viewerCount:     s.viewerCount     || 0,
+      peakViewerCount: s.peakViewerCount || 0,
+      live:            s.status === 'live',
     });
   } catch (err) { next(err); }
 });

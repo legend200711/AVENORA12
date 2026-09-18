@@ -173,12 +173,16 @@ app.use('/api/push', pushRoutes);
 // Contains no PII, credentials, or internal data.
 app.get('/api/themes/active', async (req, res) => {
   try {
-    const FounderTheme = require('./models/FounderTheme');
-    const theme = await FounderTheme.findOne({ status: 'published' })
-      .sort({ publishedAt: -1 })
-      .select('name tokens publishedAt')
-      .lean();
-    res.json({ success: true, theme: theme ? { name: theme.name, tokens: theme.tokens, publishedAt: theme.publishedAt } : null });
+    const { getDb } = require('./config/firestore');
+    const db   = getDb();
+    const snap = await db.collection('founderThemes')
+      .where('status', '==', 'published')
+      .orderBy('publishedAt', 'desc')
+      .limit(1)
+      .get();
+    if (snap.empty) return res.json({ success: true, theme: null });
+    const doc  = snap.docs[0].data();
+    res.json({ success: true, theme: { name: doc.name, tokens: doc.tokens, publishedAt: doc.publishedAt } });
   } catch {
     res.json({ success: true, theme: null });
   }
@@ -269,10 +273,8 @@ function _checkSupabaseConfig() {
 _checkSupabaseConfig();
 
 // ─── Required env-var check ───────────────────────────────────
-// Warn clearly on startup so operators see what is missing.
 (function _checkRequiredEnv() {
-  const warn = (name, hint) =>
-    logger.warn(`⚠️  ${name} is not set. ${hint}`);
+  const warn = (name, hint) => logger.warn(`⚠️  ${name} is not set. ${hint}`);
 
   if (!process.env.FIREBASE_PROJECT_ID) warn('FIREBASE_PROJECT_ID', 'Firebase ID token verification will fail.');
   if (!process.env.FIREBASE_WEB_API_KEY) warn('FIREBASE_WEB_API_KEY', 'Firebase ID token verification will fail.');
@@ -280,30 +282,29 @@ _checkSupabaseConfig();
     logger.warn('⚠️  JWT_SECRET is not set to a real value. Legacy JWT auth will be insecure.');
   }
   if (!process.env.FOUNDER_EMAIL) warn('FOUNDER_EMAIL', 'Founder/admin access will not work.');
-  if (process.env.NODE_ENV === 'production' && (!process.env.MONGODB_URI || process.env.MONGODB_URI.includes('localhost'))) {
-    logger.error('❌ MONGODB_URI is not configured or points to localhost in production.');
-    logger.error('   Set MONGODB_URI to a MongoDB Atlas URI in the Render dashboard → Environment → Secrets.');
-    logger.error('   The HTTP server will start but all MongoDB routes will fail until MONGODB_URI is set.');
-  }
   if (process.env.NODE_ENV === 'production' && (!process.env.FRONTEND_URL || process.env.FRONTEND_URL.includes('your-'))) {
     logger.warn('⚠️  FRONTEND_URL is not set for production. CORS may block the frontend.');
   }
+  if (!process.env.FIREBASE_SERVICE_ACCOUNT_JSON && !process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    logger.warn('⚠️  FIREBASE_SERVICE_ACCOUNT_JSON is not set.');
+    logger.warn('   Firestore Admin SDK will attempt Application Default Credentials (ADC).');
+    logger.warn('   If running on Render, set FIREBASE_SERVICE_ACCOUNT_JSON in Render dashboard secrets.');
+    logger.warn('   Firebase Console → Project Settings → Service Accounts → Generate new private key');
+  } else {
+    logger.info('[Firestore] ✅ Service account credentials detected');
+  }
   if (!process.env.RESEND_API_KEY) {
     logger.warn('⚠️  RESEND_API_KEY is not set. Password reset emails will NOT be sent.');
-    logger.warn('   Get a key at https://resend.com and set RESEND_API_KEY in Render dashboard secrets.');
   } else {
     logger.info('[Email] ✅ RESEND_API_KEY detected — password reset emails enabled');
   }
   if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
     logger.warn('⚠️  VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY not set. Web Push notifications will not work.');
-    logger.warn('   Generate keys: npx web-push generate-vapid-keys');
-    logger.warn('   Then set VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY, and VAPID_SUBJECT in Render dashboard secrets.');
   } else {
     logger.info('[Push] ✅ VAPID keys detected — Web Push notifications enabled');
   }
   if (!process.env.MEDIAMTX_WHIP_URL || !process.env.MEDIAMTX_HLS_URL) {
     logger.warn('⚠️  MEDIAMTX_WHIP_URL / MEDIAMTX_HLS_URL not set. Browser-based live streaming will not work.');
-    logger.warn('   Deploy MediaMTX and set MEDIAMTX_BASE_URL, MEDIAMTX_WHIP_URL, MEDIAMTX_HLS_URL, MEDIAMTX_API_URL.');
   } else {
     logger.info('[Live] ✅ MediaMTX URLs detected — live streaming enabled');
   }

@@ -1,76 +1,59 @@
-const express = require('express');
-const router = express.Router();
-const { optionalAuth } = require('../middleware/auth');
+/**
+ * Search Route — Firestore-backed
+ * Basic text search using client-side filtering (Firestore has no native full-text search).
+ * For production-scale search, integrate Algolia or Typesense.
+ */
+'use strict';
 
-// ─── GET /api/search ─────────────────────────────────────────
+const express = require('express');
+const router  = express.Router();
+const { optionalAuth } = require('../middleware/auth');
+const { getDb } = require('../../config/firestore');
+
+// GET /api/search
 router.get('/', optionalAuth, async (req, res, next) => {
   try {
     const { q, type, page = 1, limit = 20 } = req.query;
-    if (!q || q.trim().length < 2) {
-      return res.status(422).json({ error: true, message: 'Search query must be at least 2 characters' });
-    }
+    if (!q || q.trim().length < 2) return res.status(422).json({ error: true, message: 'Search query must be at least 2 characters' });
 
-    const searchTerm = q.trim().slice(0, 100);
-    const regex      = new RegExp(searchTerm, 'i');
+    const searchTerm = q.trim().slice(0, 100).toLowerCase();
     const limitN     = Math.min(50, parseInt(limit) || 20);
-    const skip       = (Math.max(1, parseInt(page)) - 1) * limitN;
+    const db         = getDb();
     const results    = {};
 
-    // Lazy-load models only when needed (avoids circular require issues at startup)
-    const User    = require('../../models/User');
-    const Post    = require('../../models/Post');
-    const Video   = require('../../models/Video');
-    const Channel = require('../../models/Channel');
+    // Firestore does not support full-text search — we fetch a limited set and filter client-side.
+    // For scale, replace with Algolia/Typesense.
 
     if (!type || type === 'users') {
-      results.users = await User.find({
-        $or: [
-          { username: regex },
-          { 'profile.displayName': regex },
-        ],
-        'status.isActive': true,
-      }).select('username profile.displayName profile.avatarUrl').limit(limitN).lean();
+      const snap = await db.collection('users').where('status.isActive', '==', true).limit(200).get();
+      results.users = snap.docs
+        .map(d => { const data = d.data(); return { id: d.id, username: data.username, profile: data.profile }; })
+        .filter(u => u.username?.toLowerCase().includes(searchTerm) || u.profile?.displayName?.toLowerCase().includes(searchTerm))
+        .slice(0, limitN);
     }
 
     if (!type || type === 'posts') {
-      results.posts = await Post.find({
-        content: regex,
-        isDeleted: false,
-        visibility: 'public',
-      }).populate('author', 'username profile.displayName profile.avatarUrl').limit(limitN).lean();
+      const snap = await db.collection('posts').where('isDeleted', '==', false).where('visibility', '==', 'public').orderBy('createdAt', 'desc').limit(500).get();
+      results.posts = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(p => p.content?.toLowerCase().includes(searchTerm))
+        .slice(0, limitN);
     }
 
     if (!type || type === 'videos') {
-      results.videos = await Video.find({
-        $or: [
-          { title:       regex },
-          { description: regex },
-          { tags:        regex },
-          { category:    regex },
-        ],
-        isDeleted:        false,
-        isPublished:      true,
-        processingStatus: 'ready',
-        visibility:       'public',
-      })
-        .sort({ views: -1 })
-        .skip(type === 'video' ? skip : 0)
-        .limit(limitN)
-        .populate('uploader', 'username profile.displayName profile.avatarUrl')
-        .lean();
+      const snap = await db.collection('videos').where('isDeleted', '==', false).where('isPublished', '==', true).where('visibility', '==', 'public').orderBy('views', 'desc').limit(300).get();
+      results.videos = snap.docs
+        .map(d => ({ id: d.id, ...d.data(), videoUrl: d.data().hlsUrl || d.data().originalFileUrl || null }))
+        .filter(v => v.title?.toLowerCase().includes(searchTerm) || v.description?.toLowerCase().includes(searchTerm) || (v.tags || []).some(t => t.toLowerCase().includes(searchTerm)))
+        .slice(0, limitN);
     }
 
     if (!type || type === 'channels') {
-      results.channels = await Channel.find({
-        $or: [
-          { name:        regex },
-          { description: regex },
-        ],
-        isSuspended: false,
-      })
-        .populate('owner', 'username profile.displayName profile.avatarUrl')
-        .limit(limitN)
-        .lean();
+      const snap = await db.collection('channels').where('isSuspended', '==', false).limit(200).get();
+      results.channels = snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(c => c.name?.toLowerCase().includes(searchTerm) || c.description?.toLowerCase().includes(searchTerm))
+        .slice(0, limitN);
     }
 
     res.json({ success: true, query: searchTerm, results });
