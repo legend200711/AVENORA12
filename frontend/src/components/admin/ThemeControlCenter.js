@@ -260,12 +260,20 @@ async function renderThemeControlCenter(container) {
 
     _tccRenderEditor();
   } catch (err) {
-    console.error('[TCC] Load error:', err);
+    // Log the real error code for diagnostics
+    console.error('[TCC] Load error — Firestore code:', err.code, '| message:', err.message, '| full error:', err);
+    const isPermission = err.code === 'permission-denied' || err.code === 'PERMISSION_DENIED';
+    const isIndex = err.message && err.message.includes('index');
+    const detail = isPermission
+      ? 'Permission denied. Ensure your account has the "founder" or "admin" role in the users collection.'
+      : isIndex
+      ? 'Firestore index is still building. Please wait a minute and try again.'
+      : `Firebase error: ${err.code || ''} — ${err.message || 'Unknown error'}`;
     document.getElementById('tcc-body').innerHTML = `
       <div class="error-state">
-        <div class="error-icon">⚠️</div>
+        <div class="error-icon">⚠\uFE0F</div>
         <h3>Could not load Theme Control Center</h3>
-        <p>Check your connection and try again.</p>
+        <p>${_tccEscape(detail)}</p>
         <button class="btn btn-outline" onclick="renderThemeControlCenter(document.getElementById('admin-content'))">Retry</button>
       </div>
     `;

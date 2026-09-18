@@ -706,40 +706,43 @@
     async deleteVideo(id) {
       const sid = String(id);
       if (_isUUID(sid)) {
-        // Supabase music_library row — delete directly using anon key.
-        // Supabase RLS must allow DELETE for the row owner (uid == auth.uid).
-        // The anon key is used here; Supabase validates via the JWT claim if needed.
-        // We also attempt to delete the storage object from the 'videos' bucket.
-        let storagePathToDelete = null;
-        try {
-          // Fetch the row first so we know the storage_path to clean up
-          const rows = await _sbFetch(`/music_library?id=eq.${encodeURIComponent(sid)}&limit=1`);
-          if (Array.isArray(rows) && rows.length > 0) {
-            storagePathToDelete = rows[0].storage_path || null;
-          }
-        } catch (_) {}
-
-        // Delete from music_library table
-        await _sbFetch(`/music_library?id=eq.${encodeURIComponent(sid)}`, {
-          method: 'DELETE',
-          prefer: 'return=minimal',
-        });
-
-        // Best-effort: delete the storage object (non-fatal if it fails)
-        if (storagePathToDelete) {
+        // Supabase music_library row — route through the video-delete Edge Function.
+        // The anon key cannot prove Firebase identity so direct DELETE is blocked by RLS.
+        // The Edge Function verifies the Firebase ID token and authorises the deletion.
+        let token = null;
+        if (window.AvenoraFirebase?.Auth) {
+          token = await window.AvenoraFirebase.Auth.getIdToken().catch(() => null);
+        }
+        if (!token && window.AvenoraFirebase?.getFirebaseAuth) {
           try {
-            const bucket = storagePathToDelete.startsWith('stream-media/') ? 'stream-media' : 'videos';
-            const objectPath = storagePathToDelete.replace(/^(videos|stream-media)\//, '');
-            await fetch(`${SUPABASE_PROJECT_URL}/storage/v1/object/${bucket}/${objectPath}`, {
-              method: 'DELETE',
-              headers: {
-                'apikey': SUPABASE_ANON_KEY,
-                'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
-              },
-            });
+            const auth = await window.AvenoraFirebase.getFirebaseAuth();
+            token = auth.currentUser ? await auth.currentUser.getIdToken() : null;
           } catch (_) {}
         }
+        if (!token) throw new Error('Not authenticated — please sign in before deleting a video.');
 
+        const fnUrl = `${SUPABASE_PROJECT_URL}/functions/v1/video-delete?id=${encodeURIComponent(sid)}`;
+        let res;
+        try {
+          res = await fetch(fnUrl, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type': 'application/json',
+            },
+          });
+        } catch (networkErr) {
+          console.error('[AVN] video-delete Edge Function network error:', networkErr);
+          throw new Error('Network error while deleting video. Check your connection.');
+        }
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = data.message || `Delete failed (HTTP ${res.status})`;
+          const err = new Error(msg);
+          err.status = res.status;
+          console.error('[AVN] video-delete Edge Function error:', { status: res.status, data });
+          throw err;
+        }
         return { success: true };
       }
 
@@ -752,6 +755,7 @@
         await deleteDoc(fsDoc(db, 'videos', sid));
         return { success: true };
       } catch (err) {
+        console.error('[AVN] Firestore video delete error:', err.code, err.message);
         throw new Error(err.message || 'Could not delete video from Firestore.');
       }
     },
@@ -1422,7 +1426,14 @@
     return {
       async list() {
         const { db, collection, query, orderBy, getDocs } = await _m();
-        const snap = await getDocs(query(collection(db, 'founderThemes'), orderBy('updatedAt', 'desc')));
+        let snap;
+        try {
+          snap = await getDocs(query(collection(db, 'founderThemes'), orderBy('updatedAt', 'desc')));
+        } catch (indexErr) {
+          // Index may still be building — fall back to unordered fetch
+          console.warn('[AVN] FounderThemeAPI.list() ordered query failed (index may be building):', indexErr.code, indexErr.message);
+          snap = await getDocs(collection(db, 'founderThemes'));
+        }
         const themes = snap.docs.filter(d => d.id !== 'active').map(d => _doc(d.data(), d.id));
         return { themes };
       },
@@ -1577,13 +1588,24 @@
 
     async function _getActive() {
       const { db, collection, query, where, orderBy, limit: fsLimit, getDocs } = await _m();
-      const snap = await getDocs(query(
-        collection(db, 'cloudStreams'),
-        where('status', 'in', ['active', 'paused', 'starting', 'recovering']),
-        orderBy('startedAt', 'desc'),
-        fsLimit(10)
-      ));
-      return snap.docs.map(d => ({ _id: d.id, ...d.data() }));
+      try {
+        const snap = await getDocs(query(
+          collection(db, 'cloudStreams'),
+          where('status', 'in', ['active', 'paused', 'starting', 'recovering']),
+          orderBy('startedAt', 'desc'),
+          fsLimit(10)
+        ));
+        return snap.docs.map(d => ({ _id: d.id, ...d.data() }));
+      } catch (indexErr) {
+        // Composite index may still be building — fall back to status filter only
+        console.warn('[AVN] CloudStreamAPI._getActive() index query failed (index may be building):', indexErr.code, indexErr.message);
+        const fallback = await getDocs(query(
+          collection(db, 'cloudStreams'),
+          where('status', 'in', ['active', 'paused', 'starting', 'recovering']),
+          fsLimit(10)
+        ));
+        return fallback.docs.map(d => ({ _id: d.id, ...d.data() }));
+      }
     }
 
     async function _getAll(lim) {

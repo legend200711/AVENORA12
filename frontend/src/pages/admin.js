@@ -228,8 +228,12 @@ async function renderAdminUsers(container) {
       </div>
     `;
   } catch (err) {
-    console.error('[AVN] Admin users error:', err);
-    showError(container, 'User data could not be loaded. Please try again.', () => renderAdminUsers(container));
+    console.error('[AVN] Admin users error — Firestore code:', err.code, '| message:', err.message, '| full error:', err);
+    const isPermission = err.code === 'permission-denied' || err.code === 'PERMISSION_DENIED';
+    const detail = isPermission
+      ? 'Firestore permission denied. Ensure your account has the "founder" or "admin" role.'
+      : `Firebase error: ${err.code || ''} — ${err.message || 'Unknown error'}`;
+    showError(container, `User data could not be loaded. ${detail}`, () => renderAdminUsers(container));
   }
 }
 
@@ -329,8 +333,17 @@ async function renderAdminModeration(container) {
     const { collection, query, where, orderBy, limit, getDocs } = await import(
       `https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`
     );
+    // Composite index required: posts(isFlagged ASC, createdAt DESC) — see firestore.indexes.json
     const q = query(collection(db, 'posts'), where('isFlagged', '==', true), orderBy('createdAt', 'desc'), limit(50));
-    const snap = await getDocs(q);
+    let snap;
+    try {
+      snap = await getDocs(q);
+    } catch (indexErr) {
+      // Composite index may not be deployed yet — fall back to fetching all flagged posts without ordering
+      console.warn('[AVN] Moderation ordered query failed (index may be building):', indexErr.code, indexErr.message);
+      const fallbackQ = query(collection(db, 'posts'), where('isFlagged', '==', true), limit(50));
+      snap = await getDocs(fallbackQ);
+    }
     const posts = snap.docs.map(d => ({ _id: d.id, id: d.id, ...d.data() }));
 
     container.innerHTML = `
@@ -354,8 +367,16 @@ async function renderAdminModeration(container) {
       }
     `;
   } catch (err) {
-    console.error('[AVN] Admin moderation error:', err);
-    showError(container, 'Moderation queue could not be loaded. Please try again.', () => renderAdminModeration(container));
+    // Log the real Firebase error code so the developer can diagnose the issue
+    console.error('[AVN] Admin moderation error — Firestore code:', err.code, '| message:', err.message, '| full error:', err);
+    const isPermission = err.code === 'permission-denied' || err.code === 'PERMISSION_DENIED';
+    const isIndex = err.message && err.message.includes('index');
+    const detail = isPermission
+      ? 'Firestore permission denied. Ensure your account has the "founder" or "admin" role in the users collection.'
+      : isIndex
+      ? 'Firestore index is still building. Please wait a minute and try again.'
+      : `Firebase error: ${err.code || ''} — ${err.message || 'Unknown error'}`;
+    showError(container, `Moderation queue could not be loaded. ${detail}`, () => renderAdminModeration(container));
   }
 }
 
