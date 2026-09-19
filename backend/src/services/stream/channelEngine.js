@@ -507,6 +507,11 @@ class ChannelEngine {
       coverArt:       item?.coverArt || null,
       images:         item?.images  || null,
       perImageSecs:   item?.perImageSecs || null,
+      // Tracks array for MUSIC/AUDIO items — sent to viewer so the client
+      // can advance through individual tracks without a separate server tick.
+      tracks:         (item?.tracks && item.tracks.length > 0) ? item.tracks : null,
+      shuffle:        item?.shuffle || false,
+      repeat:         item?.repeat  !== false,
       live:           this.status === STATUS.LIVE,
       streamId:       this.liveSession?.streamId || null,
       hlsUrl:         this.liveSession?.hlsUrl || null,

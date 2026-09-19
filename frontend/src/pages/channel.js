@@ -2,20 +2,23 @@
  * AVENORA — 24-Hour Always-On Channel (SPA page)
  *
  * The viewer page for the AVENORA 24-hour channel.
- * Subscribes to channelNowPlaying/avenora via Firestore and renders the
- * appropriate player based on the current program type:
- *   MUSIC / AUDIO    → audio player with waveform visualization
- *   VIDEO            → video player
- *   IMAGE            → image display
- *   SLIDESHOW        → auto-advancing image slideshow
- *   LIVE_CAMERA      → HLS player via MediaMTX
- *   PRE_RECORDED_SHOW → video player
  *
- * This page does NOT expose skip/next controls to viewers.
- * The server engine controls all programming.
+ * How it works:
+ *   1. Primary: Subscribes to channelNowPlaying/avenora via Firestore (real-time).
+ *   2. Fallback: Polls GET /api/channel/now-playing every 10s if Firestore fails.
+ *   3. Self-contained playback: the client maintains its own track queue for
+ *      MUSIC items so audio advances automatically without waiting for the server.
  *
- * Authentication: reuses the existing AVENORA Firebase session.
- * No separate login required.
+ * Key design decisions vs. the old version:
+ *   - Initialises Firestore directly using the same CDN SDK (v10.12.2) as the
+ *     rest of the app — does NOT depend on window.AvenoraFirebase._loadModuleFirestore()
+ *     which had a race-condition where it could resolve before the firebase.js IIFE ran.
+ *   - The channel status ONLINE (running=true, no current item) is shown as
+ *     "LOADING" not "OFFLINE". Only explicit status=OFFLINE shows the offline card.
+ *   - When a MUSIC item contains a tracks[] array, the client plays them one by
+ *     one with automatic advancement — the server duration is only a hint.
+ *   - Failed media items are automatically retried once then skipped.
+ *   - Audio starts muted on mobile and shows a TAP TO PLAY prompt.
  */
 
 registerPage('channel', {
@@ -46,17 +49,25 @@ registerPage('channel', {
           <div class="ch-player-panel" id="ch-player-panel">
 
             <!-- OFFLINE state -->
-            <div id="ch-state-offline" class="ch-state-view">
+            <div id="ch-state-offline" class="ch-state-view" style="display:none">
               <div class="ch-state-icon">📡</div>
               <div class="ch-state-title">CHANNEL OFFLINE</div>
               <div class="ch-state-desc">The AVENORA 24-Hour Channel is currently offline. Check back soon.</div>
               <button class="ch-btn ch-btn-outline" onclick="chRefresh()">↻ Refresh</button>
             </div>
 
-            <!-- LOADING state -->
+            <!-- LOADING state (default on start) -->
             <div id="ch-state-loading" class="ch-state-view">
               <div class="ch-spinner"></div>
               <div class="ch-state-desc">Connecting to channel…</div>
+            </div>
+
+            <!-- STANDBY state — channel is online but no content scheduled yet -->
+            <div id="ch-state-standby" class="ch-state-view" style="display:none">
+              <div class="ch-state-icon">📻</div>
+              <div class="ch-state-title">CHANNEL ONLINE</div>
+              <div class="ch-state-desc">AVENORA 24-Hour Channel is live — programming starting soon.</div>
+              <button class="ch-btn ch-btn-outline" onclick="chRefresh()">↻ Refresh</button>
             </div>
 
             <!-- LIVE CAMERA player -->
@@ -65,7 +76,7 @@ registerPage('channel', {
                 <span class="ch-live-dot"></span> LIVE
               </div>
               <div class="ch-video-wrap">
-                <video id="ch-video-live" class="ch-video" autoplay playsinline controls></video>
+                <video id="ch-video-live" class="ch-video" autoplay playsinline controls muted></video>
                 <div id="ch-live-no-mediamtx" class="ch-live-unavail" style="display:none">
                   <div class="ch-live-unavail-icon">🎥</div>
                   <div>Live camera active</div>
@@ -77,7 +88,7 @@ registerPage('channel', {
             <!-- VIDEO player -->
             <div id="ch-state-video" class="ch-state-view" style="display:none">
               <div class="ch-video-wrap">
-                <video id="ch-video-vod" class="ch-video" autoplay playsinline controls></video>
+                <video id="ch-video-vod" class="ch-video" autoplay playsinline controls muted></video>
               </div>
             </div>
 
@@ -176,7 +187,7 @@ const _ch = {
   db:           null,
   unsub:        null,   // Firestore snapshot unsubscriber
 
-  // Current channel state
+  // Current channel state (from server)
   status:       null,
   programType:  null,
   mediaUrl:     null,
@@ -184,74 +195,167 @@ const _ch = {
   slideIdx:     0,
   slideTimer:   null,
 
+  // Client-side track queue (for MUSIC items with tracks array)
+  trackQueue:   [],     // array of { id, title, artist, url, duration, coverArt }
+  trackIdx:     0,      // current track in client queue
+  trackRetries: 0,      // retry counter for current track
+  _trackItemId: null,   // programItem id the queue was built from
+
   // Audio
   audio:        null,
   audioPlaying: false,
   volume:       0.8,
+  _audioUrl:    null,
 
   // Video
   hls:          null,  // Hls.js instance for live camera
+  _liveHlsUrl:  null,
+  _vodUrl:      null,
+
+  // Slideshow
+  _slideshowKey: null,
 
   // Progress RAF
   progressRaf:  null,
   itemStartedAt: 0,
   itemDuration:  0,
 
+  // Polling fallback
+  pollTimer:    null,
+  _pollMode:    false,
+
   // API base
   apiBase:      null,
+
+  // Reconnect state
+  _retryTimer:  null,
+  _retryCount:  0,
 };
+
+// ── Firebase config (same project as the rest of the app) ─────────────────
+const _CH_FIREBASE_CFG = {
+  apiKey:            'AIzaSyDnEEYamIVYfn7l6sPPS1Dp2fWJE34OXlI',
+  authDomain:        'avenora-6e147.firebaseapp.com',
+  projectId:         'avenora-6e147',
+  storageBucket:     'avenora-6e147.firebasestorage.app',
+  messagingSenderId: '389692647062',
+  appId:             '1:389692647062:web:6a2dd06ade8bc92d3e84b7',
+};
+
+const _CH_SDK_VER = '10.12.2';
 
 // ── Init ──────────────────────────────────────────────────────────────────
 async function _chInit() {
-  // Resolve Firebase Firestore + module functions from the parent SPA's Firebase instance
-  try {
-    _ch.db       = await window.AvenoraFirebase.getFirestore();
-    _ch.fsModule = await window.AvenoraFirebase._loadModuleFirestore();
-  } catch (e) {
-    console.warn('[Channel] Firestore unavailable, using REST fallback', e.message);
-  }
-
   // Resolve API base
   _ch.apiBase = (window.LU_CONFIG && window.LU_CONFIG.apiUrl) || null;
 
   _chShowState('loading');
-  _chSubscribeNowPlaying();
+
+  // Try to get Firestore — first attempt: use the parent's already-initialized
+  // instance to avoid creating a duplicate Firebase App.
+  let dbReady = false;
+  try {
+    if (window.AvenoraFirebase) {
+      _ch.db       = await window.AvenoraFirebase.getFirestore();
+      _ch.fsModule = await window.AvenoraFirebase._loadModuleFirestore();
+      if (_ch.db && _ch.fsModule && typeof _ch.fsModule.onSnapshot === 'function') {
+        dbReady = true;
+      }
+    }
+  } catch (e) {
+    console.warn('[Channel] AvenoraFirebase Firestore unavailable:', e.message);
+  }
+
+  // Second attempt: initialize directly from CDN (no dependency on AvenoraFirebase).
+  // This is the reliable path that works even if AvenoraFirebase hasn't finished
+  // its async setup when this page loads.
+  if (!dbReady) {
+    try {
+      const appMod = await import(
+        `https://www.gstatic.com/firebasejs/${_CH_SDK_VER}/firebase-app.js`
+      );
+      const fsMod = await import(
+        `https://www.gstatic.com/firebasejs/${_CH_SDK_VER}/firebase-firestore.js`
+      );
+      _ch.fsModule = fsMod;
+
+      // Reuse the existing app if already initialized (prevents "duplicate app" error)
+      const existingApp = appMod.getApps().length ? appMod.getApp() : null;
+      const app = existingApp || appMod.initializeApp(_CH_FIREBASE_CFG, 'channel-viewer');
+      _ch.db = fsMod.getFirestore(app);
+      dbReady = true;
+      console.info('[Channel] Firestore initialized directly from CDN');
+    } catch (e2) {
+      console.warn('[Channel] Direct Firestore init failed, using REST fallback:', e2.message);
+    }
+  }
+
+  if (dbReady) {
+    _chSubscribeNowPlaying();
+  } else {
+    // Last resort: REST polling
+    _chPollNowPlaying();
+  }
 
   // Return cleanup function
   return () => {
-    if (typeof _ch.unsub === 'function') { try { _ch.unsub(); } catch (_) {} }
+    if (typeof _ch.unsub === 'function') { try { _ch.unsub(); } catch (_) {} _ch.unsub = null; }
     _chStopAudio();
     _chStopSlideshow();
     cancelAnimationFrame(_ch.progressRaf);
-    if (_ch.hls) { try { _ch.hls.destroy(); } catch (_) {} }
+    if (_ch.hls) { try { _ch.hls.destroy(); } catch (_) {} _ch.hls = null; }
+    clearTimeout(_ch.pollTimer);
+    clearTimeout(_ch._retryTimer);
   };
 }
 
 // ── Firestore subscription ────────────────────────────────────────────────
 function _chSubscribeNowPlaying() {
   if (!_ch.db || !_ch.fsModule) {
-    // Fallback: poll the REST API every 10s
     _chPollNowPlaying();
     return;
   }
 
   try {
     const { doc, onSnapshot } = _ch.fsModule;
-    if (!doc || !onSnapshot) throw new Error('Firestore doc/onSnapshot not available');
+    if (typeof doc !== 'function' || typeof onSnapshot !== 'function') {
+      throw new Error('Firestore doc/onSnapshot not available');
+    }
 
     _ch.unsub = onSnapshot(
       doc(_ch.db, 'channelNowPlaying', 'avenora'),
       snap => {
+        // Reset retry counter on successful snapshot
+        _ch._retryCount = 0;
+        clearTimeout(_ch._retryTimer);
+
         if (!snap.exists()) {
-          _chRenderState({ status: 'OFFLINE' });
+          // Document doesn't exist yet — channel may be starting up.
+          // Show loading instead of offline; poll the API for authoritative status.
+          _chShowState('loading');
+          _chSetText('ch-np-title', 'Connecting…');
+          // Fall back to polling in case document never appears
+          if (!_ch._pollMode) {
+            _ch._pollMode = true;
+            setTimeout(_chPollNowPlaying, 5_000);
+          }
           return;
         }
+        _ch._pollMode = false;
         _chRenderState(snap.data());
       },
       err => {
         console.warn('[Channel] Firestore snapshot error:', err.message);
-        // Fall back to polling
-        setTimeout(_chPollNowPlaying, 5000);
+        // Exponential backoff retry (capped at 60s)
+        _ch._retryCount++;
+        const delay = Math.min(5_000 * Math.pow(2, _ch._retryCount - 1), 60_000);
+        _ch._retryTimer = setTimeout(() => {
+          // Re-subscribe
+          if (typeof _ch.unsub === 'function') { try { _ch.unsub(); } catch (_) {} }
+          _chSubscribeNowPlaying();
+        }, delay);
+        // Meanwhile poll the REST API
+        _chPollNowPlaying();
       }
     );
   } catch (e) {
@@ -261,36 +365,66 @@ function _chSubscribeNowPlaying() {
 }
 
 async function _chPollNowPlaying() {
+  // Clear any existing poll timer to avoid duplicate polling
+  clearTimeout(_ch.pollTimer);
+
   try {
     const base = _ch.apiBase || '/api';
-    const res  = await fetch(base + '/channel/now-playing');
-    const data = await res.json();
-    if (data.success && data.channel) {
-      _chRenderState(data.channel);
+    const res  = await fetch(base + '/channel/now-playing', {
+      cache: 'no-store',
+      signal: AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined,
+    });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.success && data.channel) {
+        _chRenderState(data.channel);
+        // If channel is ONLINE/PLAYING via REST, switch back to Firestore subscription
+        // only if we don't already have one running.
+        if (!_ch.unsub && _ch.db && _ch.fsModule) {
+          _chSubscribeNowPlaying();
+        }
+      } else {
+        // API returned success:false or no channel — might just be starting up
+        _chRenderState({ status: 'ONLINE', running: false });
+      }
     } else {
-      _chRenderState({ status: 'OFFLINE' });
+      // HTTP error — keep current state, show reconnecting
+      _chShowReconnecting();
     }
   } catch (e) {
-    _chRenderState({ status: 'OFFLINE' });
+    _chShowReconnecting();
   }
+
   // Poll again in 10s
-  setTimeout(_chPollNowPlaying, 10_000);
+  _ch.pollTimer = setTimeout(_chPollNowPlaying, 10_000);
+}
+
+// ── Reconnecting state ────────────────────────────────────────────────────
+function _chShowReconnecting() {
+  // Only switch to loading if we're already in loading/standby (not mid-playback)
+  const current = _ch.status;
+  if (!current || current === 'OFFLINE' || current === 'LOADING') {
+    _chShowState('loading');
+    _chSetText('ch-np-title', 'Reconnecting…');
+  }
 }
 
 // ── Render state ──────────────────────────────────────────────────────────
 function _chRenderState(ch) {
   if (!ch) return;
 
-  const status = (ch.status || 'OFFLINE').toUpperCase();
+  const status = (ch.status || '').toUpperCase();
   const type   = (ch.programType || '').toUpperCase();
+
   // Cache for tap-to-play handler which runs outside this function
+  _ch.status      = status;
   _ch.programType = type;
 
   // Update on-air badge
   const onairEl = document.getElementById('ch-onair-badge');
   const onairLabelEl = document.getElementById('ch-onair-label');
   if (onairEl) {
-    const isOnAir = status !== 'OFFLINE' && ch.running;
+    const isOnAir = status !== 'OFFLINE' && ch.running && status !== 'ONLINE';
     onairEl.classList.toggle('hidden', !isOnAir);
     if (onairLabelEl) {
       onairLabelEl.textContent = type === 'LIVE_CAMERA' ? 'LIVE' : 'ON AIR';
@@ -298,7 +432,7 @@ function _chRenderState(ch) {
   }
 
   // Update info panel
-  _chSetText('ch-np-title',  ch.programTitle || '—');
+  _chSetText('ch-np-title',  ch.programTitle || (ch.running ? 'Loading…' : '—'));
   _chSetText('ch-np-artist', ch.artist || '');
   _chSetText('ch-np-type',   _chTypeBadge(type));
 
@@ -335,12 +469,20 @@ function _chRenderState(ch) {
 
   // ── Route to correct player ───────────────────────────────────────────
 
-  if (status === 'OFFLINE' || !ch.running) {
+  if (status === 'OFFLINE') {
     _chShowState('offline');
     _chStopAudio();
     return;
   }
 
+  // Channel is running but no current item scheduled yet
+  if (!ch.running || (!type && !ch.programTitle)) {
+    _chShowState('standby');
+    _chStopAudio();
+    return;
+  }
+
+  // Channel has content — route to player
   switch (type) {
     case 'LIVE_CAMERA':
       _chShowLive(ch);
@@ -360,7 +502,9 @@ function _chRenderState(ch) {
       _chShowSlideshow(ch);
       break;
     default:
-      _chShowState('offline');
+      // Unknown type but channel is running — show standby, not offline
+      _chShowState('standby');
+      break;
   }
 }
 
@@ -374,7 +518,7 @@ function _chShowLive(ch) {
   const unavailEl = document.getElementById('ch-live-no-mediamtx');
   if (!videoEl) return;
 
-  const hlsUrl = ch.mediaUrl; // HLS URL from the now-playing doc
+  const hlsUrl = ch.mediaUrl;
 
   if (!hlsUrl) {
     if (videoEl) videoEl.style.display = 'none';
@@ -385,11 +529,9 @@ function _chShowLive(ch) {
   if (unavailEl) unavailEl.style.display = 'none';
   videoEl.style.display = '';
 
-  // If url hasn't changed, don't reload
   if (_ch._liveHlsUrl === hlsUrl) return;
   _ch._liveHlsUrl = hlsUrl;
 
-  // Destroy any previous HLS instance
   if (_ch.hls) { try { _ch.hls.destroy(); } catch (_) {} _ch.hls = null; }
 
   if (window.Hls && window.Hls.isSupported()) {
@@ -398,6 +540,12 @@ function _chShowLive(ch) {
     _ch.hls.attachMedia(videoEl);
     _ch.hls.on(window.Hls.Events.MANIFEST_PARSED, () => {
       videoEl.play().catch(() => { _chShowTapToPlay(); });
+    });
+    _ch.hls.on(window.Hls.Events.ERROR, (ev, data) => {
+      if (data.fatal) {
+        console.warn('[Channel] HLS fatal error:', data.type, data.details);
+        _chShowTapToPlay();
+      }
     });
   } else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
     videoEl.src = hlsUrl;
@@ -414,19 +562,34 @@ function _chShowVideo(ch) {
   const videoEl = document.getElementById('ch-video-vod');
   if (!videoEl || !ch.mediaUrl) return;
 
-  if (videoEl.src !== ch.mediaUrl) {
-    const seekTo = ch.elapsed > 5 && ch.duration > 0 && ch.elapsed < ch.duration - 5
-      ? ch.elapsed : 0;
-    videoEl.src  = ch.mediaUrl;
-    videoEl.load();
-    if (seekTo > 0) {
-      videoEl.addEventListener('loadedmetadata', () => {
-        if (isFinite(videoEl.duration)) videoEl.currentTime = Math.min(seekTo, videoEl.duration - 2);
-      }, { once: true });
-    }
-    videoEl.play().catch(() => { _chShowTapToPlay(); });
+  // Don't reload the same URL
+  if (_ch._vodUrl === ch.mediaUrl) return;
+  _ch._vodUrl = ch.mediaUrl;
+
+  const seekTo = ch.elapsed > 5 && ch.duration > 0 && ch.elapsed < ch.duration - 5
+    ? ch.elapsed : 0;
+  videoEl.src  = ch.mediaUrl;
+  videoEl.load();
+
+  videoEl.onerror = () => {
+    console.warn('[Channel] Video load error:', ch.mediaUrl);
+    // Don't show offline — show standby and wait for next state update
+    _ch._vodUrl = null;
+    _chShowState('standby');
+  };
+
+  if (seekTo > 0) {
+    videoEl.addEventListener('loadedmetadata', () => {
+      if (isFinite(videoEl.duration)) videoEl.currentTime = Math.min(seekTo, videoEl.duration - 2);
+    }, { once: true });
   }
-  videoEl.addEventListener('ended', () => { /* engine will advance */ }, { once: true });
+  videoEl.play().catch(() => { _chShowTapToPlay(); });
+  // When video ends, go to standby and wait for server to advance
+  videoEl.addEventListener('ended', () => {
+    _ch._vodUrl = null;
+    _chShowState('standby');
+    _chSetText('ch-np-title', 'Loading next…');
+  }, { once: true });
 }
 
 // ── Player: Audio / Music ─────────────────────────────────────────────────
@@ -445,48 +608,202 @@ function _chShowAudio(ch) {
     artEl.innerHTML = '<div class="ch-audio-artwork-placeholder">♪</div>';
   }
 
-  const audioEl = document.getElementById('ch-audio-el');
-  if (!audioEl) return;
+  // ── Client-side track queue for MUSIC items with tracks[] array ────────
+  // When the server sends a MUSIC item with a tracks[] array, build a local
+  // queue and advance through it automatically — don't wait for the server
+  // to publish a new now-playing for each individual track.
+  const itemId = ch.mediaId || ch.programTitle;
+  if (ch.tracks && ch.tracks.length > 0 && _ch._trackItemId !== itemId) {
+    // New track set — build client queue
+    _ch._trackItemId = itemId;
+    _ch.trackQueue   = ch.tracks.filter(t => t.url);
+    _ch.trackIdx     = 0;
+    _ch.trackRetries = 0;
 
-  if (!ch.mediaUrl) return;
-
-  if (_ch._audioUrl !== ch.mediaUrl) {
-    _ch._audioUrl = ch.mediaUrl;
-    audioEl.src   = ch.mediaUrl;
-    audioEl.volume = _ch.volume;
-    audioEl.load();
-
-    // Seek to synchronized position
-    if (ch.elapsed > 2 && ch.duration > 0 && ch.elapsed < ch.duration - 2) {
-      audioEl.addEventListener('loadedmetadata', () => {
-        if (isFinite(audioEl.duration)) {
-          audioEl.currentTime = Math.min(ch.elapsed, audioEl.duration - 1);
+    // If server sends elapsed, seek into the queue to find the correct track
+    if (ch.elapsed > 0 && ch.elapsed < (ch.duration || 0)) {
+      let acc = 0;
+      for (let i = 0; i < _ch.trackQueue.length; i++) {
+        const dur = _ch.trackQueue[i].duration || 180;
+        if (acc + dur > ch.elapsed) {
+          _ch.trackIdx = i;
+          break;
         }
-      }, { once: true });
+        acc += dur;
+      }
     }
 
-    audioEl.play().then(() => {
-      _ch.audioPlaying = true;
-      _chSetPlayIcon(true);
-      _chStartWaveform();
-    }).catch(() => {
-      _ch.audioPlaying = false;
-      _chSetPlayIcon(false);
-      _chStopWaveform();
-      _chShowTapToPlay();
-    });
+    _chPlayQueuedTrack(_ch.trackQueue[_ch.trackIdx], ch.elapsed);
+    return;
+  }
 
-    audioEl.addEventListener('ended', _chOnAudioEnded, { once: true });
-    audioEl.addEventListener('timeupdate', _chUpdateAudioProgress);
+  // Single-track mode: a single mediaUrl without a tracks[] array
+  const audioEl = document.getElementById('ch-audio-el');
+  if (!audioEl || !ch.mediaUrl) return;
+
+  if (_ch._audioUrl !== ch.mediaUrl) {
+    _chPlaySingleAudio(ch.mediaUrl, ch.elapsed, ch.duration);
   }
 }
 
-function _chOnAudioEnded() {
-  // The server engine will publish the next track within seconds via Firestore.
-  // We just stop local playback and wait.
+/** Play an individual track from the client-side track queue. */
+function _chPlayQueuedTrack(track, serverElapsed) {
+  if (!track || !track.url) {
+    // Skip to next
+    _chAdvanceTrackQueue();
+    return;
+  }
+
+  const audioEl = document.getElementById('ch-audio-el');
+  if (!audioEl) return;
+
+  // Update now-playing UI for this track
+  _chSetText('ch-audio-title',  track.title  || '—');
+  _chSetText('ch-audio-artist', track.artist || '');
+  _chSetText('ch-np-title',     track.title  || '—');
+  _chSetText('ch-np-artist',    track.artist || '');
+  _chSetText('ch-np-type',      '🎵 MUSIC');
+
+  const artEl = document.getElementById('ch-audio-artwork');
+  if (artEl && track.coverArt) {
+    artEl.innerHTML = `<img src="${_esc(track.coverArt)}" alt="${_esc(track.title || '')}" class="ch-audio-artwork-img">`;
+  } else if (artEl) {
+    artEl.innerHTML = '<div class="ch-audio-artwork-placeholder">♪</div>';
+  }
+
+  _ch._audioUrl = track.url;
+  audioEl.src   = track.url;
+  audioEl.volume = _ch.volume;
+  audioEl.load();
+
+  // Seek if this is the first track and we have server elapsed context
+  const seekTo = (_ch.trackIdx === 0 && serverElapsed > 2) ? serverElapsed : 0;
+  if (seekTo > 0) {
+    audioEl.addEventListener('loadedmetadata', () => {
+      if (isFinite(audioEl.duration)) {
+        audioEl.currentTime = Math.min(seekTo, audioEl.duration - 1);
+      }
+    }, { once: true });
+  }
+
+  audioEl.onerror = () => {
+    console.warn('[Channel] Audio load error (queued):', track.url);
+    _ch.trackRetries++;
+    if (_ch.trackRetries >= 2) {
+      _ch.trackRetries = 0;
+      _chAdvanceTrackQueue();
+    } else {
+      // Retry after 2s
+      setTimeout(() => _chPlayQueuedTrack(track, 0), 2_000);
+    }
+  };
+
+  audioEl.play().then(() => {
+    _ch.audioPlaying = true;
+    _ch.trackRetries = 0;
+    _chSetPlayIcon(true);
+    _chStartWaveform();
+  }).catch((err) => {
+    // Autoplay blocked
+    _ch.audioPlaying = false;
+    _chSetPlayIcon(false);
+    _chStopWaveform();
+    // Only show tap-to-play if it's an autoplay policy error
+    if (err && err.name === 'NotAllowedError') {
+      _chShowTapToPlay();
+    }
+  });
+
+  // When this track ends, advance to the next
+  audioEl.addEventListener('ended', _chOnQueuedTrackEnded, { once: true });
+  audioEl.addEventListener('timeupdate', _chUpdateAudioProgress);
+}
+
+function _chOnQueuedTrackEnded() {
+  _ch.trackRetries = 0;
+  _ch._audioUrl = null;
+  _chAdvanceTrackQueue();
+}
+
+function _chAdvanceTrackQueue() {
+  const audioEl = document.getElementById('ch-audio-el');
+  if (audioEl) {
+    audioEl.pause();
+    audioEl.removeEventListener('timeupdate', _chUpdateAudioProgress);
+  }
+  _ch.audioPlaying = false;
+  _chSetPlayIcon(false);
+  _chStopWaveform();
+
+  _ch.trackIdx++;
+
+  if (_ch.trackIdx >= _ch.trackQueue.length) {
+    // All tracks played — loop back to start
+    _ch.trackIdx = 0;
+    // Clear the itemId so a fresh server state can replace the queue
+    // if the server advances to a different program
+    _ch._trackItemId = null;
+    _ch._audioUrl = null;
+    // Show standby briefly; the Firestore subscription will push the next state
+    _chShowState('standby');
+    _chSetText('ch-np-title', 'Loading next program…');
+    return;
+  }
+
+  const next = _ch.trackQueue[_ch.trackIdx];
+  _chPlayQueuedTrack(next, 0);
+}
+
+/** Play a single mediaUrl (no tracks[] array). */
+function _chPlaySingleAudio(url, elapsed, duration) {
+  const audioEl = document.getElementById('ch-audio-el');
+  if (!audioEl || !url) return;
+
+  _ch._audioUrl = url;
+  audioEl.src   = url;
+  audioEl.volume = _ch.volume;
+  audioEl.load();
+
+  audioEl.onerror = () => {
+    console.warn('[Channel] Single audio load error:', url);
+    _ch._audioUrl = null;
+    // Don't show offline — wait for server update
+    _chShowState('standby');
+  };
+
+  if (elapsed > 2 && duration > 0 && elapsed < duration - 2) {
+    audioEl.addEventListener('loadedmetadata', () => {
+      if (isFinite(audioEl.duration)) {
+        audioEl.currentTime = Math.min(elapsed, audioEl.duration - 1);
+      }
+    }, { once: true });
+  }
+
+  audioEl.play().then(() => {
+    _ch.audioPlaying = true;
+    _chSetPlayIcon(true);
+    _chStartWaveform();
+  }).catch((err) => {
+    _ch.audioPlaying = false;
+    _chSetPlayIcon(false);
+    _chStopWaveform();
+    if (err && err.name === 'NotAllowedError') {
+      _chShowTapToPlay();
+    }
+  });
+
+  audioEl.addEventListener('ended', _chOnSingleAudioEnded, { once: true });
+  audioEl.addEventListener('timeupdate', _chUpdateAudioProgress);
+}
+
+function _chOnSingleAudioEnded() {
+  // Single-track item finished — show standby and wait for server to publish next item.
   _chSetPlayIcon(false);
   _chStopWaveform();
   _ch.audioPlaying = false;
+  _ch._audioUrl    = null;
+  _chShowState('standby');
+  _chSetText('ch-np-title', 'Loading next program…');
 }
 
 window.chToggleAudio = function() {
@@ -513,16 +830,22 @@ window.chSetVolume = function(val) {
 };
 
 window.chTapToPlay = function() {
-  document.getElementById('ch-tap-to-play').style.display = 'none';
-  const audioEl = document.getElementById('ch-audio-el');
+  const tapEl = document.getElementById('ch-tap-to-play');
+  if (tapEl) tapEl.style.display = 'none';
+  const audioEl   = document.getElementById('ch-audio-el');
   const videoLive = document.getElementById('ch-video-live');
-  const videoVod = document.getElementById('ch-video-vod');
+  const videoVod  = document.getElementById('ch-video-vod');
   const t = (_ch.programType || '').toUpperCase();
   if (audioEl && (t === 'AUDIO' || t === 'MUSIC')) {
-    audioEl.play().then(() => { _ch.audioPlaying = true; _chSetPlayIcon(true); _chStartWaveform(); }).catch(() => {});
+    audioEl.muted = false;
+    audioEl.play().then(() => {
+      _ch.audioPlaying = true;
+      _chSetPlayIcon(true);
+      _chStartWaveform();
+    }).catch(() => {});
   }
-  if (videoLive) videoLive.play().catch(() => {});
-  if (videoVod)  videoVod.play().catch(() => {});
+  if (videoLive) { videoLive.muted = false; videoLive.play().catch(() => {}); }
+  if (videoVod)  { videoVod.muted  = false; videoVod.play().catch(() => {}); }
 };
 
 function _chUpdateAudioProgress() {
@@ -557,17 +880,14 @@ function _chShowSlideshow(ch) {
   const perSecs     = ch.perImageSecs || 10;
   const totalImages = images.length;
 
-  // Calculate which slide should be showing based on server elapsed time
-  const elapsed = ch.elapsed || 0;
+  const elapsed  = ch.elapsed || 0;
   const slideIdx = Math.min(Math.floor(elapsed / perSecs), totalImages - 1);
 
-  // Show slide counter
   const counter = document.getElementById('ch-slide-counter');
   const prog    = document.getElementById('ch-slide-progress');
   if (counter) counter.style.display = '';
   if (prog)    prog.style.display = '';
 
-  // Only restart if the image set changed
   const imgKey = images.map(i => i.url).join('|');
   if (_ch._slideshowKey === imgKey && _ch.slideIdx === slideIdx) return;
 
@@ -577,12 +897,11 @@ function _chShowSlideshow(ch) {
   _ch.images        = images;
 
   function showSlide(idx) {
-    const img  = images[idx];
+    const img   = images[idx];
     const imgEl = document.getElementById('ch-image-el');
     if (imgEl && img) imgEl.src = img.url;
-    _chSetText('ch-slide-num', String(idx + 1));
+    _chSetText('ch-slide-num',   String(idx + 1));
     _chSetText('ch-slide-total', String(totalImages));
-    // Progress bar
     const fill = document.getElementById('ch-slide-fill');
     if (fill) {
       fill.style.transition = 'none';
@@ -596,15 +915,16 @@ function _chShowSlideshow(ch) {
 
   showSlide(_ch.slideIdx);
 
-  // Calculate remaining time in current slide
   const slideElapsed = elapsed % perSecs;
   const firstDelay   = Math.max(0, (perSecs - slideElapsed) * 1000);
 
   _ch.slideTimer = setTimeout(function advance() {
     _ch.slideIdx++;
     if (_ch.slideIdx >= totalImages) {
-      // Slideshow done — engine will advance the channel
       _chStopSlideshow();
+      // Show standby and wait for server to advance the program
+      _chShowState('standby');
+      _chSetText('ch-np-title', 'Loading next program…');
       return;
     }
     showSlide(_ch.slideIdx);
@@ -623,9 +943,11 @@ function _chStopAudio() {
   if (audioEl) {
     audioEl.pause();
     audioEl.removeEventListener('timeupdate', _chUpdateAudioProgress);
+    audioEl.removeEventListener('ended', _chOnSingleAudioEnded);
+    audioEl.removeEventListener('ended', _chOnQueuedTrackEnded);
   }
   _ch.audioPlaying = false;
-  _ch._audioUrl = null;
+  _ch._audioUrl    = null;
   _chStopWaveform();
 }
 
@@ -646,7 +968,7 @@ function _chSetPlayIcon(playing) {
 
 // ── Progress helpers ──────────────────────────────────────────────────────
 function _chUpdateInfoProgress(elapsed, duration) {
-  _chSetText('ch-np-elapsed', _chFmtTime(elapsed));
+  _chSetText('ch-np-elapsed',  _chFmtTime(elapsed));
   _chSetText('ch-np-duration', duration > 0 ? _chFmtTime(duration) : '—');
   const fill = document.getElementById('ch-np-fill');
   if (fill && duration > 0) {
@@ -657,14 +979,15 @@ function _chUpdateInfoProgress(elapsed, duration) {
 }
 
 // ── UI state routing ──────────────────────────────────────────────────────
-const CH_STATES = ['offline', 'loading', 'live', 'video', 'audio', 'image'];
+const CH_STATES = ['offline', 'loading', 'standby', 'live', 'video', 'audio', 'image'];
 
 function _chShowState(state) {
   CH_STATES.forEach(s => {
     const el = document.getElementById('ch-state-' + s);
     if (el) el.style.display = s === state ? '' : 'none';
   });
-  document.getElementById('ch-tap-to-play').style.display = 'none';
+  const tapEl = document.getElementById('ch-tap-to-play');
+  if (tapEl) tapEl.style.display = 'none';
 }
 
 function _chShowTapToPlay() {
@@ -674,6 +997,8 @@ function _chShowTapToPlay() {
 
 // ── Misc helpers ─────────────────────────────────────────────────────────
 window.chRefresh = function() {
+  _ch._pollMode = false;
+  _chShowState('loading');
   _chPollNowPlaying();
 };
 

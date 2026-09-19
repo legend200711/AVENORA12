@@ -1,5 +1,5 @@
 /**
- * AVENORA — Service Worker v5
+ * AVENORA — Service Worker v21
  *
  * Deployment base: /AVENORA12/
  * GitHub Pages URL: https://legend200711.github.io/AVENORA12/
@@ -11,6 +11,8 @@
  *   • On activate: delete ALL old Avenora and Shadow Nexus caches.
  *   • On install:  self.skipWaiting() so the new SW takes over immediately.
  *   • On activate: clients.claim() so open pages get the new SW immediately.
+ *   • Navigation requests: always served from cache (index.html app shell)
+ *     so the SPA works offline and refreshes don't break the app.
  */
 
 // ── Firebase Cloud Messaging background handler ─────────────────────────────
@@ -33,8 +35,8 @@ _messaging.onBackgroundMessage((payload) => {
   const title = payload.notification?.title || 'AVENORA';
   const options = {
     body:     payload.notification?.body || 'You have a new notification',
-    icon:     '/AVENORA12/icons/icon-192.svg',
-    badge:    '/AVENORA12/icons/icon-72.svg',
+    icon:     '/AVENORA12/icons/icon-192.png',
+    badge:    '/AVENORA12/icons/icon-192.png',
     data:     { url: payload.data?.url || '/AVENORA12/index.html' },
     tag:      payload.data?.tag || 'avenora-notification',
     renotify: false,
@@ -44,8 +46,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v20';
-const CACHE_NAME  = 'avenora-cache-v20';
+const SW_VERSION  = 'v21';
+const CACHE_NAME  = 'avenora-cache-v21';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -71,6 +73,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v17', // v17 — evict: Cloud Stream auth gate, queue advance, network retry fixes
   'avenora-cache-v18', // v18 — evict: 24-Hour Channel full implementation
   'avenora-cache-v19', // v19 — evict: missing channel/radio pages in cache list
+  'avenora-cache-v20', // v20 — evict: SVG-only icons, channel offline fix
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
@@ -99,6 +102,8 @@ const STATIC_ASSETS = [
   `${BASE}/src/styles/customize.css`,
   `${BASE}/src/styles/theme-control.css`,
   `${BASE}/src/styles/dj-cosmic.css`,
+  `${BASE}/src/styles/radio.css`,
+  `${BASE}/src/styles/channel.css`,
   `${BASE}/src/store/state.js`,
   `${BASE}/src/utils/ui.js`,
   `${BASE}/src/services/api.js`,
@@ -134,6 +139,11 @@ const STATIC_ASSETS = [
   `${BASE}/src/pages/profile.js`,
   `${BASE}/src/pages/settings.js`,
   `${BASE}/src/pages/customize.js`,
+  // PNG icons (required for Chrome PWA installability)
+  `${BASE}/icons/icon-192.png`,
+  `${BASE}/icons/icon-512.png`,
+  `${BASE}/icons/apple-touch-icon.png`,
+  // SVG icons (supplemental)
   `${BASE}/icons/icon-72.svg`,
   `${BASE}/icons/icon-96.svg`,
   `${BASE}/icons/icon-128.svg`,
@@ -165,6 +175,8 @@ function shouldNeverCache(url) {
   // Analytics / tracking
   if (u.hostname.includes('google-analytics.com')) return true;
   if (u.hostname.includes('analytics.google.com')) return true;
+  // Render backend
+  if (u.hostname.includes('onrender.com')) return true;
   return false;
 }
 
@@ -172,7 +184,18 @@ function shouldNeverCache(url) {
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll(STATIC_ASSETS))
+      .then((cache) => {
+        // Use individual requests with {cache: 'no-cache'} so that GitHub Pages
+        // CDN doesn't serve stale files to the SW during install.
+        return Promise.allSettled(
+          STATIC_ASSETS.map((url) =>
+            cache.add(new Request(url, { cache: 'no-cache' })).catch((err) => {
+              // Log but do not abort install if a non-critical asset fails
+              console.warn(`[SW ${SW_VERSION}] Failed to cache: ${url}`, err.message);
+            })
+          )
+        );
+      })
       .then(() => {
         console.log(`[SW ${SW_VERSION}] Installed — cache: ${CACHE_NAME}`);
         // Take over immediately; do not wait for old SW to become idle.
@@ -222,7 +245,42 @@ self.addEventListener('fetch', (event) => {
   // Never intercept dynamic/API/Firebase traffic
   if (shouldNeverCache(url)) return;
 
-  // Cache-first for static assets; network fallback with cache store
+  // ── Navigation requests (document loads / page refreshes) ──────────────────
+  // For any navigation within the AVENORA scope, return the cached index.html
+  // (app shell). This ensures that refreshing on any "page" (e.g. after a
+  // push-state navigation or direct URL) still loads the SPA — not a 404.
+  //
+  // AVENORA uses hash routing so real navigation is already handled by the SPA,
+  // but some browsers (e.g. installed PWA with standalone mode) may issue a
+  // navigation request for the full URL on cold start.
+  //
+  // We serve from cache-first for the shell, falling back to network, then
+  // to the offline page if both fail.
+  if (event.request.destination === 'document' ||
+      event.request.mode === 'navigate') {
+    event.respondWith(
+      caches.match(`${BASE}/index.html`).then((cached) => {
+        if (cached) {
+          // Refresh the cached shell in the background so it stays up to date.
+          fetch(new Request(`${BASE}/index.html`, { cache: 'no-cache' }))
+            .then((response) => {
+              if (response && response.status === 200) {
+                caches.open(CACHE_NAME).then((c) => c.put(`${BASE}/index.html`, response));
+              }
+            })
+            .catch(() => {});
+          return cached;
+        }
+        // Not yet cached — fetch from network
+        return fetch(event.request).catch(() =>
+          caches.match(`${BASE}/offline.html`)
+        );
+      })
+    );
+    return;
+  }
+
+  // ── Static asset requests (cache-first with network fallback) ──────────────
   event.respondWith(
     caches.match(event.request).then((cached) => {
       if (cached) return cached;
@@ -238,14 +296,8 @@ self.addEventListener('fetch', (event) => {
         caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
         return response;
       }).catch(() => {
-        // Offline fallback for navigation requests
-        if (event.request.destination === 'document') {
-          return (
-            caches.match(`${BASE}/offline.html`) ||
-            caches.match(`${BASE}/index.html`)
-          );
-        }
-        return new Response('Offline', {
+        // Offline fallback for sub-resources: return nothing (browser handles gracefully)
+        return new Response('', {
           status: 503,
           statusText: 'Service Unavailable',
         });
@@ -312,7 +364,6 @@ async function syncOfflinePosts() {
   let apiBase = null;
   for (const client of clients) {
     try {
-      // Post a message and wait for the client to reply with the API URL
       const ch = new MessageChannel();
       const reply = await new Promise((resolve) => {
         ch.port1.onmessage = (e) => resolve(e.data);
@@ -341,7 +392,6 @@ async function syncOfflinePosts() {
       });
 
       if (res.ok) {
-        // Remove from offline store on success
         await new Promise((resolve, reject) => {
           const tx    = db.transaction('offline-posts', 'readwrite');
           const store = tx.objectStore('offline-posts');
@@ -369,8 +419,8 @@ self.addEventListener('push', (event) => {
   const title = data.title || 'AVENORA';
   const options = {
     body:     data.body || 'You have a new notification',
-    icon:     '/AVENORA12/icons/icon-192.svg',
-    badge:    '/AVENORA12/icons/icon-72.svg',
+    icon:     '/AVENORA12/icons/icon-192.png',
+    badge:    '/AVENORA12/icons/icon-192.png',
     data:     { url: data.url || '/AVENORA12/index.html' },
     tag:      data.tag || 'avenora-notification',
     renotify: false,

@@ -88,6 +88,10 @@ router.get('/now-playing', optionalAuth, async (req, res, next) => {
       coverArt:      data.coverArt,
       images:        data.images,
       perImageSecs:  data.perImageSecs,
+      // Tracks array for MUSIC/AUDIO multi-track items (client-side queue)
+      tracks:        data.tracks || null,
+      shuffle:       data.shuffle || false,
+      repeat:        data.repeat  !== false,
       live:          data.live,
       streamId:      data.live ? data.streamId : null, // only expose streamId when live
       startedAt:     data.startedAt,

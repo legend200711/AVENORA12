@@ -18,8 +18,9 @@
 
   <!-- PWA -->
   <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/png" href="icons/icon-192.png">
   <link rel="icon" type="image/svg+xml" href="icons/icon-192.svg">
-  <link rel="apple-touch-icon" href="icons/icon-192.svg">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 
   <!-- Google Fonts: Cinzel (display) + Inter (body) -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -302,10 +303,10 @@
   <script>
     // ── Build / version metadata ──────────────────────────────
     window.AVENORA_BUILD = {
-      version:         '3.6.2',
-      buildTimestamp:  '2026-09-22T00:00:00Z',
-      swVersion:       'v20',
-      swCacheName:     'avenora-cache-v20',
+      version:         '3.7.0',
+      buildTimestamp:  '2026-09-22T12:00:00Z',
+      swVersion:       'v21',
+      swCacheName:     'avenora-cache-v21',
       firebaseProject: 'avenora-6e147',
       basePath:        '/AVENORA12/',
     };
@@ -414,9 +415,68 @@
   <!-- Avenora Companion (Easter egg) — loads after router so auth state is available -->
   <script src="src/components/companion/companion.js"></script>
 
+  <!-- ═══════ PWA INSTALL BANNER ══════════════════════════════════ -->
+  <!--
+    Shown when the browser fires beforeinstallprompt (Chrome / Edge / Samsung
+    Internet on Android). Hidden by default; JS reveals it.
+    On iOS / Safari there is no install prompt API — show instructions instead.
+  -->
+  <div id="pwa-install-hint"
+       style="display:none;position:fixed;bottom:80px;left:50%;transform:translateX(-50%);
+              z-index:9999;background:rgba(4,3,10,0.97);border:1px solid rgba(201,168,76,0.30);
+              border-radius:14px;padding:14px 20px;box-shadow:0 4px 32px rgba(0,0,0,0.6);
+              align-items:center;gap:14px;max-width:340px;width:calc(100% - 40px);"
+       role="dialog" aria-label="Install AVENORA app">
+    <img src="icons/icon-192.png"
+         alt="AVENORA icon"
+         width="40" height="40"
+         style="border-radius:10px;flex-shrink:0"
+         onerror="this.style.display='none'">
+    <div style="flex:1;min-width:0">
+      <div style="font-family:var(--font-display,'Cinzel',serif);font-size:0.82rem;font-weight:700;
+                  letter-spacing:0.12em;color:#f0e8d8;margin-bottom:2px">INSTALL AVENORA</div>
+      <div style="font-size:0.72rem;color:#8a8090;line-height:1.4">Add to your home screen for the full app experience.</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0">
+      <button onclick="avnInstallApp()"
+              style="padding:7px 16px;background:linear-gradient(135deg,#c9a84c,#8a6828);
+                     border:none;border-radius:8px;color:#090807;font-size:0.78rem;
+                     font-weight:700;letter-spacing:0.06em;cursor:pointer;white-space:nowrap">
+        INSTALL
+      </button>
+      <button onclick="document.getElementById('pwa-install-hint').style.display='none'"
+              style="padding:5px 10px;background:transparent;border:1px solid rgba(201,168,76,0.20);
+                     border-radius:6px;color:#8a8090;font-size:0.7rem;cursor:pointer">
+        Not now
+      </button>
+    </div>
+  </div>
+
+  <!-- iOS install instructions (shown for Safari users who can't get beforeinstallprompt) -->
+  <div id="pwa-ios-hint"
+       style="display:none;position:fixed;bottom:80px;left:50%;transform:translateX(-50%);
+              z-index:9999;background:rgba(4,3,10,0.97);border:1px solid rgba(201,168,76,0.25);
+              border-radius:14px;padding:16px 20px;box-shadow:0 4px 32px rgba(0,0,0,0.6);
+              max-width:320px;width:calc(100% - 40px);"
+       role="dialog" aria-label="Install AVENORA on iOS">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <span style="font-family:var(--font-display,'Cinzel',serif);font-size:0.82rem;font-weight:700;
+                   letter-spacing:0.1em;color:#f0e8d8">INSTALL AVENORA</span>
+      <button onclick="document.getElementById('pwa-ios-hint').style.display='none'"
+              style="background:none;border:none;color:#8a8090;cursor:pointer;font-size:1rem;padding:2px 6px">✕</button>
+    </div>
+    <div style="font-size:0.76rem;color:#8a8090;line-height:1.6">
+      Tap <strong style="color:#f0e8d8">Share</strong>
+      <span style="font-size:0.9rem">⬆</span>
+      then <strong style="color:#f0e8d8">Add to Home Screen</strong>
+      <span style="font-size:0.9rem">＋</span>
+      to install AVENORA.
+    </div>
+  </div>
+
   <!-- Service Worker registration + PWA install prompt + SW update handler -->
   <script>
-    // Capture PWA install prompt before it fires
+    // ── PWA install prompt (Android Chrome / Edge / Samsung Internet) ─────────
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       window._pwaInstallPrompt = e;
@@ -428,8 +488,45 @@
       window._pwaInstallPrompt = null;
       const hint = document.getElementById('pwa-install-hint');
       if (hint) hint.style.display = 'none';
+      const ios  = document.getElementById('pwa-ios-hint');
+      if (ios)  ios.style.display  = 'none';
+      console.log('[AVN] PWA installed successfully');
     });
 
+    // Install button handler — triggers browser native install prompt
+    window.avnInstallApp = async function () {
+      const prompt = window._pwaInstallPrompt;
+      if (!prompt) return;
+      try {
+        await prompt.prompt();
+        const choice = await prompt.userChoice;
+        console.log('[AVN] Install prompt result:', choice.outcome);
+        if (choice.outcome === 'accepted') {
+          window._pwaInstallPrompt = null;
+          const hint = document.getElementById('pwa-install-hint');
+          if (hint) hint.style.display = 'none';
+        }
+      } catch (err) {
+        console.warn('[AVN] Install prompt error:', err);
+      }
+    };
+
+    // Show iOS install hint on Safari (no beforeinstallprompt support)
+    (function () {
+      var isIOS       = /iphone|ipad|ipod/i.test(navigator.userAgent);
+      var isSafari    = /^((?!chrome|android).)*safari/i.test(navigator.userAgent);
+      var isStandalone = window.navigator.standalone === true ||
+                         window.matchMedia('(display-mode: standalone)').matches;
+      if (isIOS && isSafari && !isStandalone) {
+        // Delay to avoid showing it immediately on page load
+        setTimeout(function () {
+          var el = document.getElementById('pwa-ios-hint');
+          if (el) el.style.display = '';
+        }, 5000);
+      }
+    })();
+
+    // ── Service Worker registration ────────────────────────────────────────────
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         // Path is relative to this HTML file's location — resolves to
@@ -450,6 +547,19 @@
             if (!document.hidden) {
               window.location.reload();
             }
+          }
+          // Respond to GET_API_URL requests from the SW background sync handler
+          if (event.data?.type === 'GET_API_URL') {
+            // This shouldn't fire here (SW uses MessageChannel ports) but belt-and-suspenders
+          }
+        });
+
+        // Handle API URL requests from service worker background sync
+        navigator.serviceWorker.addEventListener('message', (event) => {
+          if (event.data?.type === 'GET_API_URL' && event.ports?.[0]) {
+            event.ports[0].postMessage({
+              apiUrl: window.LU_CONFIG?.apiUrl || null
+            });
           }
         });
       });
