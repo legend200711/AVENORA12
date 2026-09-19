@@ -46,8 +46,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v21';
-const CACHE_NAME  = 'avenora-cache-v21';
+const SW_VERSION  = 'v22';
+const CACHE_NAME  = 'avenora-cache-v22';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -74,6 +74,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v18', // v18 — evict: 24-Hour Channel full implementation
   'avenora-cache-v19', // v19 — evict: missing channel/radio pages in cache list
   'avenora-cache-v20', // v20 — evict: SVG-only icons, channel offline fix
+  'avenora-cache-v21', // v21 — evict: PWA installability, PNG icons, 404 routing fix
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',

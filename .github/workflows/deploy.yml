@@ -1,4 +1,4 @@
-name: Deploy Avenora to GitHub Pages
+name: Deploy AVENORA to GitHub Pages
 
 on:
   push:
@@ -6,41 +6,59 @@ on:
       - main
   workflow_dispatch:
 
+# Required for GitHub Pages deployment via Actions
 permissions:
   contents: read
   pages: write
   id-token: write
 
+# Only allow one deployment at a time; do NOT cancel in-progress deployments.
 concurrency:
   group: "pages"
   cancel-in-progress: false
 
 jobs:
   deploy:
+    name: Deploy to GitHub Pages
+    runs-on: ubuntu-latest
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
+
     steps:
+      # ── 1. Checkout ────────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Pages
+      # ── 2. Configure Pages ─────────────────────────────────────────────────
+      # enablement: true  → auto-enables GitHub Pages with source=Actions
+      # if it has never been enabled for this repository.
+      - name: Configure GitHub Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
-      - name: Add .nojekyll to prevent Jekyll processing
-        # Belt-and-suspenders: also add .nojekyll inside frontend/ so that if
-        # Jekyll ever runs it won't transform the static app or ignore _prefixed paths.
-        run: touch frontend/.nojekyll
+      # ── 3. Ensure .nojekyll is present ─────────────────────────────────────
+      # Prevents GitHub's Jekyll processor from transforming files or
+      # ignoring any path that starts with an underscore.
+      - name: Add .nojekyll
+        run: |
+          touch frontend/.nojekyll
+          echo "frontend/ contents:"
+          ls -la frontend/
+          echo "frontend/src/styles/ contents:"
+          ls -la frontend/src/styles/
+          echo "index.html present: $(test -f frontend/index.html && echo YES || echo NO)"
 
-      - name: Upload frontend as Pages artifact
+      # ── 4. Upload artifact ─────────────────────────────────────────────────
+      # Packages frontend/ (the real AVENORA app) as the Pages artifact.
+      # No build step required — this is a vanilla JS SPA.
+      - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          # Deploy the frontend/ directory — the real Avenora app entry point.
-          # frontend/index.html is the actual app (not the README).
-          # No build step needed — this is a vanilla JS SPA.
           path: frontend
 
+      # ── 5. Deploy ──────────────────────────────────────────────────────────
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
