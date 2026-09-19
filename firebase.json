@@ -7,25 +7,16 @@
     "rules": "database.rules.json"
   },
   "hosting": {
-    "public": ".",
+    "public": "frontend",
     "ignore": [
       "firebase.json",
-      "firestore.rules",
-      "firestore.indexes.json",
-      "database.rules.json",
-      "storage.rules",
       "**/.*",
-      "**/node_modules/**",
-      "backend/**",
-      "docs/**",
-      "scripts/**",
-      "README.md",
-      ".vapid_private.json"
+      "**/node_modules/**"
     ],
     "rewrites": [
       {
         "source": "**",
-        "destination": "/frontend/index.html"
+        "destination": "/index.html"
       }
     ]
   },

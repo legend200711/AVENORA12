@@ -1,8 +1,9 @@
 /**
- * AVENORA — Service Worker v21
+ * AVENORA — Service Worker v23
  *
- * Deployment base: /AVENORA12/
- * GitHub Pages URL: https://legend200711.github.io/AVENORA12/
+ * Deployment-aware: detects GitHub Pages vs Firebase Hosting automatically.
+ *   GitHub Pages:      https://legend200711.github.io/AVENORA12/  → BASE = /AVENORA12
+ *   Firebase Hosting:  https://<project>.web.app/                 → BASE = (empty string)
  *
  * Rules:
  *   • NEVER cache: API responses, Firebase data, auth responses,
@@ -35,9 +36,9 @@ _messaging.onBackgroundMessage((payload) => {
   const title = payload.notification?.title || 'AVENORA';
   const options = {
     body:     payload.notification?.body || 'You have a new notification',
-    icon:     '/AVENORA12/icons/icon-192.png',
-    badge:    '/AVENORA12/icons/icon-192.png',
-    data:     { url: payload.data?.url || '/AVENORA12/index.html' },
+    icon:     `${self.location.pathname.startsWith('/AVENORA12/') ? '/AVENORA12' : ''}/icons/icon-192.png`,
+    badge:    `${self.location.pathname.startsWith('/AVENORA12/') ? '/AVENORA12' : ''}/icons/icon-192.png`,
+    data:     { url: payload.data?.url || `${self.location.pathname.startsWith('/AVENORA12/') ? '/AVENORA12' : ''}/index.html` },
     tag:      payload.data?.tag || 'avenora-notification',
     renotify: false,
   };
@@ -46,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v22';
-const CACHE_NAME  = 'avenora-cache-v22';
+const SW_VERSION  = 'v23';
+const CACHE_NAME  = 'avenora-cache-v23';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -75,16 +76,25 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v19', // v19 — evict: missing channel/radio pages in cache list
   'avenora-cache-v20', // v20 — evict: SVG-only icons, channel offline fix
   'avenora-cache-v21', // v21 — evict: PWA installability, PNG icons, 404 routing fix
+  'avenora-cache-v22', // v22 — evict: firebase.json public path was wrong (all assets 404'd)
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
   'shadowsocial',
 ];
 
+// ── Deployment base path ──────────────────────────────────────────────────────
+// GitHub Pages serves the app under /AVENORA12/.
+// Firebase Hosting serves it at the domain root /.
+// We detect which host we're on at SW install time.
+// self.location.pathname is the SW script URL path, e.g.:
+//   GitHub Pages:  /AVENORA12/sw.js  → BASE = '/AVENORA12'
+//   Firebase:      /sw.js            → BASE = ''
+const BASE = self.location.pathname.startsWith('/AVENORA12/') ? '/AVENORA12' : '';
+
 // ── Static assets to pre-cache ────────────────────────────────────────────────
-// All paths are relative to the SW scope (/AVENORA12/).
+// All paths are relative to BASE (auto-detected above).
 // Do NOT list API URLs, Firebase URLs, or any runtime-fetched data here.
-const BASE = '/AVENORA12';
 const STATIC_ASSETS = [
   `${BASE}/index.html`,
   `${BASE}/offline.html`,
@@ -420,9 +430,9 @@ self.addEventListener('push', (event) => {
   const title = data.title || 'AVENORA';
   const options = {
     body:     data.body || 'You have a new notification',
-    icon:     '/AVENORA12/icons/icon-192.png',
-    badge:    '/AVENORA12/icons/icon-192.png',
-    data:     { url: data.url || '/AVENORA12/index.html' },
+    icon:     `${BASE}/icons/icon-192.png`,
+    badge:    `${BASE}/icons/icon-192.png`,
+    data:     { url: data.url || `${BASE}/index.html` },
     tag:      data.tag || 'avenora-notification',
     renotify: false,
   };
@@ -431,7 +441,7 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = event.notification.data?.url || '/AVENORA12/index.html';
+  const url = event.notification.data?.url || `${BASE}/index.html`;
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {

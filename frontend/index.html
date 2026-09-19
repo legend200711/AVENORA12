@@ -529,9 +529,13 @@
     // ── Service Worker registration ────────────────────────────────────────────
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
-        // Path is relative to this HTML file's location — resolves to
-        // /AVENORA12/sw.js which is within the /AVENORA12/ scope.
-        navigator.serviceWorker.register('sw.js', { scope: '/AVENORA12/' })
+        // Derive the scope from the page's own path so it works on both:
+        //   GitHub Pages: https://legend200711.github.io/AVENORA12/ → scope /AVENORA12/
+        //   Firebase Hosting: https://<project>.web.app/            → scope /
+        var swScope = location.pathname.startsWith('/AVENORA12/')
+          ? '/AVENORA12/'
+          : '/';
+        navigator.serviceWorker.register('sw.js', { scope: swScope })
           .then((reg) => {
             console.log('[AVN] Service worker registered — scope:', reg.scope);
           })

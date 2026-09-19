@@ -2,14 +2,14 @@
   "name": "AVENORA",
   "short_name": "AVENORA",
   "description": "AVENORA — A place where everyone belongs. Connection, creativity, positivity, and new beginnings.",
-  "start_url": "/AVENORA12/index.html",
-  "scope": "/AVENORA12/",
+  "start_url": "index.html",
+  "scope": "./",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui", "browser"],
   "background_color": "#090807",
   "theme_color": "#090807",
   "orientation": "portrait-primary",
-  "id": "/AVENORA12/",
+  "id": "avenora-app",
   "lang": "en",
   "categories": ["entertainment", "social", "music"],
   "icons": [
@@ -54,25 +54,25 @@
     {
       "name": "AVENORA Feed",
       "short_name": "Feed",
-      "url": "/AVENORA12/index.html#social",
+      "url": "index.html#social",
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     },
     {
       "name": "AVENORA Music",
       "short_name": "Music",
-      "url": "/AVENORA12/index.html#music",
+      "url": "index.html#music",
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     },
     {
       "name": "AVENORA Channel",
       "short_name": "Channel",
-      "url": "/AVENORA12/index.html#channel",
+      "url": "index.html#channel",
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     },
     {
       "name": "AVENORA Arcade",
       "short_name": "Arcade",
-      "url": "/AVENORA12/index.html#arcade",
+      "url": "index.html#arcade",
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     }
   ],
