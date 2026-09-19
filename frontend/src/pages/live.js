@@ -573,6 +573,9 @@ async function _liveRoomInit(container, roomId) {
   let _localStream = null;   // host's camera/mic stream (handed off from setup page)
   let _viewerCountUnsub = null;
   let _streamEnded = false;  // guard — never flip to 'ended' more than once
+  // Channel engine integration state — hoisted so cleanup() can access them
+  let _channelHeartbeatTimer = null;
+  let _channelStreamId = null;
 
   // ── Helper: show the "Stream Ended" overlay exactly once ───────────
   function _showEndedOverlay() {
@@ -715,6 +718,7 @@ async function _liveRoomInit(container, roomId) {
 
     // ── 8. Host controls ─────────────────────────────────────────────
     let _camOn = true, _micOn = true;
+    // Note: _channelHeartbeatTimer and _channelStreamId are declared at function scope above
 
     AVLRoom.toggleCam = function () {
       _camOn = !_camOn;
@@ -732,6 +736,13 @@ async function _liveRoomInit(container, roomId) {
 
     AVLRoom.endLive = async function () {
       if (!confirm('End your live stream?')) return;
+      // Stop channel heartbeat
+      clearInterval(_channelHeartbeatTimer);
+      // Notify channel engine that live has ended
+      if (_channelStreamId) {
+        try { await _avlChannelApi('POST', '/channel/live/stop', { streamId: _channelStreamId }); } catch (_) {}
+        _channelStreamId = null;
+      }
       try {
         await updateDoc(doc(fs, 'liveRooms', roomId), {
           status: 'ended',
@@ -743,6 +754,49 @@ async function _liveRoomInit(container, roomId) {
       navigateTo('live');
     };
 
+    // ── 9. Notify channel engine if host is admin/founder ─────────────
+    // This wires live.js into the 24-hour channel so when an admin goes live
+    // the channel automatically switches to their feed.
+    if (_isHost) {
+      try {
+        const userRole = user?.role || '';
+        if (userRole === 'admin' || userRole === 'founder') {
+          // Create a backend live stream session for the channel engine
+          const sessionRes = await _avlChannelApi('POST', '/live', {
+            title: roomData.title || 'Live Camera',
+            description: 'AVENORA 24-Hour Channel Live',
+            category: 'channel',
+          });
+          if (sessionRes?.stream?.id) {
+            _channelStreamId = sessionRes.stream.id;
+            // Start publishing on the backend (gets us the HLS URL)
+            try {
+              const pubRes = await _avlChannelApi('POST', `/live/${_channelStreamId}/start-publishing`, {});
+              const hlsUrl = pubRes?.playback?.hlsUrl || pubRes?.stream?.hlsUrl || null;
+              // Tell channel engine that live camera has started
+              await _avlChannelApi('POST', '/channel/live/start', {
+                streamId: _channelStreamId,
+                title: roomData.title || 'Live Camera',
+                hlsUrl,
+              });
+              // Send heartbeats every 10s to keep the channel live
+              _channelHeartbeatTimer = setInterval(async () => {
+                try {
+                  await _avlChannelApi('POST', `/live/${_channelStreamId}/health`, {});
+                  await _avlChannelApi('POST', '/channel/live/heartbeat', { streamId: _channelStreamId });
+                } catch (_) {}
+              }, 10_000);
+            } catch (pubErr) {
+              console.warn('[AVL] Could not start backend publishing session:', pubErr.message);
+            }
+          }
+        }
+      } catch (chErr) {
+        // Non-fatal — the live room still works even if channel integration fails
+        console.warn('[AVL] Channel engine integration failed:', chErr.message);
+      }
+    }
+
   } catch (err) {
     console.error('[AVL] Room init error:', err);
     if (chatEl) chatEl.innerHTML = '<p style="color:var(--text-muted);text-align:center">Could not connect to this room.</p>';
@@ -753,6 +807,10 @@ async function _liveRoomInit(container, roomId) {
     // Unsubscribe Firestore listeners
     if (typeof _unsubRoom  === 'function') _unsubRoom();
     if (typeof _unsubChat  === 'function') _unsubChat();
+
+    // Stop channel heartbeat if host navigates away (channel engine's 30s watchdog
+    // will detect the dropped heartbeat and auto-transition to fallback)
+    clearInterval(_channelHeartbeatTimer);
 
     // Decrement viewer count when a non-host leaves
     if (!_isHost && (user?.uid || user?.id)) {
@@ -813,3 +871,30 @@ async function _avlFSImports() {
   _fsCached = m;
   return m;
 }
+
+/**
+ * Call the AVENORA backend API with a Firebase ID token.
+ * Used to notify the 24-hour channel engine about live events.
+ * Non-throwing — caller decides how to handle failures.
+ */
+async function _avlChannelApi(method, path, body) {
+  const base = (window.LU_CONFIG && window.LU_CONFIG.apiUrl) || '/api';
+  let token = null;
+  try {
+    const auth = await window.AvenoraFirebase.getFirebaseAuth();
+    if (auth.currentUser) token = await auth.currentUser.getIdToken(false);
+  } catch (_) {}
+  if (!token) throw new Error('No auth token — cannot call channel API');
+
+  const opts = {
+    method,
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+  };
+  if (body !== undefined) opts.body = JSON.stringify(body);
+  const res  = await fetch(base + path, opts);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+  return data;
+}
+
+

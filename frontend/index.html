@@ -48,6 +48,8 @@
   <link rel="stylesheet" href="src/styles/dj-cosmic.css">
   <!-- Avenora Radio -->
   <link rel="stylesheet" href="src/styles/radio.css">
+  <!-- 24-Hour Channel + Channel Studio -->
+  <link rel="stylesheet" href="src/styles/channel.css">
 
   <!-- Page-specific styles loaded dynamically -->
 </head>
@@ -80,14 +82,15 @@
 
     <!-- Desktop nav links -->
     <ul class="nav-links" role="list" id="nav-links">
-      <li><a href="#hub"    class="nav-link" data-page="hub">HOME</a></li>
-      <li><a href="#social" class="nav-link" data-page="social">FEED</a></li>
-      <li><a href="#video"  class="nav-link" data-page="video">VIDEO</a></li>
-      <li><a href="#live"   class="nav-link" data-page="live">LIVE</a></li>
-      <li><a href="#dj"     class="nav-link" data-page="dj">DJ</a></li>
-      <li><a href="#music"  class="nav-link" data-page="music">MUSIC</a></li>
-      <li><a href="#arcade" class="nav-link" data-page="arcade">ARCADE</a></li>
-      <li><a href="#chat"   class="nav-link" data-page="chat">CHAT</a></li>
+      <li><a href="#hub"     class="nav-link" data-page="hub">HOME</a></li>
+      <li><a href="#social"  class="nav-link" data-page="social">FEED</a></li>
+      <li><a href="#video"   class="nav-link" data-page="video">VIDEO</a></li>
+      <li><a href="#channel" class="nav-link" data-page="channel">📡 CHANNEL</a></li>
+      <li><a href="#live"    class="nav-link" data-page="live">LIVE</a></li>
+      <li><a href="#dj"      class="nav-link" data-page="dj">DJ</a></li>
+      <li><a href="#music"   class="nav-link" data-page="music">MUSIC</a></li>
+      <li><a href="#arcade"  class="nav-link" data-page="arcade">ARCADE</a></li>
+      <li><a href="#chat"    class="nav-link" data-page="chat">CHAT</a></li>
       <li><a href="#gallery" class="nav-link" data-page="gallery">GALLERY</a></li>
     </ul>
 
@@ -134,6 +137,7 @@
           <a class="dropdown-item" href="#customize" data-page="customize">✦ Customize</a>
           <div class="divider"></div>
           <a class="dropdown-item" id="admin-link" href="#admin" data-page="admin" style="display:none">🛡️ Founder Control</a>
+          <a class="dropdown-item" id="channel-studio-link" href="#channelstudio" data-page="channelstudio" style="display:none">📡 Channel Studio</a>
           <button class="dropdown-item danger" id="btn-logout" onclick="handleLogout()">🚪 Sign Out</button>
         </div>
       </div>
@@ -351,6 +355,10 @@
 
   <!-- ═══════ SCRIPTS ═══════════════════════════════════════════ -->
 
+  <!-- HLS.js — required for live camera playback on non-Safari browsers.
+       Loaded before page modules so _chShowLive() can use window.Hls. -->
+  <script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.15/dist/hls.min.js"></script>
+
   <!-- registerPage stub — must run before any page module.
        Page scripts call registerPage() immediately on load, but app.js
        (which owns the real registry) loads last. This stub queues all
@@ -381,6 +389,8 @@
   <script src="src/pages/social.js"></script>
   <script src="src/pages/video.js"></script>
   <script src="src/pages/live.js"></script>
+  <script src="src/pages/channel.js"></script>
+  <script src="src/pages/channelstudio.js"></script>
   <script src="src/pages/cloudstream.js"></script>
   <script src="src/pages/cloudstudio.js"></script>
   <script src="src/pages/dj.js"></script>

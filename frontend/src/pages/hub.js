@@ -157,6 +157,16 @@ function renderContinueSection() {
 /* ─── Explore AVENORA Feature Cards ─────────────── */
 // Full card definitions — order and visibility are resolved from user preferences
 const HUB_CARD_DEFS = {
+  channel: {
+    title: '📡 24-HOUR CHANNEL',
+    desc: 'The AVENORA always-on channel. Live camera, music, video, slideshows — broadcasting 24/7.',
+    icon: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
+      <path d="M2 12h2m18 0h-2M12 2v2m0 18v-2"/>
+      <circle cx="12" cy="12" r="3" fill="currentColor"/>
+      <path d="M6.3 17.7a8 8 0 0 1 0-11.3m11.4 0a8 8 0 0 1 0 11.3"/>
+    </svg>`,
+    page: 'channel', accent: 'blue', founderOnly: false,
+  },
   cloudstream: {
     title: '24-Hour Cloud Stream',
     desc: 'Continuous music and video programming in one connected stream.',
@@ -234,11 +244,10 @@ function renderExploreSection(user) {
 
   // Read cached preferences for card order/visibility (applied optimistically;
   // the customize page syncs these via the full preferences API)
-  // 'cloudstream' is intentionally excluded from the default visible set.
-  // The feature is still accessible via navigation (#cloudstream) and Creator Studio.
-  // Users can re-enable it from Customize if desired.
-  let cardOrder   = ['cloudstream','live','social','dj','music','gallery'];
-  let visibleSet  = new Set(['live','social','dj','music','gallery']);
+  // 'channel' is the primary 24-hour always-on channel — shown prominently on the hub.
+  // 'cloudstream' is accessible via navigation or Creator Studio.
+  let cardOrder   = ['channel','cloudstream','live','social','dj','music','gallery'];
+  let visibleSet  = new Set(['channel','live','social','dj','music','gallery']);
 
   try {
     const raw = localStorage.getItem('avn_prefs_cache');

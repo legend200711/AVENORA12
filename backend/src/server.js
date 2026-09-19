@@ -41,6 +41,8 @@ const preferencesRoutes = require('./api/routes/preferences');
 const cloudStreamRoutes = require('./api/routes/cloudStream');
 const cloudRadioRoutes  = require('./api/routes/cloudRadio');
 const cloudRadioEngine  = require('./services/stream/cloudRadioEngine');
+const channelRoutes     = require('./api/routes/channel');
+const channelEngine     = require('./services/stream/channelEngine');
 const radioRoutes       = require('./api/routes/radio');
 const radioEngine       = require('./services/stream/radioEngine');
 const liveRoutes = require('./api/routes/live');
@@ -168,6 +170,7 @@ app.use('/api/preferences', preferencesRoutes);
 
 app.use('/api/admin/cloud-stream', cloudStreamRoutes);
 app.use('/api/cloud-radio', cloudRadioRoutes);
+app.use('/api/channel', channelRoutes);
 app.use('/api/radio', radioRoutes);
 app.use('/api/live', liveRoutes);
 app.use('/api/push', pushRoutes);
@@ -363,6 +366,17 @@ async function start() {
   } catch (radioErr) {
     logger.warn(`⚠️  Avenora Radio recovery failed: ${radioErr.message}`);
     logger.warn('   Radio station will start fresh when admin activates it.');
+  }
+
+  // ── 24-Hour Channel startup ──────────────────────────────────────────────
+  // Initialize the always-on channel engine and recover from Firestore. Non-fatal.
+  try {
+    logger.info('[Channel] Starting 24-Hour Always-On Channel engine…');
+    await channelEngine.initChannel();
+    logger.info('[Channel] ✅ 24-Hour Channel engine started');
+  } catch (channelErr) {
+    logger.warn(`⚠️  Channel engine startup failed: ${channelErr.message}`);
+    logger.warn('   Channel will start when admin triggers /api/channel/start.');
   }
 
   // Start HTTP server — this MUST succeed; if it fails, there is nothing to do

@@ -168,9 +168,12 @@ function getPublisherHealth(streamId) {
  * It is NEVER returned by the public viewer endpoint.
  */
 function buildPlaybackInfo(stream, includeWhip = false) {
-  const path = streamPath(stream._id.toString());
+  // Firestore documents use `id` as the document ID field; MongoDB used `_id`.
+  // Support both shapes to avoid TypeErrors.
+  const streamId = stream.id || (stream._id && stream._id.toString()) || '';
+  const path = streamPath(streamId);
   const info = {
-    streamId: stream._id,
+    streamId,
     status:   stream.status,
     hlsUrl:   buildHlsUrl(path),
     mediaMTXConfigured: !!CFG.mediaMTXHlsUrl,

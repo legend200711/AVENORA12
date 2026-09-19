@@ -17,6 +17,7 @@ const { authenticate, optionalAuth, requireFounder } = require('../middleware/au
 const { NotFoundError, ForbiddenError, ValidationError, AppError } = require('../middleware/errorHandler');
 const { getDb, newId, now, FieldValue } = require('../../config/firestore');
 const liveSvc = require('../../services/stream/liveSessionService');
+const { getChannel } = require('../../services/stream/channelEngine');
 const logger = require('../../utils/logger');
 
 // ─── Rate limiters ────────────────────────────────────────
@@ -279,6 +280,9 @@ router.post('/:id/health', authenticate, heartbeatLimiter, async (req, res, next
 
     getDb().collection('streams').doc(req.params.id).update({ 'liveSession.lastHeartbeat': now() })
       .catch(e => logger.warn('[Live] heartbeat DB update failed:', e.message));
+
+    // Also forward heartbeat to the 24-hour channel engine (non-fatal)
+    try { getChannel().recordLiveHeartbeat(req.params.id); } catch (_) {}
 
     res.json({ success: true, health });
   } catch (err) { next(err); }

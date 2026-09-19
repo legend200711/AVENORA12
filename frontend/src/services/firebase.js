@@ -883,6 +883,8 @@
     getFirebaseAuth,   // exposed so live.js can check auth.currentUser
     /** Returns the Firestore singleton (same as _db once initialised). */
     async getFirestore() { return getFirestore(); },
+    /** Returns the Firestore SDK module (doc, onSnapshot, etc.) for direct use by page scripts. */
+    async _loadModuleFirestore() { return loadModule('firestore'); },
     /** Direct access to the cached Firestore instance (may be null before first use). */
     get _db() { return _db; },
     Auth:      FirebaseAuth,

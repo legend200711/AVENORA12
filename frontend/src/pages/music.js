@@ -134,6 +134,11 @@ function buildMusicShell() {
           <span class="mcn-title">UPLOAD</span>
           <span class="mcn-sub">Add music to the universe</span>
         </button>
+        <button class="mcn-card" onclick="navigateTo('channel')" style="border-color:rgba(0,204,255,0.35)">
+          <span class="mcn-icon">📡</span>
+          <span class="mcn-title">24-HOUR CHANNEL</span>
+          <span class="mcn-sub">Always-on live channel</span>
+        </button>
       </div>
 
       <!-- ✦ Sticky Player ✦ -->

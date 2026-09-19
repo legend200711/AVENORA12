@@ -58,26 +58,28 @@
 
     // Update header subtitle
     const subtitleMap = {
-      hub: 'HOME',
-      social: 'FEED',
-      video: 'VIDEO',
-      live: 'LIVE',
-      'live-room': 'LIVE ROOM',
-      cloudstream: 'CLOUD STREAM',
-      cloudstudio: 'CREATOR STUDIO',
-      dj: 'DJ SYSTEM',
-      music: 'MUSIC HUB',
-      radio: 'AVENORA RADIO',
-      radioadmin: 'RADIO ADMIN',
-      arcade: 'ARCADE',
-      chat: 'CHAT',
-      gallery: 'GALLERY',
-      admin: 'FOUNDER CONTROL',
-      search: 'SEARCH',
-      profile: 'PROFILE',
-      settings: 'SETTINGS',
-      customize: 'CUSTOMIZE AVENORA',
-      auth: 'SIGN IN',
+      hub:            'HOME',
+      social:         'FEED',
+      video:          'VIDEO',
+      live:           'LIVE',
+      'live-room':    'LIVE ROOM',
+      channel:        '24-HOUR CHANNEL',
+      channelstudio:  'CHANNEL STUDIO',
+      cloudstream:    'CLOUD STREAM',
+      cloudstudio:    'CREATOR STUDIO',
+      dj:             'DJ SYSTEM',
+      music:          'MUSIC HUB',
+      radio:          'AVENORA RADIO',
+      radioadmin:     'RADIO ADMIN',
+      arcade:         'ARCADE',
+      chat:           'CHAT',
+      gallery:        'GALLERY',
+      admin:          'FOUNDER CONTROL',
+      search:         'SEARCH',
+      profile:        'PROFILE',
+      settings:       'SETTINGS',
+      customize:      'CUSTOMIZE AVENORA',
+      auth:           'SIGN IN',
     };
     const subtitle = document.getElementById('nav-subtitle');
     if (subtitle) subtitle.textContent = subtitleMap[pageName] || 'HUB CORE';
@@ -123,6 +125,7 @@
     const navUsername = document.getElementById('nav-username');
     const navAvatar = document.getElementById('nav-avatar');
     const adminLink = document.getElementById('admin-link');
+    const channelStudioLink = document.getElementById('channel-studio-link');
 
     if (user) {
       if (userDropdown) userDropdown.style.display = 'flex';
@@ -137,14 +140,18 @@
           navAvatar.textContent = '';
         }
       }
-      // Show admin link for founder/admin
+      // Show admin/founder links
       if (adminLink && ['founder', 'admin'].includes(user.role)) {
         adminLink.style.display = 'flex';
+      }
+      if (channelStudioLink && ['founder', 'admin'].includes(user.role)) {
+        channelStudioLink.style.display = 'flex';
       }
     } else {
       if (userDropdown) userDropdown.style.display = 'none';
       if (authBtn) authBtn.style.display = 'flex';
       if (adminLink) adminLink.style.display = 'none';
+      if (channelStudioLink) channelStudioLink.style.display = 'none';
     }
   }
 

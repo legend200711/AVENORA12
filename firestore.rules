@@ -160,6 +160,27 @@ service cloud.firestore {
       allow write: if request.auth != null;
     }
 
+    // ── 24-Hour Always-On Channel ──────────────────────────
+    // channelNowPlaying: written exclusively by the backend Admin SDK.
+    // All viewers may read it (unauthenticated access allowed for the viewer page).
+    match /channelNowPlaying/{channelId} {
+      allow read: if true;
+      allow write: if false;  // backend Admin SDK only
+    }
+    // channel config + sub-collections: written by Admin SDK or founder/admin.
+    match /channel/{channelId} {
+      allow read: if true;
+      allow write: if false;  // backend Admin SDK only
+      match /programming/{itemId} {
+        allow read: if true;
+        allow write: if false;  // backend Admin SDK only
+      }
+      match /fallback/{itemId} {
+        allow read: if true;
+        allow write: if false;  // backend Admin SDK only
+      }
+    }
+
     // ── Avenora Radio ──────────────────────────────────────
     // radioStations and stationNowPlaying are written exclusively by the
     // backend Node.js process via the Firebase Admin SDK (which bypasses
