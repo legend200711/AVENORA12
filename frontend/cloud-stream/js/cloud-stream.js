@@ -598,7 +598,7 @@ function _renderPlaylistSelector() {
   const el = _el('csrPlaylistSelector');
   if (!el) return;
   if (!_creator.playlists.length) {
-    el.innerHTML = '<div class="csr-hint">No playlists found. <a class="csr-link" href="/frontend/index.html#dj">Go to 24-Hour Studio</a> to create a playlist and upload tracks.</div>';
+    el.innerHTML = '<div class="csr-hint">No playlists found. <a class="csr-link" href="../index.html#cloudstudio">Go to Creator Studio</a> to create a playlist and upload tracks.</div>';
     return;
   }
   el.innerHTML = _creator.playlists.map(pl => {
@@ -990,6 +990,22 @@ window.csrScrollToPlaylist = function() {
   }
   window.location.href = '../index.html#cloudstudio';
 };
+window.csrGoToCreatorStudio = function() {
+  // If embedded in SPA iframe, navigate parent; otherwise use direct link.
+  const isEmbedded = window.parent && window.parent !== window;
+  if (isEmbedded) {
+    try {
+      if (typeof window.parent.navigateTo === 'function') {
+        window.parent.navigateTo('cloudstudio');
+        return;
+      }
+      window.parent.location.hash = '#cloudstudio';
+      return;
+    } catch (_) {}
+  }
+  window.location.href = '../index.html#cloudstudio';
+};
+
 window.csrOpenExistingStream = function() {
   _show('csrDuplicateWarn', false);
   _showActiveStream();
@@ -1140,6 +1156,8 @@ function _syncListenerToNowPlaying(d) {
 
   // If the track changed, load the new audio
   if (url && url !== _player.trackUrl) {
+    // Cancel any pending engine-stall fallback timer — server has advanced
+    if (_engineAdvanceTimer) { clearTimeout(_engineAdvanceTimer); _engineAdvanceTimer = null; }
     _player.trackUrl  = url;
     _player.trackId   = d.currentTrackId || '';
     _player.trackDur  = dur;
@@ -1206,6 +1224,9 @@ function _loadAndPlayTrack(url, dur) {
   _show('csrPlayerOffline', false);
 }
 
+// Timeout handle — used when server engine is running but Firestore is slow
+let _engineAdvanceTimer = null;
+
 function _onTrackEnded() {
   // Track has finished playing.
   //
@@ -1220,9 +1241,24 @@ function _onTrackEnded() {
   _setPlayBtn(false);
 
   if (_engineRunning) {
-    // Server-managed: do nothing. Firestore snapshot will drive the next track.
+    // Server-managed: Firestore snapshot will drive the next track.
+    // However, if the server engine has stalled or the track ended early,
+    // set a safety timeout — if Firestore hasn't pushed a new track within
+    // 15 s, fall back to client-side queue advancement.
+    if (_engineAdvanceTimer) clearTimeout(_engineAdvanceTimer);
+    _engineAdvanceTimer = setTimeout(() => {
+      _engineAdvanceTimer = null;
+      // Only auto-advance if we are the stream owner and still no new track
+      if (_streamId && _user && _player.audio && !_player.playing) {
+        console.warn('[CSR] Server engine did not advance track within 15s — falling back to client advance');
+        _engineRunning = false;  // treat as offline mode for this advance
+        _autoAdvanceQueue().then(() => { _engineRunning = true; }).catch(() => {});
+      }
+    }, 15000);
     return;
   }
+  // Cancel any pending engine timeout if we are advancing locally
+  if (_engineAdvanceTimer) { clearTimeout(_engineAdvanceTimer); _engineAdvanceTimer = null; }
   _autoAdvanceQueue();
 }
 

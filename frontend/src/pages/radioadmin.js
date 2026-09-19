@@ -594,7 +594,7 @@ async function _radminFetch(method, path, body) {
   if (token) opts.headers['Authorization'] = `Bearer ${token}`;
   if (body)  opts.body = JSON.stringify(body);
 
-  const url = `${LU_CONFIG.apiUrl}${path}`;
+  const url = `${window.LU_CONFIG?.apiUrl || ''}${path}`;
   const res  = await fetch(url, opts);
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);

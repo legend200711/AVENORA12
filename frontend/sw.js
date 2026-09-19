@@ -47,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v23';
-const CACHE_NAME  = 'avenora-cache-v23';
+const SW_VERSION  = 'v24';
+const CACHE_NAME  = 'avenora-cache-v24';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -77,6 +77,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v20', // v20 — evict: SVG-only icons, channel offline fix
   'avenora-cache-v21', // v21 — evict: PWA installability, PNG icons, 404 routing fix
   'avenora-cache-v22', // v22 — evict: firebase.json public path was wrong (all assets 404'd)
+  'avenora-cache-v23', // v23 — evict: radio LU_CONFIG crash, cloud-stream engine stall fallback
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',

@@ -303,10 +303,10 @@
   <script>
     // ── Build / version metadata ──────────────────────────────
     window.AVENORA_BUILD = {
-      version:         '3.7.1',
-      buildTimestamp:  '2026-09-19T09:30:00Z',
-      swVersion:       'v22',
-      swCacheName:     'avenora-cache-v22',
+      version:         '3.7.2',
+      buildTimestamp:  '2025-10-21T00:00:00Z',
+      swVersion:       'v24',
+      swCacheName:     'avenora-cache-v24',
       firebaseProject: 'avenora-6e147',
       basePath:        '/AVENORA12/',
     };
@@ -543,27 +543,18 @@
             console.warn('[AVN] Service worker registration failed:', err);
           });
 
-        // Listen for the new SW telling us to reload for a fresh build.
+        // Single SW message listener — handles both SW_UPDATED reloads and
+        // GET_API_URL requests from the background sync handler.
         navigator.serviceWorker.addEventListener('message', (event) => {
           if (event.data?.type === 'SW_UPDATED') {
             console.log('[AVN] New service worker active (' + event.data.cache + '). Reloading…');
-            // Only auto-reload if no user interaction is in progress
+            // Only auto-reload if the page is visible and no critical input in progress
             if (!document.hidden) {
               window.location.reload();
             }
           }
-          // Respond to GET_API_URL requests from the SW background sync handler
-          if (event.data?.type === 'GET_API_URL') {
-            // This shouldn't fire here (SW uses MessageChannel ports) but belt-and-suspenders
-          }
-        });
-
-        // Handle API URL requests from service worker background sync
-        navigator.serviceWorker.addEventListener('message', (event) => {
           if (event.data?.type === 'GET_API_URL' && event.ports?.[0]) {
-            event.ports[0].postMessage({
-              apiUrl: window.LU_CONFIG?.apiUrl || null
-            });
+            event.ports[0].postMessage({ apiUrl: window.LU_CONFIG?.apiUrl || null });
           }
         });
       });

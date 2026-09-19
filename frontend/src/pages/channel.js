@@ -279,9 +279,16 @@ async function _chInit() {
       );
       _ch.fsModule = fsMod;
 
-      // Reuse the existing app if already initialized (prevents "duplicate app" error)
-      const existingApp = appMod.getApps().length ? appMod.getApp() : null;
-      const app = existingApp || appMod.initializeApp(_CH_FIREBASE_CFG, 'channel-viewer');
+      // Reuse the default app if already initialized (prevents "duplicate app" error).
+      // Try the default app first; only create a named app if no apps exist at all.
+      let app;
+      const existingApps = appMod.getApps();
+      if (existingApps.length > 0) {
+        // Prefer the default (unnamed) app — same as the rest of the SPA
+        app = appMod.getApp();
+      } else {
+        app = appMod.initializeApp(_CH_FIREBASE_CFG);
+      }
       _ch.db = fsMod.getFirestore(app);
       dbReady = true;
       console.info('[Channel] Firestore initialized directly from CDN');

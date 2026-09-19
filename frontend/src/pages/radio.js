@@ -507,7 +507,9 @@ function _startPresence() {
 
 async function _pingPresence() {
   try {
-    const res = await fetch(`${LU_CONFIG.apiUrl}/radio/listener/ping`, {
+    const apiUrl = window.LU_CONFIG?.apiUrl;
+    if (!apiUrl) return;
+    const res = await fetch(`${apiUrl}/radio/listener/ping`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ listenerId: _radioState.listenerId }),
@@ -522,7 +524,9 @@ async function _pingPresence() {
 
 async function _leavePresence() {
   try {
-    await fetch(`${LU_CONFIG.apiUrl}/radio/listener/leave`, {
+    const apiUrl = window.LU_CONFIG?.apiUrl;
+    if (!apiUrl) return;
+    await fetch(`${apiUrl}/radio/listener/leave`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ listenerId: _radioState.listenerId }),
@@ -664,7 +668,8 @@ window.radioToggleFavorite = async function () {
 
   try {
     const token = await _getAuthToken();
-    const res = await fetch(`${LU_CONFIG.apiUrl}/radio/favorites`, {
+    const apiUrl = window.LU_CONFIG?.apiUrl || '';
+    const res = await fetch(`${apiUrl}/radio/favorites`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify({ trackId, action }),
