@@ -1157,6 +1157,25 @@ function buildPlayerHtml(video) {
   const src = _encodeSrc(rawSrc);
   const thumbSrc = video.thumbnailUrl ? _encodeSrc(video.thumbnailUrl) : null;
 
+  // Determine the MIME type to declare on <source>.
+  // Declaring the correct type prevents browsers from firing MEDIA_ERR_SRC_NOT_SUPPORTED
+  // when Supabase serves the file with Content-Type: application/octet-stream (which
+  // it does when the content-type was not set at upload time).
+  // Priority: video.mimeType (stored in Supabase music_library.mime_type) → inferred from extension.
+  function _inferMime(url, stored) {
+    if (stored && stored.startsWith('video/') && stored !== 'video/octet-stream') return stored;
+    const ext = (url.split('?')[0].split('.').pop() || '').toLowerCase();
+    const map = {
+      mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/mp4',
+      webm: 'video/webm',
+      ogg: 'video/ogg', ogv: 'video/ogg',
+      mkv: 'video/x-matroska',
+      avi: 'video/x-msvideo',
+    };
+    return map[ext] || '';   // empty string → no type attr → let browser sniff
+  }
+  const mimeType = _inferMime(rawSrc, video.mimeType);
+
   return `
     <div class="avenora-player" id="som-player-container">
       <div class="avenora-player-stage" style="aspect-ratio:16/9;position:relative;background:#000;border-radius:var(--radius-md);overflow:hidden">
@@ -1167,9 +1186,9 @@ function buildPlayerHtml(video) {
           preload="metadata"
           style="width:100%;height:100%;display:block;background:#000"
           aria-label="${escapeHtml(video.title)}"
-          src="${escapeHtml(src)}"
           ${thumbSrc ? `poster="${escapeHtml(thumbSrc)}"` : ''}
         >
+          <source src="${escapeHtml(src)}"${mimeType ? ` type="${escapeHtml(mimeType)}"` : ''}>
           <track kind="captions" label="Captions" srclang="en" id="som-captions-track">
         </video>
         <div class="avenora-player-overlay" id="som-player-overlay" style="display:none">
@@ -1228,6 +1247,28 @@ function initVideoElement(videoId) {
   };
 
   // ── Error handler ────────────────────────────────────────
+  // When a <source> element is rejected (canPlayType returns "") the browser fires
+  // 'error' on the <source> element — el.error may be null at that point.
+  // Attach the same handler to the <source> element so we always catch rejections.
+  const sourceEl = el.querySelector('source');
+  if (sourceEl) {
+    sourceEl.addEventListener('error', () => {
+      // Synthesise a code-4 error so the main handler can show a useful message.
+      if (!el.error) {
+        const src = sourceEl.src || el.currentSrc || '';
+        const ext = (src.split('?')[0].split('.').pop() || '').toLowerCase();
+        const badCodec = ['avi','mkv','wmv','flv','3gp','hevc','h265','ts'].includes(ext);
+        const msg = badCodec
+          ? `${ext.toUpperCase()} files are not supported on this browser.`
+          : 'This video format is not supported on this device.';
+        const detail = badCodec
+          ? 'Please re-upload as MP4 (H.264 video + AAC audio) for best compatibility.'
+          : 'Re-uploading as MP4 (H.264 + AAC) usually fixes this.';
+        showPlayerError(msg, detail, false);
+      }
+    });
+  }
+
   el.addEventListener('error', async () => {
     const err = el.error;
     if (!err) return;
@@ -1264,7 +1305,12 @@ function initVideoElement(videoId) {
         //      (crossorigin attr has been removed from buildPlayerHtml to prevent this)
         //
         // Probe WITHOUT CORS mode so we can distinguish 404 from codec issues.
-        const videoSrc = el.currentSrc || el.getAttribute('src') || '';
+        // el.currentSrc is set once the browser picks a <source>; fall back to reading
+        // the <source> child's src attribute (now that we use <source> instead of src=).
+        const videoSrc = el.currentSrc
+          || el.querySelector('source')?.src
+          || el.getAttribute('src')
+          || '';
         let probeStatus = 0;
         let probeOk = false;
         if (videoSrc) {
@@ -1292,18 +1338,30 @@ function initVideoElement(videoId) {
           friendlyDetail = 'The video may have been deleted. Please re-upload.';
           canRetry = false;
         } else {
-          // URL is reachable (200/opaque) but the browser still can't play it →
-          // format/codec is the issue. Give the user a concrete next step.
+          // URL is reachable (200/opaque) but the browser still can't play it.
+          // Common causes:
+          //   a) File was uploaded with Content-Type: application/octet-stream (Supabase
+          //      sometimes does this). The <source type="..."> fix above should prevent
+          //      this for new loads; here we just report what happened.
+          //   b) Genuinely unsupported codec (AVI, MKV on some browsers, HEVC on Android)
+          //   c) Corrupt or partially-uploaded file
           const ext = (videoSrc.split('?')[0].split('.').pop() || '').toLowerCase();
-          const badCodec = ['avi','mkv','wmv','flv','mov','3gp','hevc','h265','ts'].includes(ext);
+          const badCodec = ['avi','mkv','wmv','flv','3gp','hevc','h265','ts'].includes(ext);
+          // .mov is only unsupported on some Android builds — don't definitively blame the codec
+          const commonFormat = ['mp4','m4v','webm','ogg','ogv'].includes(ext);
           if (badCodec) {
             friendlyMsg = `${ext.toUpperCase()} files are not supported on this browser.`;
             friendlyDetail = 'Please re-upload as MP4 (H.264 video + AAC audio) for best compatibility.';
+          } else if (commonFormat) {
+            // MP4/WebM that won't play: likely a Content-Type or upload issue, not the codec.
+            friendlyMsg = 'There was a problem playing this video.';
+            friendlyDetail = 'The file may have uploaded incorrectly. Try refreshing, or re-upload the video if the problem persists.';
+            canRetry = true;
+            retryCount++;
           } else {
             friendlyMsg = 'This video cannot be played on this device.';
             friendlyDetail = 'The video codec may not be supported. Re-uploading as MP4 (H.264 + AAC) usually fixes this.';
           }
-          canRetry = false;
         }
 
         showPlayerError(friendlyMsg, friendlyDetail, canRetry);
