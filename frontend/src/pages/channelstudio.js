@@ -579,11 +579,36 @@ function _chsClearAll() {
 async function _chsApi(method, path, body, timeoutMs = 15000) {
   const base = _chsState.apiBase || '/api';
   let token = null;
-  try {
-    const auth = await window.AvenoraFirebase.getFirebaseAuth();
-    if (auth.currentUser) token = await auth.currentUser.getIdToken(false);
-  } catch (_) {}
-  if (!token) throw new Error('Not authenticated');
+
+  // Wait up to 8 s for Firebase auth to resolve before attempting to get a token.
+  // This fixes the race condition where the page loads before the Firebase SDK has
+  // restored the session from localStorage, causing all requests to fail immediately
+  // with "Not authenticated" before the backend is ever contacted.
+  const _deadline = Date.now() + 8000;
+  while (!token && Date.now() < _deadline) {
+    try {
+      const auth = await window.AvenoraFirebase.getFirebaseAuth();
+      if (auth.currentUser) {
+        token = await auth.currentUser.getIdToken(false);
+      }
+    } catch (_) {}
+    if (!token) {
+      // If LegendState already has a user, Firebase session should be available soon.
+      const _stateUser = (typeof LegendState !== 'undefined') ? LegendState.get('user') : null;
+      if (!_stateUser) break; // No user at all — stop waiting
+      await new Promise(r => setTimeout(r, 300));
+    }
+  }
+
+  if (!token) {
+    // One final attempt — force a fresh token in case the cached one expired
+    try {
+      const auth = await window.AvenoraFirebase.getFirebaseAuth();
+      if (auth.currentUser) token = await auth.currentUser.getIdToken(true);
+    } catch (_) {}
+  }
+
+  if (!token) throw new Error('Not authenticated — please sign in again');
 
   const controller = new AbortController();
   const tid = setTimeout(() => controller.abort(), timeoutMs);

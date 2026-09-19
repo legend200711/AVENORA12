@@ -1257,6 +1257,27 @@
       return post('/stories', { mediaUrl, mediaType, caption });
     },
     view: (id) => post(`/stories/${id}/view`, {}),
+    async getById(id) {
+      // Fetch a single story by its Firestore document ID.
+      // Tries Firestore first (fast, no auth required), then the REST backend.
+      if (window.AvenoraFirebase?.getFirestore) {
+        try {
+          const db = await window.AvenoraFirebase.getFirestore();
+          const fsM = await window.AvenoraFirebase._loadModuleFirestore();
+          const { doc, getDoc } = fsM || {};
+          if (doc && getDoc) {
+            const snap = await getDoc(doc(db, 'stories', id));
+            if (snap.exists()) {
+              const data = snap.data();
+              if (!data.isDeleted) return { story: { id: snap.id, ...data } };
+            }
+          }
+        } catch (_) {}
+      }
+      // Fallback: REST endpoint GET /stories/:userId is per-user; use the feed and filter
+      // as a last resort — handled by the caller's Strategy 3.
+      throw new Error('Story not found');
+    },
     async delete(id) {
       if (window.AvenoraFirebase?.Firestore) {
         return window.AvenoraFirebase.Firestore.deleteStory(id);

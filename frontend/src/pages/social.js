@@ -907,7 +907,7 @@ const SNStories = {
           const el = document.createElement('div');
           el.className = 'sn-story-item';
           el.innerHTML = `
-            <div class="sn-story-ring ${hasUnread ? 'sn-story-unread' : 'sn-story-seen'}" onclick="SNStories.view('${group.stories[0]._id}', '${escapeHtml(group.author?.username || '')}')">
+            <div class="sn-story-ring ${hasUnread ? 'sn-story-unread' : 'sn-story-seen'}" onclick="SNStories.view('${group.stories[0].id || group.stories[0]._id}', '${escapeHtml(group.author?.username || '')}')">
               <div class="sn-story-avatar">${(group.author?.username || '?')[0].toUpperCase()}</div>
             </div>
             <span class="sn-story-name">${escapeHtml(group.author?.username || '')}</span>
@@ -953,15 +953,37 @@ const SNStories = {
       const contentEl = document.getElementById('sn-story-viewer-content');
       if (!contentEl) return;
       try {
-        // Use Firestore to get the specific story
-        if (!window.AvenoraFirebase?.Firestore) throw new Error('Firestore not ready');
-        const db = window.AvenoraFirebase.Firestore;
-        const stories = await db.getStories(100);
+        let story = null;
+
+        // Strategy 1: fetch the specific story by ID from the REST backend
+        try {
+          const data = await LegendAPI.stories.getById(storyId);
+          story = data?.story || data;
+        } catch (_) {}
+
+        // Strategy 2: fetch via Firestore directly by document ID
+        if (!story && window.AvenoraFirebase?.getFirestore) {
+          try {
+            const db = await window.AvenoraFirebase.getFirestore();
+            const { doc, getDoc } = await window.AvenoraFirebase._loadModuleFirestore();
+            const snap = await getDoc(doc(db, 'stories', storyId));
+            if (snap.exists()) story = { id: snap.id, ...snap.data() };
+          } catch (_) {}
+        }
+
+        // Strategy 3: fallback — scan recent stories
+        if (!story && window.AvenoraFirebase?.Firestore) {
+          try {
+            const stories = await window.AvenoraFirebase.Firestore.getStories(100);
+            story = stories.find(s => (s.id || s._id) === storyId) || null;
+          } catch (_) {}
+        }
+
         clearTimeout(_storyTimeout);
-        const story = stories.find(s => s.id === storyId);
         const c = document.getElementById('sn-story-viewer-content');
         if (!c) return;
-        if (!story) {
+
+        if (!story || !story.mediaUrl) {
           c.innerHTML = `<p style="color:var(--text-muted)">This story is no longer available.</p>`;
           return;
         }

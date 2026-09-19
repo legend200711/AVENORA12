@@ -1173,9 +1173,13 @@ function _syncListenerToNowPlaying(d) {
 function _loadAndPlayTrack(url, dur) {
   _stopPlayerAudio();
   const audio = new Audio(url);
-  audio.volume      = _player.volume;
-  audio.crossOrigin = 'anonymous';
-  audio.preload     = 'auto';
+  audio.volume  = _player.volume;
+  // Do NOT set crossOrigin='anonymous' — Supabase Storage public buckets do not always
+  // return Access-Control-Allow-Origin for audio requests, which causes CORS-mode failures
+  // (MediaError code 4 / MEDIA_ERR_SRC_NOT_SUPPORTED) on Android Chrome.
+  // Public audio files do not need CORS mode; removing it allows the browser to fetch
+  // them in no-cors mode which always succeeds for public resources.
+  audio.preload = 'auto';
   _player.audio     = audio;
   _player.trackDur  = dur;
   // Mark as playing so the play button and auto-advance work correctly.

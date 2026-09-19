@@ -203,6 +203,7 @@ const _ch = {
   // Firebase/Firestore
   db:           null,
   unsub:        null,   // Firestore snapshot unsubscriber
+  _loadingTimeoutId: null, // cleared on first render to prevent infinite loading
 
   // Current channel state (from server)
   status:       null,
@@ -271,6 +272,18 @@ async function _chInit() {
 
   _chShowState('loading');
 
+  // Safety net: if nothing resolves within 20s, show standby instead of an
+  // infinite loading spinner. Cancelled by _chRenderState on first real update.
+  _ch._loadingTimeoutId = setTimeout(() => {
+    _ch._loadingTimeoutId = null;
+    const stateEl = document.getElementById('ch-state-loading');
+    if (stateEl && stateEl.style.display !== 'none') {
+      console.warn('[Channel] Loading timeout — switching to standby');
+      _chShowState('standby');
+      _chSetText('ch-np-title', 'Channel connecting…');
+    }
+  }, 20_000);
+
   // Try to get Firestore — first attempt: use the parent's already-initialized
   // instance to avoid creating a duplicate Firebase App.
   let dbReady = false;
@@ -333,6 +346,8 @@ async function _chInit() {
     if (_ch.hls) { try { _ch.hls.destroy(); } catch (_) {} _ch.hls = null; }
     clearTimeout(_ch.pollTimer);
     clearTimeout(_ch._retryTimer);
+    clearTimeout(_ch._loadingTimeoutId);
+    _ch._loadingTimeoutId = null;
     // Stop any YouTube embed
     const ytFrame = document.getElementById('ch-youtube-frame');
     if (ytFrame) { ytFrame.src = 'about:blank'; }
@@ -443,6 +458,12 @@ function _chShowReconnecting() {
 // ── Render state ──────────────────────────────────────────────────────────
 function _chRenderState(ch) {
   if (!ch) return;
+
+  // Cancel the loading safety-net timeout — we have real data now
+  if (_ch._loadingTimeoutId) {
+    clearTimeout(_ch._loadingTimeoutId);
+    _ch._loadingTimeoutId = null;
+  }
 
   const status = (ch.status || '').toUpperCase();
   const type   = (ch.programType || '').toUpperCase();

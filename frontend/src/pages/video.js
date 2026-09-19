@@ -1163,16 +1163,25 @@ function buildPlayerHtml(video) {
   // it does when the content-type was not set at upload time).
   // Priority: video.mimeType (stored in Supabase music_library.mime_type) → inferred from extension.
   function _inferMime(url, stored) {
-    if (stored && stored.startsWith('video/') && stored !== 'video/octet-stream') return stored;
+    // Use the stored MIME only when it is a real video type — not octet-stream
+    // (Supabase sometimes uploads files as application/octet-stream even for MP4).
+    if (stored && stored.startsWith('video/') &&
+        stored !== 'video/octet-stream' && stored !== 'video/x-unknown') {
+      return stored;
+    }
+    // Infer from the URL file extension (works for Supabase public URLs)
     const ext = (url.split('?')[0].split('.').pop() || '').toLowerCase();
     const map = {
-      mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/mp4',
+      mp4:  'video/mp4',
+      m4v:  'video/mp4',
+      mov:  'video/mp4',   // QuickTime .mov is usually H.264 — browser can play it as mp4
       webm: 'video/webm',
-      ogg: 'video/ogg', ogv: 'video/ogg',
-      mkv: 'video/x-matroska',
-      avi: 'video/x-msvideo',
+      ogg:  'video/ogg',
+      ogv:  'video/ogg',
+      mkv:  'video/x-matroska',
+      avi:  'video/x-msvideo',
     };
-    return map[ext] || '';   // empty string → no type attr → let browser sniff
+    return map[ext] || 'video/mp4';   // default to mp4 — most uploads are MP4
   }
   const mimeType = _inferMime(rawSrc, video.mimeType);
 
@@ -1883,7 +1892,13 @@ function initUploadForm() {
   const validateVideo = (file) => {
     if (!file) return 'Please select a video file.';
     if (!ALLOWED_VIDEO_TYPES.includes(file.type)) {
-      return `Unsupported format: ${file.type || 'unknown'}. Use MP4, WebM, MOV, or AVI.`;
+      const ext = (file.name.split('.').pop() || '').toLowerCase();
+      const badCodec = ['mkv','wmv','flv','3gp','hevc','ts','mpeg','mpg'].includes(ext);
+      if (badCodec) {
+        return `${ext.toUpperCase()} format is not compatible with most browsers. ` +
+               `Please re-encode to MP4 (H.264 video + AAC audio) before uploading.`;
+      }
+      return `Unsupported format: ${file.type || 'unknown'}. Use MP4 (H.264/AAC) for best compatibility.`;
     }
     if (file.size > MAX_VIDEO_BYTES) {
       return `Video is too large. Maximum video size is 500 MB. ` +
@@ -1893,6 +1908,28 @@ function initUploadForm() {
     return null;
   };
 
+  // Warn about potentially-incompatible formats that are technically allowed
+  // by the MIME filter but may not play on all mobile browsers.
+  const _warnIfLowCompat = (file) => {
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const lowCompat = ['avi', 'mov'];
+    if (lowCompat.includes(ext)) {
+      const resultEl = document.getElementById('som-upload-result');
+      if (resultEl) {
+        resultEl.style.display = 'block';
+        resultEl.innerHTML = `
+          <div style="background:rgba(201,168,76,0.08);border:1px solid rgba(201,168,76,0.3);border-radius:var(--radius-md);padding:var(--space-md);margin-bottom:var(--space-sm)">
+            <p style="color:#c9a84c;font-weight:700;margin-bottom:4px">⚠ Compatibility Notice</p>
+            <p style="font-size:0.82rem;color:var(--text-secondary)">
+              <strong>${ext.toUpperCase()}</strong> files may not play on Android or older browsers.
+              For guaranteed playback, upload as <strong>MP4 (H.264 video + AAC audio)</strong>.
+              You can proceed, but viewers on mobile may see a playback error.
+            </p>
+          </div>`;
+      }
+    }
+  };
+
   const handleVideoFile = (file) => {
     clearFileError();
     const err = validateVideo(file);
@@ -1900,6 +1937,7 @@ function initUploadForm() {
     selectedVideoFile = file;
     fileInfo.style.display = 'block';
     fileInfo.textContent = `Selected: ${escapeHtml(file.name)} (${(file.size / 1024 / 1024).toFixed(1)} MB)`;
+    _warnIfLowCompat(file);
   };
 
   videoInput?.addEventListener('change', e => {
