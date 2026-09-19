@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="description" content="Avenora — A place where everyone belongs. A welcoming space for connection, creativity, positivity, and new beginnings.">
+  <meta name="theme-color" content="#090807">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="AVENORA">
+
+  <!-- Open Graph -->
+  <meta property="og:title" content="AVENORA">
+  <meta property="og:description" content="A place where everyone belongs. A welcoming space for connection, creativity, positivity, and new beginnings.">
+  <meta property="og:type" content="website">
+
+  <title>AVENORA — A PLACE WHERE EVERYONE BELONGS</title>
+
+  <!-- PWA -->
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" type="image/svg+xml" href="icons/icon-192.svg">
+  <link rel="apple-touch-icon" href="icons/icon-192.svg">
+
+  <!-- Google Fonts: Cinzel (Gothic Egyptian display) + Rajdhani (fallback) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Rajdhani:wght@400;600;700&display=swap" rel="stylesheet">
+
+  <!-- Core Styles -->
+  <link rel="stylesheet" href="src/styles/theme.css">
+  <link rel="stylesheet" href="src/styles/visual.css">
+  <link rel="stylesheet" href="src/styles/social.css">
+  <link rel="stylesheet" href="src/styles/midnight.css">
+  <link rel="stylesheet" href="src/styles/music.css">
+  <link rel="stylesheet" href="src/styles/hub.css">
+  <link rel="stylesheet" href="src/styles/chat-extended.css">
+  <link rel="stylesheet" href="src/styles/companion.css">
+  <!-- Creator Studio — mobile-first layout fix -->
+  <link rel="stylesheet" href="src/styles/cloudstudio.css">
+  <!-- Responsive overrides — must load last to win specificity -->
+  <link rel="stylesheet" href="src/styles/responsive.css">
+  <link rel="stylesheet" href="src/styles/customize.css">
+  <!-- Founder Theme Control Center (founder-only panel, admin-scoped styles) -->
+  <link rel="stylesheet" href="src/styles/theme-control.css">
+
+  <!-- Page-specific styles loaded dynamically -->
+</head>
+<body class="has-mobile-nav">
+
+  <!-- Skip navigation link for keyboard users -->
+  <a href="#main-content" class="skip-to-main">Skip to main content</a>
+
+  <!-- ═══════ VISUAL BACKGROUND ═══════════════════════════════ -->
+  <div class="visual-bg" id="visual-bg">
+    <canvas class="visual-canvas" id="canvas-stars"></canvas>
+    <canvas class="visual-canvas" id="canvas-rain" style="opacity:0.4"></canvas>
+    <div id="eclipse-mount"></div>
+  </div>
+
+  <!-- ═══════ GLOBAL NAVIGATION ════════════════════════════════ -->
+  <nav class="nav-global" role="navigation" aria-label="Main navigation">
+    <button class="btn btn-ghost btn-sm" id="btn-back" aria-label="Go back" style="display:none" onclick="history.back()">
+      ←
+    </button>
+
+    <a href="#hub" class="nav-brand" aria-label="Avenora Home" style="display:flex;flex-direction:column;line-height:1.1">
+      <span>AVENORA</span>
+      <span id="nav-subtitle" style="font-size:0.6rem;letter-spacing:0.25em;color:var(--avenora-bronze);font-weight:600;opacity:0.85">HOME</span>
+    </a>
+
+    <!-- Desktop nav links -->
+    <ul class="nav-links" role="list" id="nav-links">
+      <li><a href="#hub" class="nav-link" data-page="hub">HOME</a></li>
+      <li><a href="#social" class="nav-link" data-page="social">FEED</a></li>
+      <li><a href="#video" class="nav-link" data-page="video">VIDEO</a></li>
+      <li><a href="#live" class="nav-link" data-page="live">LIVE</a></li>
+      <li><a href="#dj" class="nav-link" data-page="dj">DJ SYSTEM</a></li>
+      <li><a href="#music" class="nav-link" data-page="music">MUSIC HUB</a></li>
+      <li><a href="#arcade" class="nav-link" data-page="arcade">ARCADE</a></li>
+      <li><a href="#chat" class="nav-link" data-page="chat">CHAT</a></li>
+      <li><a href="#gallery" class="nav-link" data-page="gallery">GALLERY</a></li>
+    </ul>
+
+    <!-- Desktop search -->
+    <div class="search-bar nav-search-desktop" style="width:220px" id="search-bar-desktop">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+        <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      <input type="search" placeholder="Search..." id="search-input-desktop" aria-label="Search">
+    </div>
+
+    <!-- Nav action buttons -->
+    <div class="nav-actions">
+      <!-- Search (mobile) -->
+      <button class="btn btn-ghost btn-sm mobile-only" id="btn-search-mobile" aria-label="Search">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      </button>
+
+      <!-- Notifications -->
+      <div class="dropdown" id="notif-dropdown" style="position:relative">
+        <button class="btn btn-ghost btn-sm" id="btn-notif" aria-label="Notifications" aria-expanded="false" aria-haspopup="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+          <span class="notif-badge hidden" id="notif-badge">0</span>
+        </button>
+        <div class="dropdown-menu hidden" id="notif-menu" role="menu" aria-label="Notifications">
+          <div id="notif-list" style="max-height:300px;overflow-y:auto;min-width:280px">
+            <p style="padding:12px;color:var(--text-muted);font-size:0.85rem;text-align:center">No notifications</p>
+          </div>
+          <div style="padding:8px;border-top:1px solid var(--border-subtle)">
+            <button class="btn btn-ghost btn-sm w-full" onclick="LegendAPI.notifications.markAllRead().then(loadNotifications)">Mark all read</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- User menu (shown when logged in) -->
+      <div class="dropdown" id="user-dropdown" style="display:none;position:relative">
+        <button class="btn btn-ghost btn-sm" id="btn-user-menu" aria-label="User menu" aria-expanded="false" aria-haspopup="true" style="display:flex;align-items:center;gap:6px">
+          <div id="nav-avatar" style="width:28px;height:28px;border-radius:50%;background:var(--bg-elevated);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700"></div>
+          <span id="nav-username" style="font-size:0.85rem;font-weight:600;max-width:100px" class="truncate desktop-only"></span>
+        </button>
+        <div class="dropdown-menu hidden" id="user-menu" role="menu">
+          <a class="dropdown-item" href="#profile" data-page="profile">👤 My Profile</a>
+          <a class="dropdown-item" href="#settings" data-page="settings">⚙️ Settings</a>
+          <a class="dropdown-item" href="#customize" data-page="customize">✦ Customize Avenora</a>
+          <div class="divider"></div>
+          <a class="dropdown-item" id="admin-link" href="#admin" data-page="admin" style="display:none">🛡️ Founder Control</a>
+          <button class="dropdown-item danger" id="btn-logout" onclick="handleLogout()">🚪 Sign Out</button>
+        </div>
+      </div>
+
+      <!-- Auth button (shown when logged out) -->
+      <button class="btn btn-primary btn-sm" id="btn-auth" onclick="navigateTo('auth')">
+        Sign In
+      </button>
+    </div>
+  </nav>
+
+  <!-- ═══════ MOBILE SEARCH (shown when toggled) ══════════════ -->
+  <div id="mobile-search-panel" class="hidden" style="position:fixed;top:60px;left:0;right:0;z-index:199;background:var(--bg-secondary);border-bottom:1px solid var(--border-subtle);padding:12px 16px">
+    <div class="search-bar">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="search" placeholder="Search Avenora..." id="search-input-mobile" aria-label="Search">
+    </div>
+  </div>
+
+  <!-- ═══════ MAIN CONTENT AREA ════════════════════════════════ -->
+  <main class="page-wrapper" id="main-content" role="main">
+    <!-- Pages are injected here by the router -->
+    <div id="page-container"></div>
+  </main>
+
+  <!-- ═══════ MOBILE BOTTOM NAVIGATION ════════════════════════ -->
+  <nav class="mobile-nav" role="navigation" aria-label="Mobile navigation">
+    <ul class="mobile-nav-items" role="list">
+      <li>
+        <a href="#hub" class="mobile-nav-item" data-page="hub">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+          HOME
+        </a>
+      </li>
+      <li>
+        <a href="#social" class="mobile-nav-item" data-page="social">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          FEED
+        </a>
+      </li>
+      <li>
+        <a href="#video" class="mobile-nav-item" data-page="video">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
+          VIDEO
+        </a>
+      </li>
+      <li>
+        <a href="#arcade" class="mobile-nav-item" data-page="arcade">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><circle cx="16.5" cy="11" r="0.5" fill="currentColor"/><circle cx="18.5" cy="13" r="0.5" fill="currentColor"/><path d="M11.5 17H13a2 2 0 0 0 2-2v-1a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h6"/></svg>
+          ARCADE
+        </a>
+      </li>
+      <li>
+        <a href="#chat" class="mobile-nav-item" data-page="chat" style="position:relative">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          CHAT
+          <span id="chat-nav-unread-badge" class="chat-nav-badge" style="display:none">0</span>
+        </a>
+      </li>
+    </ul>
+  </nav>
+
+  <!-- ═══════ TOAST CONTAINER ══════════════════════════════════ -->
+  <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
+
+  <!-- ═══════ AUTH MODAL ════════════════════════════════════════ -->
+  <div id="auth-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
+    <div class="modal" style="max-width:420px">
+      <div class="modal-header">
+        <h3 id="auth-modal-title" style="margin:0;font-family:var(--font-display);letter-spacing:0.12em;background:linear-gradient(135deg,var(--avenora-gold),var(--avenora-ivory),var(--avenora-bronze));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">AVENORA</h3>
+        <button class="btn btn-ghost btn-sm" onclick="Modal.close('auth-modal')" aria-label="Close">✕</button>
+      </div>
+      <div class="modal-body">
+        <!-- Tabs -->
+        <div class="tabs" role="tablist">
+          <button class="tab-btn active" id="tab-login" role="tab" aria-selected="true" onclick="switchAuthTab('login')">SIGN IN</button>
+          <button class="tab-btn" id="tab-register" role="tab" aria-selected="false" onclick="switchAuthTab('register')">CREATE ACCOUNT</button>
+        </div>
+
+        <!-- Login Form -->
+        <form id="login-form" onsubmit="handleLogin(event)" novalidate>
+          <div class="form-group">
+            <label class="form-label" for="login-email">Email</label>
+            <input class="form-input" type="email" id="login-email" name="email" required autocomplete="email" placeholder="your@email.com">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="login-password">Password</label>
+            <input class="form-input" type="password" id="login-password" name="password" required autocomplete="current-password" placeholder="••••••••">
+          </div>
+          <div id="login-error" class="hidden" style="color:#c0394a;font-size:0.85rem;margin-bottom:12px"></div>
+          <button type="submit" class="btn btn-primary w-full" id="login-btn">SIGN IN</button>
+          <div style="text-align:center;margin-top:12px">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="switchAuthTab('forgot')">Forgot password?</button>
+          </div>
+        </form>
+
+        <!-- Forgot Password Form -->
+        <form id="forgot-form" class="hidden" onsubmit="handleForgotPassword(event)" novalidate>
+          <p style="color:var(--text-secondary);font-size:0.9rem;margin-bottom:var(--space-md)">Enter your email address and we'll send you a reset link.</p>
+          <div class="form-group">
+            <label class="form-label" for="forgot-email">Email</label>
+            <input class="form-input" type="email" id="forgot-email" name="email" required autocomplete="email" placeholder="your@email.com">
+          </div>
+          <div id="forgot-error" class="hidden" style="color:#c0394a;font-size:0.85rem;margin-bottom:12px"></div>
+          <div id="forgot-success" class="hidden" style="color:#4a9e72;font-size:0.85rem;margin-bottom:12px"></div>
+          <button type="submit" class="btn btn-primary w-full" id="forgot-btn">SEND RESET LINK</button>
+          <div style="text-align:center;margin-top:12px">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="switchAuthTab('login')">← Back to Sign In</button>
+          </div>
+        </form>
+
+        <!-- Register Form -->
+        <form id="register-form" class="hidden" onsubmit="handleRegister(event)" novalidate>
+          <div class="form-group">
+            <label class="form-label" for="reg-username">Username</label>
+            <input class="form-input" type="text" id="reg-username" name="username" required autocomplete="username" placeholder="legendname" minlength="3" maxlength="30">
+            <small style="color:var(--text-muted)">3–30 chars, letters/numbers/underscores</small>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="reg-email">Email</label>
+            <input class="form-input" type="email" id="reg-email" name="email" required autocomplete="email" placeholder="your@email.com">
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="reg-password">Password</label>
+            <input class="form-input" type="password" id="reg-password" name="password" required autocomplete="new-password" placeholder="Min 8 characters" minlength="8">
+          </div>
+          <div id="reg-error" class="hidden" style="color:#c0394a;font-size:0.85rem;margin-bottom:12px"></div>
+          <button type="submit" class="btn btn-green w-full" id="reg-btn">CREATE ACCOUNT</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════ RUNTIME CONFIG ════════════════════════════════════ -->
+  <!--
+    AVENORA RUNTIME CONFIG
+    ────────────────────────────────────────────────────────────────
+    Architecture: Firebase (Auth, Firestore, Realtime DB, Storage)
+                + Supabase (Storage, Edge Functions)
+    No external REST backend required.
+    apiUrl is intentionally null — all backend operations use
+    Firebase or Supabase Edge Functions directly.
+  -->
+  <script>
+    (function () {
+      window.LU_CONFIG = window.LU_CONFIG || {};
+      // No Render/Express backend — Firebase + Supabase architecture only.
+      // apiUrl is null; any code that needs a backend uses Supabase Edge Functions.
+      window.LU_CONFIG.apiUrl    = null;
+      window.LU_CONFIG.socketUrl = null;
+    })();
+  </script>
+
+  <!-- ═══════ SCRIPTS ═══════════════════════════════════════════ -->
+
+  <!-- registerPage stub — must run before any page module.
+       Page scripts call registerPage() immediately on load, but app.js
+       (which owns the real registry) loads last. This stub queues all
+       registrations; app.js drains the queue on startup. -->
+  <script>
+    window._pageQueue = [];
+    window.registerPage = function(name, mod) {
+      window._pageQueue.push({ name: name, mod: mod });
+    };
+  </script>
+
+  <!-- Core utilities (load order matters) -->
+  <script src="src/store/state.js"></script>
+  <script src="src/utils/ui.js"></script>
+  <!-- Firebase must load before api.js so the auth shim is available -->
+  <script src="src/services/firebase.js"></script>
+  <script src="src/services/api.js"></script>
+  <!-- Supabase Storage client — must load after firebase.js/api.js so auth state is available -->
+  <script src="src/services/supabase.js"></script>
+  <!-- Founder theme token service — applies published theme CSS vars on every page load -->
+  <script src="src/services/themeService.js"></script>
+  <script src="src/services/musicService.js"></script>
+  <script src="src/components/visual/visualEngine.js"></script>
+
+  <!-- Page modules -->
+  <script src="src/pages/hub.js"></script>
+  <script src="src/pages/auth.js"></script>
+  <script src="src/pages/social.js"></script>
+  <script src="src/pages/video.js"></script>
+  <script src="src/pages/live.js"></script>
+  <script src="src/pages/cloudstream.js"></script>
+  <script src="src/pages/cloudstudio.js"></script>
+  <script src="src/pages/dj.js"></script>
+  <script src="src/pages/music.js"></script>
+  <script src="src/pages/arcade.js"></script>
+  <script src="src/pages/chat.js"></script>
+  <script src="src/pages/gallery.js"></script>
+  <!-- Founder Theme Control Center component (loaded before admin.js which calls it) -->
+  <script src="src/components/admin/ThemeControlCenter.js"></script>
+  <script src="src/pages/admin.js"></script>
+  <script src="src/pages/search.js"></script>
+  <script src="src/pages/profile.js"></script>
+  <script src="src/pages/settings.js"></script>
+  <script src="src/pages/customize.js"></script>
+
+  <!-- Main router + app bootstrap -->
+  <script src="src/app.js"></script>
+
+  <!-- Avenora Companion (Easter egg) — loads after router so auth state is available -->
+  <script src="src/components/companion/companion.js"></script>
+
+  <!-- Service Worker registration + PWA install prompt -->
+  <script>
+    // Capture PWA install prompt before it fires
+    window.addEventListener('beforeinstallprompt', (e) => {
+      e.preventDefault();
+      window._pwaInstallPrompt = e;
+      // Show install hint in header if not already installed
+      const hint = document.getElementById('pwa-install-hint');
+      if (hint) hint.style.display = 'flex';
+    });
+
+    window.addEventListener('appinstalled', () => {
+      window._pwaInstallPrompt = null;
+      const hint = document.getElementById('pwa-install-hint');
+      if (hint) hint.style.display = 'none';
+    });
+
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch(() => {});
+      });
+    }
+  </script>
+</body>
+</html>
