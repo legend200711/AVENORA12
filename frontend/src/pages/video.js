@@ -1165,7 +1165,6 @@ function buildPlayerHtml(video) {
           controls
           playsinline
           preload="metadata"
-          crossorigin="anonymous"
           style="width:100%;height:100%;display:block;background:#000"
           aria-label="${escapeHtml(video.title)}"
           src="${escapeHtml(src)}"
@@ -1256,38 +1255,57 @@ function initVideoElement(videoId) {
         break;
 
       case 4: {
-        // MEDIA_ERR_SRC_NOT_SUPPORTED — could be bad URL, CORS, or truly unsupported codec.
-        // Probe the URL to distinguish between 404 / CORS / codec.
-        const src = el.currentSrc || el.src || '';
-        let probeResult = 'unknown';
-        if (src) {
+        // MEDIA_ERR_SRC_NOT_SUPPORTED.
+        // Common causes on mobile/Android Chrome:
+        //   1. The video file is genuinely an unsupported codec (e.g. AVI, MKV, HEVC)
+        //   2. The URL is broken (404, wrong path, un-encoded special chars)
+        //   3. The <video> had crossorigin="anonymous" set, causing a CORS-mode fetch
+        //      that fails when the CDN doesn't return Access-Control-Allow-Origin.
+        //      (crossorigin attr has been removed from buildPlayerHtml to prevent this)
+        //
+        // Probe WITHOUT CORS mode so we can distinguish 404 from codec issues.
+        const videoSrc = el.currentSrc || el.getAttribute('src') || '';
+        let probeStatus = 0;
+        let probeOk = false;
+        if (videoSrc) {
           try {
-            const resp = await fetch(src, { method: 'HEAD', mode: 'cors' });
-            if (resp.status === 404) probeResult = '404';
-            else if (resp.ok) probeResult = 'ok';
-            else probeResult = 'http_' + resp.status;
-          } catch (fetchErr) {
-            probeResult = fetchErr.message.toLowerCase().includes('cors') ? 'cors' : 'network';
+            // no-cors probe: we only care about whether the resource exists, not its body
+            const resp = await fetch(videoSrc, { method: 'HEAD', mode: 'no-cors' });
+            // no-cors always returns type=opaque with status=0 — that still means reachable
+            probeOk = true;
+            probeStatus = resp.status;
+          } catch {
+            probeOk = false;
           }
         }
 
-        let friendlyMsg, friendlyDetail;
-        if (probeResult === '404') {
-          friendlyMsg = 'Video not found in storage.';
-          friendlyDetail = 'The video file may have been deleted or moved.';
-        } else if (probeResult === 'cors') {
-          friendlyMsg = 'Storage access error.';
-          friendlyDetail = 'CORS policy blocked access to the video file.';
-        } else if (probeResult === 'network') {
+        let friendlyMsg, friendlyDetail, canRetry;
+        if (!probeOk) {
+          // Can't reach the URL at all → network or storage is down
           friendlyMsg = 'Cannot reach video storage.';
-          friendlyDetail = 'Check your internet connection and try again.';
+          friendlyDetail = 'Check your connection and try again.';
+          canRetry = true;
           retryCount++;
+        } else if (probeStatus === 404) {
+          // URL is reachable but file is gone
+          friendlyMsg = 'Video file not found.';
+          friendlyDetail = 'The video may have been deleted. Please re-upload.';
+          canRetry = false;
         } else {
-          friendlyMsg = 'Video format not supported by this browser.';
-          friendlyDetail = 'Try a different browser, or re-upload as MP4 (H.264 + AAC).';
+          // URL is reachable (200/opaque) but the browser still can't play it →
+          // format/codec is the issue. Give the user a concrete next step.
+          const ext = (videoSrc.split('?')[0].split('.').pop() || '').toLowerCase();
+          const badCodec = ['avi','mkv','wmv','flv','mov','3gp','hevc','h265','ts'].includes(ext);
+          if (badCodec) {
+            friendlyMsg = `${ext.toUpperCase()} files are not supported on this browser.`;
+            friendlyDetail = 'Please re-upload as MP4 (H.264 video + AAC audio) for best compatibility.';
+          } else {
+            friendlyMsg = 'This video cannot be played on this device.';
+            friendlyDetail = 'The video codec may not be supported. Re-uploading as MP4 (H.264 + AAC) usually fixes this.';
+          }
+          canRetry = false;
         }
 
-        const canRetry = probeResult === 'network' || probeResult === '404';
         showPlayerError(friendlyMsg, friendlyDetail, canRetry);
         break;
       }
