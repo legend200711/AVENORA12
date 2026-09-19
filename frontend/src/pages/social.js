@@ -856,6 +856,19 @@ window.SNComments = SNComments;
 // SNStories — 24-hour stories (timestamp-based expiry)
 // ═══════════════════════════════════════════════════════════════
 
+// Render the story-load-failure state into a content container.
+// Used by both the timeout guard and the catch handler so the message
+// is consistent and the Retry button always works.
+function _renderStoryError(container, storyId, username) {
+  const safeId  = escapeHtml(storyId  || '');
+  const safeUsr = escapeHtml(username || '');
+  container.innerHTML = `<div style="padding:24px 0">
+    <p style="color:var(--text-muted);margin-bottom:16px">Unable to load this story. Please try again.</p>
+    <button class="btn btn-outline btn-sm" onclick="SNStories.view('${safeId}','${safeUsr}');Modal.close('sn-story-viewer')">↻ Retry</button>
+  </div>`;
+}
+
+
 const SNStories = {
   async load() {
     const user = LegendAPI.auth.getUser();
@@ -925,27 +938,25 @@ const SNStories = {
   },
 
   view(storyId, username) {
-    // Mark as viewed
+    // Mark as viewed (fire-and-forget)
     LegendAPI.stories.view(storyId).catch(() => {});
 
     Modal.create({
       id: 'sn-story-viewer',
-      title: `${escapeHtml(username ? '@' + username + "'s Story" : "Story")}`,
+      // Title is plain text — Modal.create uses textContent, so no escaping needed here.
+      title: username ? '@' + username + "'s Story" : 'Story',
       body: `<div id="sn-story-viewer-content" style="text-align:center">
-        <div class="loading-state"><div class="spinner"></div></div>
+        <div class="loading-state"><div class="spinner"></div><span style="font-size:0.85rem;color:var(--text-muted)">Loading story…</span></div>
       </div>`,
       actions: [{ label: 'Close', class: 'btn-ghost', onclick: "Modal.close('sn-story-viewer')" }],
     });
     Modal.open('sn-story-viewer');
 
-    // Load the story with a 10-second timeout — never leave the spinner spinning forever
+    // Timeout guard — never leave the spinner spinning forever (10 s hard limit)
     const _storyTimeout = setTimeout(() => {
       const c = document.getElementById('sn-story-viewer-content');
       if (c && c.querySelector('.spinner')) {
-        c.innerHTML = `<div style="padding:24px 0">
-          <p style="color:var(--text-muted);margin-bottom:16px">This story is temporarily unavailable.</p>
-          <button class="btn btn-outline btn-sm" onclick="SNStories.view('${escapeHtml(storyId)}','${escapeHtml(username || '')}');Modal.close('sn-story-viewer')">↻ Retry</button>
-        </div>`;
+        _renderStoryError(c, storyId, username);
       }
     }, 10000);
 
@@ -954,28 +965,58 @@ const SNStories = {
       if (!contentEl) return;
       try {
         let story = null;
+        let confirmedExpired = false;
 
-        // Strategy 1: fetch the specific story by ID from the REST backend
+        // Strategy 1: fetch by document ID via LegendAPI (checks Firestore with expiry)
+        // getById returns { story } on success, { story: null, expired: true } when
+        // confirmed expired/deleted, or null when not found (continue to fallbacks).
         try {
           const data = await LegendAPI.stories.getById(storyId);
-          story = data?.story || data;
+          if (data !== null && data !== undefined) {
+            if (data.expired) {
+              confirmedExpired = true;
+            } else {
+              story = data.story || null;
+            }
+          }
+          // data === null means "not found in Firestore" — fall through to Strategy 2
         } catch (_) {}
 
-        // Strategy 2: fetch via Firestore directly by document ID
-        if (!story && window.AvenoraFirebase?.getFirestore) {
+        // Strategy 2: fetch via Firestore directly (if Strategy 1 found nothing at all)
+        if (!story && !confirmedExpired && window.AvenoraFirebase?.getFirestore) {
           try {
             const db = await window.AvenoraFirebase.getFirestore();
-            const { doc, getDoc } = await window.AvenoraFirebase._loadModuleFirestore();
-            const snap = await getDoc(doc(db, 'stories', storyId));
-            if (snap.exists()) story = { id: snap.id, ...snap.data() };
+            const fsM = await window.AvenoraFirebase._loadModuleFirestore();
+            const { doc, getDoc } = fsM || {};
+            if (doc && getDoc) {
+              const snap = await getDoc(doc(db, 'stories', storyId));
+              if (snap.exists()) {
+                const d = snap.data();
+                const now = new Date().toISOString();
+                if (d.isDeleted || (d.expiresAt && d.expiresAt <= now)) {
+                  confirmedExpired = true;
+                } else {
+                  story = { id: snap.id, ...d };
+                }
+              }
+            }
           } catch (_) {}
         }
 
-        // Strategy 3: fallback — scan recent stories
-        if (!story && window.AvenoraFirebase?.Firestore) {
+        // Strategy 3: fallback — scan recent stories list (last resort when Firestore SDK unavailable)
+        if (!story && !confirmedExpired && window.AvenoraFirebase?.Firestore) {
           try {
             const stories = await window.AvenoraFirebase.Firestore.getStories(100);
-            story = stories.find(s => (s.id || s._id) === storyId) || null;
+            const found = stories.find(s => (s.id || s._id) === storyId) || null;
+            if (found) {
+              const now = new Date().toISOString();
+              const exp = found.expiresAt;
+              if (found.isDeleted || (exp && exp <= now)) {
+                confirmedExpired = true;
+              } else {
+                story = found;
+              }
+            }
           } catch (_) {}
         }
 
@@ -983,26 +1024,30 @@ const SNStories = {
         const c = document.getElementById('sn-story-viewer-content');
         if (!c) return;
 
-        if (!story || !story.mediaUrl) {
-          c.innerHTML = `<p style="color:var(--text-muted)">This story is no longer available.</p>`;
+        // EXPIRED/DELETED state — the backend confirmed the story is gone
+        if (confirmedExpired || (story && story.isDeleted)) {
+          c.innerHTML = `<p style="color:var(--text-muted);padding:16px 0">This story is no longer available.</p>`;
           return;
         }
-        if (story.mediaType === 'image' || !story.mediaType) {
-          c.innerHTML = `<img src="${escapeHtml(story.mediaUrl || '')}" style="max-width:100%;border-radius:8px;display:block;margin:0 auto" alt="Story image">
+
+        // Story not found after all strategies — treat as a load failure, not confirmed expiry
+        if (!story || !story.mediaUrl) {
+          _renderStoryError(c, storyId, username);
+          return;
+        }
+
+        // SUCCESS — render story content
+        if (story.mediaType === 'video') {
+          c.innerHTML = `<video src="${escapeHtml(story.mediaUrl)}" controls style="max-width:100%;border-radius:8px" playsinline></video>
             ${story.caption ? `<p style="margin-top:12px;color:var(--text-secondary);font-size:0.9rem">${escapeHtml(story.caption)}</p>` : ''}`;
-        } else if (story.mediaType === 'video') {
-          c.innerHTML = `<video src="${escapeHtml(story.mediaUrl || '')}" controls style="max-width:100%;border-radius:8px" playsinline></video>
+        } else {
+          c.innerHTML = `<img src="${escapeHtml(story.mediaUrl)}" style="max-width:100%;border-radius:8px;display:block;margin:0 auto" alt="Story image">
             ${story.caption ? `<p style="margin-top:12px;color:var(--text-secondary);font-size:0.9rem">${escapeHtml(story.caption)}</p>` : ''}`;
         }
       } catch (err) {
         clearTimeout(_storyTimeout);
         const c = document.getElementById('sn-story-viewer-content');
-        if (c) {
-          c.innerHTML = `<div style="padding:24px 0">
-            <p style="color:var(--text-muted);margin-bottom:16px">This story is temporarily unavailable.</p>
-            <button class="btn btn-outline btn-sm" onclick="SNStories.view('${escapeHtml(storyId)}','${escapeHtml(username || '')}');Modal.close('sn-story-viewer')">↻ Retry</button>
-          </div>`;
-        }
+        if (c) _renderStoryError(c, storyId, username);
       }
     };
     _loadStory();

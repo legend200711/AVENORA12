@@ -1333,7 +1333,9 @@
     view: (id) => post(`/stories/${id}/view`, {}),
     async getById(id) {
       // Fetch a single story by its Firestore document ID.
-      // Tries Firestore first (fast, no auth required), then the REST backend.
+      // Tries Firestore first (fast, no auth required), then returns null so
+      // the caller can try further fallback strategies.
+      // Returns: { story: {...} } when found and valid, or null when not found/expired.
       if (window.AvenoraFirebase?.getFirestore) {
         try {
           const db = await window.AvenoraFirebase.getFirestore();
@@ -1343,14 +1345,19 @@
             const snap = await getDoc(doc(db, 'stories', id));
             if (snap.exists()) {
               const data = snap.data();
-              if (!data.isDeleted) return { story: { id: snap.id, ...data } };
+              const now = new Date().toISOString();
+              // Story exists but is deleted or expired — signal as expired, not an error
+              if (data.isDeleted || (data.expiresAt && data.expiresAt <= now)) {
+                return { story: null, expired: true };
+              }
+              return { story: { id: snap.id, ...data } };
             }
           }
         } catch (_) {}
       }
-      // Fallback: REST endpoint GET /stories/:userId is per-user; use the feed and filter
-      // as a last resort — handled by the caller's Strategy 3.
-      throw new Error('Story not found');
+      // Story not found in Firestore (or Firestore unavailable) — return null so
+      // the caller's strategy chain can continue with the next fallback.
+      return null;
     },
     async delete(id) {
       if (window.AvenoraFirebase?.Firestore) {

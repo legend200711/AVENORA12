@@ -73,7 +73,7 @@
       el.innerHTML = `
         <div class="modal" role="dialog" aria-modal="true" aria-labelledby="${id}-title">
           <div class="modal-header">
-            <h3 id="${id}-title" style="margin:0">${escapeHtml(title)}</h3>
+            <h3 id="${id}-title" style="margin:0"></h3>
             <button class="btn btn-ghost btn-sm" onclick="Modal.close('${id}')" aria-label="Close">✕</button>
           </div>
           <div class="modal-body">${body}</div>
@@ -82,6 +82,11 @@
           ).join('')}</div>` : ''}
         </div>
       `;
+      // Set title safely via textContent — prevents XSS and also fixes the
+      // double-encoding issue where callers pass already-escaped strings that
+      // then get re-escaped and rendered as literal entity text (e.g. &#x27;).
+      const titleEl = el.querySelector(`#${id}-title`);
+      if (titleEl) titleEl.textContent = title;
 
       // Close on backdrop click
       el.addEventListener('click', (e) => {

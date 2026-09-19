@@ -1427,7 +1427,7 @@ const ChatUI = {
 
       Modal.create({
         id: 'room-members-modal',
-        title: `Members — ${escapeHtml(room.name)}`,
+        title: `Members — ${room.name}`,
         body: `
           ${canManage ? `
             <div style="margin-bottom:var(--space-md)">
@@ -1515,7 +1515,7 @@ const ChatUI = {
     if (!room) return;
     Modal.create({
       id: 'room-manage-modal',
-      title: `Manage — ${escapeHtml(room.name)}`,
+      title: `Manage — ${room.name}`,
       body: `
         <div class="room-form">
           <div class="form-group">
