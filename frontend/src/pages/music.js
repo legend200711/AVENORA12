@@ -391,7 +391,7 @@ async function renderDiscover() {
   `;
 }
 
-// Kick off a background fetch of radio now-playing for the teaser card
+// Kick off a background fetch of radio now-playing for the teaser card (modular SDK)
 (function _discoverRadioNP() {
   setTimeout(async () => {
     const el = document.getElementById('discover-radio-np');
@@ -399,9 +399,12 @@ async function renderDiscover() {
     try {
       const { getFirestore } = window.AvenoraFirebase || {};
       if (getFirestore) {
-        const db   = await getFirestore();
-        const snap = await db.collection('stationNowPlaying').doc('avenoraRadio').get();
-        if (snap.exists) {
+        const db = await getFirestore();
+        const { doc, getDoc } = await import(
+          'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js'
+        );
+        const snap = await getDoc(doc(db, 'stationNowPlaying', 'avenoraRadio'));
+        if (snap.exists()) {
           const d = snap.data();
           if (d.currentTitle) {
             el.textContent = `${d.currentTitle}${d.currentArtist ? ' — ' + d.currentArtist : ''}`;
@@ -1482,7 +1485,7 @@ window.musicUploadSubmit = async function (e) {
 
     const data = await window.AvenoraStorage.uploadMusic(
       file,
-      { title: titleVal, artist, album, genre },
+      { title: titleVal, artist, album, genre, visibility },
       (p) => {
         if (fill) fill.style.width = p + '%';
         if (pct) pct.textContent = p + '%';

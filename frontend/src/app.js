@@ -629,20 +629,26 @@
       if (btn) btn.textContent = (audio && !audio.paused) ? '⏸' : '▶';
     }
 
-    // Listen to the Firestore doc for now-playing updates
+    // Listen to the Firestore doc for now-playing updates (modular SDK)
     async function _subscribeMini() {
       try {
         const { getFirestore } = window.AvenoraFirebase || {};
         if (!getFirestore) return;
         const db = await getFirestore();
-        _miniUnsubscribe = db.collection('stationNowPlaying').doc('avenoraRadio')
-          .onSnapshot((snap) => {
-            if (!snap.exists) return;
+        const { doc, onSnapshot } = await import(
+          'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js'
+        );
+        _miniUnsubscribe = onSnapshot(
+          doc(db, 'stationNowPlaying', 'avenoraRadio'),
+          (snap) => {
+            if (!snap.exists()) return;
             const d = snap.data();
             if (d.status === 'playing' && d.currentTitle) {
               _updateMiniTrack(d.currentTitle, d.currentArtist || '');
             }
-          }, () => {});
+          },
+          () => {}
+        );
       } catch {}
     }
 

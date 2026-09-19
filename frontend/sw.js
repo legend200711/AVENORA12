@@ -1,5 +1,5 @@
 /**
- * AVENORA — Service Worker v26
+ * AVENORA — Service Worker v27
  *
  * Deployment-aware: detects GitHub Pages vs Firebase Hosting automatically.
  *   GitHub Pages:      https://legend200711.github.io/AVENORA12/  → BASE = /AVENORA12
@@ -47,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v26';
-const CACHE_NAME  = 'avenora-cache-v26';
+const SW_VERSION  = 'v27';
+const CACHE_NAME  = 'avenora-cache-v27';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -80,6 +80,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v23', // v23 — evict: radio LU_CONFIG crash, cloud-stream engine stall fallback
   'avenora-cache-v24', // v24 — evict: cloudRadioEngine require path fix, 404.html redirect
   'avenora-cache-v25', // v25 — evict: SW_UPDATED reload loop fix; bump to force fresh install
+  'avenora-cache-v26', // v26 — evict: fix compat SDK calls in app.js + music.js; visibility passthrough
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
