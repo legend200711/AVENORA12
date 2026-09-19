@@ -705,10 +705,33 @@
     // Moderation
     async deleteVideo(id) {
       const sid = String(id);
+
+      // ── Path 1: backend is configured — use DELETE /api/videos/library/:id
+      //   This works for ALL video types (Supabase UUID rows AND Firestore docs)
+      //   because the backend uses its service-role key for Supabase and its
+      //   Firebase Admin-equivalent for Firestore.  This is the correct path for
+      //   founder/admin deletes coming from the admin panel.
+      if (BASE_URL) {
+        try {
+          const result = await del(`/videos/library/${encodeURIComponent(sid)}`);
+          console.info('[AVN] Video deleted via backend:', sid, result);
+          return { success: true };
+        } catch (backendErr) {
+          console.error('[AVN] Backend video delete error:', {
+            id: sid,
+            status: backendErr.status,
+            message: backendErr.message,
+            code: backendErr.code,
+          });
+          throw backendErr;
+        }
+      }
+
+      // ── Path 2: no backend configured — direct Supabase DELETE for UUID rows.
+      //   Uses a direct Supabase REST DELETE with the anon key.
+      //   This works only if Supabase RLS allows the authenticated user to delete
+      //   their own rows (or if the table has permissive delete policies).
       if (_isUUID(sid)) {
-        // Supabase music_library row — route through the video-delete Edge Function.
-        // The anon key cannot prove Firebase identity so direct DELETE is blocked by RLS.
-        // The Edge Function verifies the Firebase ID token and authorises the deletion.
         let token = null;
         if (window.AvenoraFirebase?.Auth) {
           token = await window.AvenoraFirebase.Auth.getIdToken().catch(() => null);
@@ -721,41 +744,52 @@
         }
         if (!token) throw new Error('Not authenticated — please sign in before deleting a video.');
 
-        const fnUrl = `${SUPABASE_PROJECT_URL}/functions/v1/video-delete?id=${encodeURIComponent(sid)}`;
         let res;
         try {
-          res = await fetch(fnUrl, {
-            method: 'DELETE',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json',
-            },
-          });
+          res = await fetch(
+            `${SUPABASE_REST}/music_library?id=eq.${encodeURIComponent(sid)}`,
+            {
+              method: 'DELETE',
+              headers: {
+                'apikey':        SUPABASE_ANON_KEY,
+                'Authorization': `Bearer ${token}`,
+                'Content-Type':  'application/json',
+                'Prefer':        'return=minimal',
+              },
+            }
+          );
         } catch (networkErr) {
-          console.error('[AVN] video-delete Edge Function network error:', networkErr);
+          console.error('[AVN] Supabase direct video delete network error:', networkErr);
           throw new Error('Network error while deleting video. Check your connection.');
         }
-        const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          const msg = data.message || `Delete failed (HTTP ${res.status})`;
-          const err = new Error(msg);
-          err.status = res.status;
-          console.error('[AVN] video-delete Edge Function error:', { status: res.status, data });
-          throw err;
+          const errData = await res.json().catch(() => ({}));
+          const msg = errData.message || errData.hint || `Delete failed (HTTP ${res.status})`;
+          console.error('[AVN] Supabase direct video delete error:', { status: res.status, errData });
+          throw new Error(msg);
         }
         return { success: true };
       }
 
-      // Firestore-backed video (non-UUID id)
+      // ── Path 3: Firestore-backed video (non-UUID id, no backend configured).
+      //   Uses Firestore soft-delete (set isDeleted=true) — same as the backend does.
       try {
         const db = await window.AvenoraFirebase.getFirestore();
-        const { doc: fsDoc, deleteDoc } = await import(
+        const { doc: fsDoc, updateDoc } = await import(
           `https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`
         );
-        await deleteDoc(fsDoc(db, 'videos', sid));
+        await updateDoc(fsDoc(db, 'videos', sid), {
+          isDeleted: true,
+          deletedAt: new Date().toISOString(),
+        });
+        console.info('[AVN] Video soft-deleted in Firestore:', sid);
         return { success: true };
       } catch (err) {
-        console.error('[AVN] Firestore video delete error:', err.code, err.message);
+        console.error('[AVN] Firestore video delete error:', {
+          id: sid,
+          code: err.code,
+          message: err.message,
+        });
         throw new Error(err.message || 'Could not delete video from Firestore.');
       }
     },

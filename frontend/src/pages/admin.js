@@ -593,7 +593,22 @@ window.adminDeleteVideo = async function(videoId) {
     await LegendAPI.videos.deleteVideo(videoId);
     Toast.success('Video deleted.');
     document.getElementById(`admin-vid-row-${videoId}`)?.remove();
-  } catch (err) { console.warn('[AVN] Admin delete video error:', err); Toast.error('Video could not be deleted. Please try again.'); }
+  } catch (err) {
+    // Log the real technical reason so it can be diagnosed in DevTools
+    console.error('[AVN] Admin delete video error:', {
+      videoId,
+      status:  err.status,
+      code:    err.code,
+      message: err.message,
+    });
+    // Surface a useful message to the UI
+    const userMsg = err.status === 401 ? 'Session expired — please sign in again.' :
+                    err.status === 403 ? 'Permission denied — only the founder can delete videos.' :
+                    err.status === 404 ? 'Video not found (already deleted?).' :
+                    err.status === 503 ? 'Storage service not configured. Check backend .env.' :
+                    err.message || 'Video could not be deleted. Please try again.';
+    Toast.error(userMsg);
+  }
 };
 
 window.adminFeatureVideo = async function(videoId) {

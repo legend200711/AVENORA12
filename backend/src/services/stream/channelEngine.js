@@ -526,6 +526,11 @@ class ChannelEngine {
       nextMediaUrl:   nextItem?.mediaUrl || null,
       // History
       recentlyPlayed: this.history.slice(-5),
+      // Source-type fields — required for YouTube and storage player routing.
+      // Never expose null as 'youtube' — only pass youtubeId when it's actually set.
+      sourceType:     item?.sourceType  || 'direct',
+      sourceUrl:      item?.sourceUrl   || effectiveMediaUrl || null,
+      youtubeId:      item?.youtubeId   || null,
     };
 
     try {

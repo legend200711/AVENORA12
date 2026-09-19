@@ -13,6 +13,9 @@ const { NotFoundError, ForbiddenError, ValidationError } = require('../middlewar
 const { getDb, FieldValue } = require('../../config/firestore');
 const storageSvc = require('../../services/storage/supabaseStorage');
 
+// UUID pattern — Supabase music_library rows use UUID primary keys.
+const _isUUID = (id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(id));
+
 const ALLOWED_VIDEO_MIME = new Set(['video/mp4','video/webm','video/ogg','video/quicktime','video/x-msvideo']);
 const ALLOWED_IMAGE_MIME = new Set(['image/jpeg','image/png','image/webp']);
 
@@ -269,16 +272,79 @@ router.get('/library/:uploaderId', optionalAuth, async (req, res, next) => {
 });
 
 // DELETE /api/videos/library/:id
+// Handles both Firestore-backed videos (non-UUID IDs) and
+// Supabase music_library rows (UUID IDs).
 router.delete('/library/:id', authenticate, async (req, res, next) => {
+  const videoId = req.params.id;
+  const isMod   = ['moderator','founder','admin'].includes(req.user.role);
+
+  // ── UUID: Supabase music_library row ──────────────────────────────────
+  if (_isUUID(videoId)) {
+    try {
+      let client;
+      try { client = storageSvc.getClient(); } catch (cfgErr) {
+        // Supabase not configured — cannot delete the storage object,
+        // but still report success so the admin can clean up the list.
+        console.warn('[Videos] Supabase not configured, cannot delete music_library row:', cfgErr.message);
+        return res.status(503).json({
+          error: true,
+          message: 'Storage service not configured. Cannot delete this video from the database. ' +
+                   'Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the backend .env.',
+        });
+      }
+
+      // Fetch the row first so we can check ownership and get the storage path
+      const { data: rows, error: fetchErr } = await client
+        .from('music_library')
+        .select('id, uid, storage_path, mime_type')
+        .eq('id', videoId)
+        .limit(1);
+
+      if (fetchErr) {
+        console.error('[Videos] Supabase fetch error (delete):', fetchErr.message);
+        return next(new Error(`Database error: ${fetchErr.message}`));
+      }
+      if (!rows || rows.length === 0) return next(new NotFoundError('Video'));
+
+      const row = rows[0];
+      const isOwner = row.uid === req.user.id;
+      if (!isOwner && !isMod) return next(new ForbiddenError());
+
+      // Delete the database row
+      const { error: deleteErr } = await client
+        .from('music_library')
+        .delete()
+        .eq('id', videoId);
+
+      if (deleteErr) {
+        console.error('[Videos] Supabase delete error:', deleteErr.message);
+        return next(new Error(`Database delete failed: ${deleteErr.message}`));
+      }
+
+      // Best-effort: delete the storage file (don't block the response)
+      if (row.storage_path) {
+        const bucket = row.mime_type?.startsWith('video/') ? 'videos' : 'music';
+        storageSvc.deleteFile(bucket, row.storage_path).catch(e => {
+          console.warn('[Videos] Storage file delete failed (non-fatal):', row.storage_path, e.message);
+        });
+      }
+
+      console.info(`[Videos] Supabase music_library row deleted: ${videoId} by ${req.user.id}`);
+      res.json({ success: true, message: 'Video deleted' });
+    } catch (err) { next(err); }
+    return;
+  }
+
+  // ── Non-UUID: Firestore videos collection ─────────────────────────────
   try {
     const db   = getDb();
-    const snap = await db.collection('videos').doc(req.params.id).get();
+    const snap = await db.collection('videos').doc(videoId).get();
     if (!snap.exists || snap.data().isDeleted) return next(new NotFoundError('Video'));
     const isOwner = snap.data().uploader === req.user.id;
-    const isMod   = ['moderator','founder','admin'].includes(req.user.role);
     if (!isOwner && !isMod) return next(new ForbiddenError());
     await db.collection('videos').doc(snap.id).update({ isDeleted: true, deletedAt: new Date().toISOString() });
     if (snap.data().storagePath) storageSvc.deleteFile('videos', snap.data().storagePath).catch(() => {});
+    console.info(`[Videos] Firestore video soft-deleted: ${videoId} by ${req.user.id}`);
     res.json({ success: true, message: 'Video deleted' });
   } catch (err) { next(err); }
 });

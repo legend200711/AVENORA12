@@ -92,6 +92,23 @@ registerPage('channel', {
               </div>
             </div>
 
+            <!-- YOUTUBE player -->
+            <div id="ch-state-youtube" class="ch-state-view" style="display:none">
+              <div class="ch-video-wrap" style="position:relative;width:100%;padding-top:56.25%">
+                <iframe
+                  id="ch-youtube-frame"
+                  style="position:absolute;top:0;left:0;width:100%;height:100%;border:none"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                  allowfullscreen
+                  title="AVENORA YouTube Program"
+                ></iframe>
+              </div>
+              <div class="ch-audio-info" style="margin-top:12px">
+                <div class="ch-audio-title" id="ch-yt-title">—</div>
+                <div class="ch-audio-artist" id="ch-yt-artist"></div>
+              </div>
+            </div>
+
             <!-- AUDIO / MUSIC player -->
             <div id="ch-state-audio" class="ch-state-view" style="display:none">
               <div class="ch-audio-artwork" id="ch-audio-artwork">
@@ -215,6 +232,9 @@ const _ch = {
   // Slideshow
   _slideshowKey: null,
 
+  // YouTube
+  _ytEmbedUrl:  null,
+
   // Progress RAF
   progressRaf:  null,
   itemStartedAt: 0,
@@ -313,6 +333,10 @@ async function _chInit() {
     if (_ch.hls) { try { _ch.hls.destroy(); } catch (_) {} _ch.hls = null; }
     clearTimeout(_ch.pollTimer);
     clearTimeout(_ch._retryTimer);
+    // Stop any YouTube embed
+    const ytFrame = document.getElementById('ch-youtube-frame');
+    if (ytFrame) { ytFrame.src = 'about:blank'; }
+    _ch._ytEmbedUrl = null;
   };
 }
 
@@ -489,7 +513,15 @@ function _chRenderState(ch) {
     return;
   }
 
-  // Channel has content — route to player
+  // Channel has content — route to player.
+  // YouTube items (sourceType === 'youtube') override the normal type routing
+  // regardless of whether the program type is VIDEO, MUSIC, AUDIO, etc.
+  const sourceType = (ch.sourceType || 'direct').toLowerCase();
+  if (sourceType === 'youtube' && ch.youtubeId) {
+    _chShowYouTube(ch);
+    return;
+  }
+
   switch (type) {
     case 'LIVE_CAMERA':
       _chShowLive(ch);
@@ -579,10 +611,15 @@ function _chShowVideo(ch) {
   videoEl.load();
 
   videoEl.onerror = () => {
-    console.warn('[Channel] Video load error:', ch.mediaUrl);
+    const errCode = videoEl.error?.code;
+    const msg = errCode === 4 ? 'This media URL is not a supported direct video file.' :
+                errCode === 2 ? 'A network error occurred while loading this video URL.' :
+                               'Unable to load this video source.';
+    console.warn('[Channel] Video load error:', { url: ch.mediaUrl, code: errCode, message: msg });
     // Don't show offline — show standby and wait for next state update
     _ch._vodUrl = null;
     _chShowState('standby');
+    _chSetText('ch-np-title', msg);
   };
 
   if (seekTo > 0) {
@@ -711,13 +748,15 @@ function _chPlayQueuedTrack(track, serverElapsed) {
     _chSetPlayIcon(true);
     _chStartWaveform();
   }).catch((err) => {
-    // Autoplay blocked
     _ch.audioPlaying = false;
     _chSetPlayIcon(false);
     _chStopWaveform();
-    // Only show tap-to-play if it's an autoplay policy error
     if (err && err.name === 'NotAllowedError') {
+      // Browser blocked autoplay — user must tap to play
+      console.info('[Channel] Autoplay blocked by browser policy — showing tap-to-play prompt');
       _chShowTapToPlay();
+    } else {
+      console.warn('[Channel] Audio play() rejected:', err?.message || err);
     }
   });
 
@@ -771,11 +810,18 @@ function _chPlaySingleAudio(url, elapsed, duration) {
   audioEl.volume = _ch.volume;
   audioEl.load();
 
-  audioEl.onerror = () => {
-    console.warn('[Channel] Single audio load error:', url);
+  audioEl.onerror = (e) => {
+    const errCode = audioEl.error?.code;
+    const msg = errCode === 4 ? 'This media URL is not a supported direct audio/video file.' :
+                errCode === 3 ? 'Unable to decode media. The file may be corrupt or unsupported.' :
+                errCode === 2 ? 'A network error occurred while loading this media URL.' :
+                errCode === 1 ? 'Your browser blocked playback until the user interacts with the player.' :
+                               'Unable to load this media source.';
+    console.warn('[Channel] Single audio load error:', { url, code: errCode, message: msg });
     _ch._audioUrl = null;
     // Don't show offline — wait for server update
     _chShowState('standby');
+    _chSetText('ch-np-title', msg);
   };
 
   if (elapsed > 2 && duration > 0 && elapsed < duration - 2) {
@@ -843,6 +889,15 @@ window.chTapToPlay = function() {
   const videoLive = document.getElementById('ch-video-live');
   const videoVod  = document.getElementById('ch-video-vod');
   const t = (_ch.programType || '').toUpperCase();
+  const st = (_ch.status || '').toLowerCase();
+  // YouTube: user interaction has happened — try to reload with autoplay enabled
+  if (st === 'youtube' || _ch._ytEmbedUrl) {
+    const frame = document.getElementById('ch-youtube-frame');
+    if (frame && _ch._ytEmbedUrl) {
+      frame.src = _ch._ytEmbedUrl;
+    }
+    return;
+  }
   if (audioEl && (t === 'AUDIO' || t === 'MUSIC')) {
     audioEl.muted = false;
     audioEl.play().then(() => {
@@ -985,8 +1040,41 @@ function _chUpdateInfoProgress(elapsed, duration) {
   if (pw) pw.style.display = duration > 0 ? '' : 'none';
 }
 
+// ── Player: YouTube ───────────────────────────────────────────────────────
+// YouTube content is displayed via the YouTube IFrame embed.
+// We do NOT call fetch() on the YouTube URL.
+// We do NOT use <video src="youtubeUrl"> or <audio src="youtubeUrl">.
+function _chShowYouTube(ch) {
+  _chShowState('youtube');
+  _chStopAudio();
+  _chStopSlideshow();
+
+  const frame  = document.getElementById('ch-youtube-frame');
+  const titleEl  = document.getElementById('ch-yt-title');
+  const artistEl = document.getElementById('ch-yt-artist');
+
+  if (titleEl)  titleEl.textContent  = ch.programTitle || '—';
+  if (artistEl) artistEl.textContent = ch.artist       || '';
+
+  if (!frame || !ch.youtubeId) {
+    console.warn('[Channel] YouTube player: missing youtubeId or frame element', ch);
+    _chShowState('standby');
+    _chSetText('ch-np-title', 'YouTube source unavailable');
+    return;
+  }
+
+  // Avoid reloading the same video
+  const embedUrl = `https://www.youtube.com/embed/${ch.youtubeId}?autoplay=1&rel=0&modestbranding=1`;
+  if (_ch._ytEmbedUrl === embedUrl) return;
+  _ch._ytEmbedUrl = embedUrl;
+
+  frame.src = embedUrl;
+
+  console.info('[Channel] YouTube embed loaded:', ch.youtubeId, ch.programTitle);
+}
+
 // ── UI state routing ──────────────────────────────────────────────────────
-const CH_STATES = ['offline', 'loading', 'standby', 'live', 'video', 'audio', 'image'];
+const CH_STATES = ['offline', 'loading', 'standby', 'live', 'video', 'audio', 'image', 'youtube'];
 
 function _chShowState(state) {
   CH_STATES.forEach(s => {
@@ -995,6 +1083,14 @@ function _chShowState(state) {
   });
   const tapEl = document.getElementById('ch-tap-to-play');
   if (tapEl) tapEl.style.display = 'none';
+  // Clear YouTube embed src when leaving YouTube state to stop playback
+  if (state !== 'youtube') {
+    const frame = document.getElementById('ch-youtube-frame');
+    if (frame && _ch._ytEmbedUrl) {
+      frame.src = 'about:blank';
+      _ch._ytEmbedUrl = null;
+    }
+  }
 }
 
 function _chShowTapToPlay() {

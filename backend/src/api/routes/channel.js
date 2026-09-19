@@ -102,6 +102,10 @@ router.get('/now-playing', optionalAuth, async (req, res, next) => {
       nextType:      data.nextType,
       nextTitle:     data.nextTitle,
       recentlyPlayed: data.recentlyPlayed || [],
+      // Source-type fields (required for YouTube and storage player routing)
+      sourceType:    data.sourceType  || 'direct',
+      sourceUrl:     data.sourceUrl   || data.mediaUrl || null,
+      youtubeId:     data.youtubeId   || null,
     };
     res.json({ success: true, channel: safe });
   } catch (err) { next(err); }
@@ -442,16 +446,30 @@ function _sanitizeProgramItem(item, index) {
   const title = String(item.title || '').slice(0, 200);
   if (!title) throw new ValidationError(`items[${index}].title is required`);
 
+  // Validate sourceType — defaults to 'direct' for backward compat
+  const VALID_SOURCE_TYPES = ['direct', 'youtube', 'storage'];
+  const sourceType = VALID_SOURCE_TYPES.includes(item.sourceType) ? item.sourceType : 'direct';
+
+  // YouTube items must not have mediaUrl used as a direct src
+  const youtubeId = typeof item.youtubeId === 'string' ? item.youtubeId.slice(0, 20) : null;
+
   const safe = {
     type,
     title,
     artist:      typeof item.artist      === 'string' ? item.artist.slice(0, 200)      : null,
     coverArt:    typeof item.coverArt    === 'string' ? item.coverArt.slice(0, 500)     : null,
-    mediaUrl:    typeof item.mediaUrl    === 'string' ? item.mediaUrl.slice(0, 2000)    : null,
+    // mediaUrl: null for YouTube items (player uses youtubeId/embed instead).
+    // For direct/storage: the original URL.
+    mediaUrl:    sourceType === 'youtube' ? null
+               : (typeof item.mediaUrl === 'string' ? item.mediaUrl.slice(0, 2000) : null),
     mediaId:     typeof item.mediaId     === 'string' ? item.mediaId.slice(0, 200)      : null,
     duration:    typeof item.duration    === 'number' ? Math.max(0, Math.floor(item.duration)) : 0,
     sortOrder:   typeof item.sortOrder   === 'number' ? item.sortOrder : (index + 1) * 10,
     description: typeof item.description === 'string' ? item.description.slice(0, 500) : null,
+    // Extended source metadata (required for sourceType-aware player)
+    sourceType,
+    sourceUrl:   typeof item.sourceUrl   === 'string' ? item.sourceUrl.slice(0, 2000)   : (item.mediaUrl || null),
+    youtubeId:   youtubeId,
   };
 
   // Slideshow-specific

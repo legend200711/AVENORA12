@@ -278,8 +278,9 @@ registerPage('channelstudio', {
             </div>
             <div class="chs-field" id="chs-media-url-field">
               <label class="chs-label">Media URL</label>
-              <input class="form-input" id="chs-add-url" placeholder="https://…" maxlength="2000">
-              <div class="chs-hint">Direct link to audio or video file (Supabase, Firebase Storage, S3, CDN, etc.)</div>
+              <input class="form-input" id="chs-add-url" placeholder="https://… (direct file or YouTube URL)" maxlength="2000" oninput="chsOnUrlInput()">
+              <div class="chs-hint" id="chs-url-hint">Direct link to audio/video file, or a YouTube URL (https://youtu.be/… or https://www.youtube.com/watch?v=…)</div>
+              <div id="chs-url-type-badge" style="display:none;margin-top:6px;font-size:0.8rem;font-weight:600;color:var(--neon-red)"></div>
             </div>
             <div class="chs-field">
               <label class="chs-label">Duration <span class="chs-opt">seconds — leave 0 to auto-detect</span></label>
@@ -624,9 +625,13 @@ function _chsRenderStatus(st) {
   const progFill  = document.getElementById('chs-progress-fill');
   const progPct   = document.getElementById('chs-progress-pct');
 
-  if (nowType)  nowType.textContent  = st.currentItem ? _chsTypeLabel(st.currentItem.type) : '—';
+  if (nowType)  nowType.textContent  = st.currentItem
+    ? (_chsTypeLabel(st.currentItem.type) + (st.currentItem.sourceType === 'youtube' ? ' ▶YT' : ''))
+    : '—';
   if (nowTitle) nowTitle.textContent = st.currentItem?.title || '—';
-  if (nxtType)  nxtType.textContent  = st.nextItem ? _chsTypeLabel(st.nextItem.type) : '—';
+  if (nxtType)  nxtType.textContent  = st.nextItem
+    ? (_chsTypeLabel(st.nextItem.type) + (st.nextItem.sourceType === 'youtube' ? ' ▶YT' : ''))
+    : '—';
   if (nxtTitle) nxtTitle.textContent = st.nextItem?.title || '—';
   if (elapsed)  elapsed.textContent  = st.currentItem?.elapsed != null ? _chsFmtTime(st.currentItem.elapsed) : '—';
   if (remaining) remaining.textContent = st.currentItem?.remaining != null && st.currentItem.remaining > 0
@@ -752,11 +757,15 @@ function _chsRenderProgramming() {
             <div class="chs-prog-header">
               <span class="chs-prog-num">${String(i + 1).padStart(2, '0')}</span>
               <span class="chs-prog-type-badge">${_chsTypeLabel(item.type)}</span>
+              ${item.sourceType === 'youtube' ? '<span class="chs-prog-dur" style="color:var(--neon-red)">▶ YouTube</span>' : ''}
               ${item.duration ? `<span class="chs-prog-dur">${_chsFmtDuration(item.duration)}</span>` : ''}
             </div>
             <div class="chs-prog-title">${_esc(item.title)}</div>
             ${item.artist ? `<div class="chs-prog-artist">${_esc(item.artist)}</div>` : ''}
-            ${item.mediaUrl ? `<div class="chs-prog-url" title="${_esc(item.mediaUrl)}">${_esc(item.mediaUrl)}</div>` : ''}
+            ${item.sourceType === 'youtube' && item.youtubeId
+              ? `<div class="chs-prog-url" title="YouTube video ID: ${_esc(item.youtubeId)}">▶ YouTube — ID: ${_esc(item.youtubeId)}</div>`
+              : item.mediaUrl ? `<div class="chs-prog-url" title="${_esc(item.mediaUrl)}">${_esc(item.mediaUrl)}</div>` : ''
+            }
             <div class="chs-prog-actions">
               ${i > 0 ? `<button class="chs-btn chs-btn-ghost chs-btn-xs" title="Move up" onclick="chsMoveProgram('${_esc(item.id)}','up')">↑ Up</button>` : ''}
               ${i < items.length - 1 ? `<button class="chs-btn chs-btn-ghost chs-btn-xs" title="Move down" onclick="chsMoveProgram('${_esc(item.id)}','down')">↓ Down</button>` : ''}
@@ -825,7 +834,12 @@ function _chsRenderFallback() {
       <div class="chs-prog-item-icon">${_chsTypeEmoji(item.type)}</div>
       <div class="chs-prog-item-info">
         <div class="chs-prog-title">${_esc(item.title)}</div>
-        <div class="chs-prog-meta">${_chsTypeLabel(item.type)}${item.artist ? ' · ' + _esc(item.artist) : ''}${item.duration ? ' · ' + _chsFmtDuration(item.duration) : ''}</div>
+        <div class="chs-prog-meta">
+          ${_chsTypeLabel(item.type)}
+          ${item.sourceType === 'youtube' ? ' · <span style="color:var(--neon-red)">▶ YouTube</span>' : ''}
+          ${item.artist ? ' · ' + _esc(item.artist) : ''}
+          ${item.duration ? ' · ' + _chsFmtDuration(item.duration) : ''}
+        </div>
       </div>
       <button class="chs-btn chs-btn-danger chs-btn-xs" onclick="chsRemoveFallback('${_esc(item.id)}')">✕</button>
     </div>
@@ -897,6 +911,58 @@ window.chsCloseAddPanel = function() {
   _chsEl('chs-add-panel').style.display = 'none';
 };
 
+// ── YouTube URL detection ─────────────────────────────────────────────────
+function _chsExtractYouTubeId(url) {
+  if (!url) return null;
+  // youtu.be/VIDEO_ID
+  const short = url.match(/youtu\.be\/([A-Za-z0-9_-]{11})/);
+  if (short) return short[1];
+  // youtube.com/watch?v=VIDEO_ID
+  const long = url.match(/[?&]v=([A-Za-z0-9_-]{11})/);
+  if (long) return long[1];
+  // youtube.com/embed/VIDEO_ID
+  const embed = url.match(/youtube\.com\/embed\/([A-Za-z0-9_-]{11})/);
+  if (embed) return embed[1];
+  return null;
+}
+
+function _chsIsDirectMedia(url) {
+  if (!url) return false;
+  try {
+    const u = new URL(url);
+    const path = u.pathname.toLowerCase();
+    return /\.(mp3|mp4|m4a|m4v|webm|ogg|oga|wav|aac|flac|opus|mov|avi|mkv)$/.test(path);
+  } catch { return false; }
+}
+
+window.chsOnUrlInput = function() {
+  const url   = (_chsEl('chs-add-url')?.value || '').trim();
+  const badge = _chsEl('chs-url-type-badge');
+  const hint  = _chsEl('chs-url-hint');
+  if (!badge) return;
+
+  const ytId = _chsExtractYouTubeId(url);
+  if (ytId) {
+    badge.style.display = '';
+    badge.textContent   = '▶ YouTube detected — will use embedded player (ID: ' + ytId + ')';
+    badge.style.color   = '#ff3333';
+    if (hint) hint.textContent = 'YouTube URLs are stored as embedded sources and played via the YouTube player.';
+  } else if (url && _chsIsDirectMedia(url)) {
+    badge.style.display = '';
+    badge.textContent   = '✓ Direct media file detected';
+    badge.style.color   = '#00e676';
+    if (hint) hint.textContent = 'Direct link to audio/video file (Supabase, Firebase Storage, S3, CDN, etc.)';
+  } else if (url) {
+    badge.style.display = '';
+    badge.textContent   = '⚠ URL type unknown — ensure this is a direct media URL';
+    badge.style.color   = '#ffab00';
+    if (hint) hint.textContent = 'Direct link to audio/video file, or a YouTube URL (https://youtu.be/… or https://www.youtube.com/watch?v=…)';
+  } else {
+    badge.style.display = 'none';
+    if (hint) hint.textContent = 'Direct link to audio/video file, or a YouTube URL (https://youtu.be/… or https://www.youtube.com/watch?v=…)';
+  }
+};
+
 window.chsOnTypeChange = function() {
   const type = (_chsEl('chs-add-type')?.value || '').toUpperCase();
   const ssFields = _chsEl('chs-slideshow-fields');
@@ -931,7 +997,25 @@ window.chsSubmitAdd = async function() {
     delete item.mediaUrl;
   } else {
     if (!mediaUrl) { _chsShowError('Media URL is required for this program type'); return; }
-    item.mediaUrl = mediaUrl;
+
+    // ── Detect source type from URL ──────────────────────────────────────
+    const youtubeId = _chsExtractYouTubeId(mediaUrl);
+    if (youtubeId) {
+      // YouTube URL — store as YouTube source.
+      // Do NOT call fetch() against the YouTube URL.
+      // The channel engine and player will use YouTube embed/IFrame API.
+      item.sourceType = 'youtube';
+      item.youtubeId  = youtubeId;
+      item.sourceUrl  = mediaUrl;
+      // mediaUrl is set to null so the channel engine doesn't try to play it
+      // as a direct audio/video src. The player checks sourceType instead.
+      item.mediaUrl   = null;
+    } else {
+      // Direct media file or CDN/storage URL
+      item.sourceType = 'direct';
+      item.sourceUrl  = mediaUrl;
+      item.mediaUrl   = mediaUrl;
+    }
   }
 
   try {
@@ -950,6 +1034,9 @@ window.chsSubmitAdd = async function() {
     });
     const dur = _chsEl('chs-add-duration');
     if (dur) dur.value = '0';
+    // Reset URL type badge
+    const badge = _chsEl('chs-url-type-badge');
+    if (badge) badge.style.display = 'none';
   } catch (e) {
     _chsShowError(e.message);
   }
