@@ -41,14 +41,21 @@ jobs:
       # ── 3. Ensure .nojekyll is present ─────────────────────────────────────
       # Prevents GitHub's Jekyll processor from transforming files or
       # ignoring any path that starts with an underscore.
-      - name: Add .nojekyll
+      - name: Add .nojekyll and verify deployment
         run: |
           touch frontend/.nojekyll
-          echo "frontend/ contents:"
+          echo "--- frontend/ contents ---"
           ls -la frontend/
-          echo "frontend/src/styles/ contents:"
+          echo "--- frontend/src/styles/ contents ---"
           ls -la frontend/src/styles/
+          echo "--- Key file checks ---"
           echo "index.html present: $(test -f frontend/index.html && echo YES || echo NO)"
+          echo "sw.js present:      $(test -f frontend/sw.js && echo YES || echo NO)"
+          echo "404.html present:   $(test -f frontend/404.html && echo YES || echo NO)"
+          echo "manifest.json:      $(test -f frontend/manifest.json && echo YES || echo NO)"
+          echo "--- SW version check ---"
+          grep "const SW_VERSION" frontend/sw.js || echo "SW_VERSION not found"
+          grep "const CACHE_NAME" frontend/sw.js || echo "CACHE_NAME not found"
 
       # ── 4. Upload artifact ─────────────────────────────────────────────────
       # Packages frontend/ (the real AVENORA app) as the Pages artifact.

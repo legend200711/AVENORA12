@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<!--
+  AVENORA — GitHub Pages SPA 404 redirect
+  GitHub Pages serves this file for any URL that doesn't match a real file.
+  Because AVENORA uses hash routing (#cloudstream, #social, etc.) direct
+  links to https://legend200711.github.io/AVENORA12/ always load index.html
+  correctly. This file handles the edge case where someone links to a
+  path-based URL (e.g. from an old bookmark) and redirects them back to
+  the correct hash-routed entry point.
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AVENORA — Redirecting…</title>
+  <script>
+    // Redirect to the SPA entry point, preserving any hash or query params.
+    // GitHub Pages serves /AVENORA12/404.html for any unmatched path under
+    // /AVENORA12/. We convert the path to a hash so the SPA router picks it up.
+    (function () {
+      var l = window.location;
+      // Extract the path after the repo prefix
+      var base = '/AVENORA12';
+      var path = l.pathname;
+      if (path.startsWith(base)) {
+        path = path.slice(base.length);
+      }
+      // Strip leading slash
+      path = path.replace(/^\//, '');
+      // Build the redirect URL: index.html + #<path> (if any) + query string
+      var hash   = l.hash  || (path ? '#' + path : '');
+      var search = l.search || '';
+      var target = base + '/index.html' + search + hash;
+      // Use replace() so this 404 page isn't in the history stack
+      l.replace(target);
+    }());
+  </script>
+  <style>
+    body {
+      margin: 0;
+      background: #090807;
+      color: #e0ddd8;
+      font-family: -apple-system, "Segoe UI", system-ui, sans-serif;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      text-align: center;
+    }
+    p { color: rgba(201,168,76,0.7); font-size: 0.9rem; letter-spacing: 0.1em; }
+  </style>
+</head>
+<body>
+  <div>
+    <p>REDIRECTING TO AVENORA…</p>
+  </div>
+</body>
+</html>

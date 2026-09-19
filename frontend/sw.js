@@ -1,5 +1,5 @@
 /**
- * AVENORA — Service Worker v23
+ * AVENORA — Service Worker v25
  *
  * Deployment-aware: detects GitHub Pages vs Firebase Hosting automatically.
  *   GitHub Pages:      https://legend200711.github.io/AVENORA12/  → BASE = /AVENORA12
@@ -47,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v24';
-const CACHE_NAME  = 'avenora-cache-v24';
+const SW_VERSION  = 'v25';
+const CACHE_NAME  = 'avenora-cache-v25';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -78,6 +78,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v21', // v21 — evict: PWA installability, PNG icons, 404 routing fix
   'avenora-cache-v22', // v22 — evict: firebase.json public path was wrong (all assets 404'd)
   'avenora-cache-v23', // v23 — evict: radio LU_CONFIG crash, cloud-stream engine stall fallback
+  'avenora-cache-v24', // v24 — evict: cloudRadioEngine require path fix, 404.html redirect
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
@@ -99,6 +100,7 @@ const BASE = self.location.pathname.startsWith('/AVENORA12/') ? '/AVENORA12' : '
 const STATIC_ASSETS = [
   `${BASE}/index.html`,
   `${BASE}/offline.html`,
+  `${BASE}/404.html`,
   `${BASE}/manifest.json`,
   `${BASE}/src/styles/avenora-cosmic.css`,
   `${BASE}/src/styles/theme.css`,

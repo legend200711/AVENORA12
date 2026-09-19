@@ -59,7 +59,7 @@ let _adminDb = null;
 function _getAdminDb() {
   if (_adminDb) return _adminDb;
   try {
-    const { getDb } = require('../config/firestore');
+    const { getDb } = require('../../config/firestore');
     _adminDb = getDb();
     return _adminDb;
   } catch (_e) {
