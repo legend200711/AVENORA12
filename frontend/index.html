@@ -297,17 +297,30 @@
                          location.hostname === '127.0.0.1' ||
                          location.hostname === '0.0.0.0';
 
+      // ── Backend API URL ───────────────────────────────────────────────
+      // Production Render backend: https://avenora-backend.onrender.com
+      // Override with ?api= query param for local dev (e.g. ?api=http://localhost:3001)
+      var _apiUrl = 'https://avenora-backend.onrender.com/api';
+      try {
+        var _apiOverride = new URLSearchParams(location.search).get('api');
+        if (_apiOverride) _apiUrl = _apiOverride.replace(/\/api\/?$/, '') + '/api';
+      } catch (_e) {}
+      if (_isLocalhost) {
+        _apiUrl = 'http://localhost:3001/api';
+      }
+
       window.LU_CONFIG = {
-        apiUrl:      null,   // Firebase + Supabase only — no Render/Express backend
+        apiUrl:      _apiUrl,
         socketUrl:   null,
         isPWA:       _isPWA,
         isLocalhost: _isLocalhost,
       };
 
       console.info(
-        '[AVENORA] Config loaded — Firebase + Supabase architecture',
+        '[AVENORA] Config loaded',
         {
           firebaseProject: 'avenora-6e147',
+          apiUrl:          _apiUrl,
           isPWA:           _isPWA,
           isLocalhost:     _isLocalhost,
           origin:          location.origin,

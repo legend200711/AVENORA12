@@ -40,6 +40,7 @@ const preferencesRoutes = require('./api/routes/preferences');
 
 const cloudStreamRoutes = require('./api/routes/cloudStream');
 const cloudRadioRoutes  = require('./api/routes/cloudRadio');
+const cloudRadioEngine  = require('./services/stream/cloudRadioEngine');
 const liveRoutes = require('./api/routes/live');
 const pushRoutes = require('./api/routes/push');
 
@@ -338,6 +339,17 @@ async function start() {
     initializeSocketServer(server);
   } catch (socketErr) {
     logger.warn(`⚠️  Socket.io initialization failed: ${socketErr.message}`);
+  }
+
+  // ── Cloud Radio startup recovery ──────────────────────────────────────────
+  // Non-fatal: if Firestore is unavailable the server still starts normally.
+  // Active 24-hour streams that were running before a restart are resumed here.
+  try {
+    logger.info('[CloudRadio] Running startup recovery for active streams…');
+    await cloudRadioEngine.recoverActiveSessions();
+  } catch (recoveryErr) {
+    logger.warn(`⚠️  Cloud Radio recovery failed: ${recoveryErr.message}`);
+    logger.warn('   Streams will need to be restarted manually from Creator Studio.');
   }
 
   // Start HTTP server — this MUST succeed; if it fails, there is nothing to do

@@ -94,9 +94,22 @@ registerPage('cloudstream', {
     let _latestUid    = null;
     let _unsubAuth    = null;
 
-    // ── Helper: push auth state to iframe ──────────────────────────────────
-    // Sends AVN_AUTH_TOKEN so the iframe knows the parent has run its own auth check.
-    // uid=null means the user is genuinely not signed in; the iframe will show the gate.
+    // ── Helper: push config + auth state to iframe ──────────────────────────
+    // Sends AVN_CONFIG (backend URL) and AVN_AUTH_TOKEN so the iframe can reach
+    // the Render backend and knows the parent has run its own auth check.
+    const _pushConfig = () => {
+      if (!frame.contentWindow) return;
+      try {
+        const apiUrl = (window.LU_CONFIG && window.LU_CONFIG.apiUrl) || null;
+        if (apiUrl) {
+          frame.contentWindow.postMessage(
+            { type: 'AVN_CONFIG', apiUrl },
+            _targetOrigin
+          );
+        }
+      } catch (_) {}
+    };
+
     const _pushToFrame = (token, uid) => {
       if (!frame.contentWindow || !_frameLoaded) return;
       try {
@@ -170,13 +183,14 @@ registerPage('cloudstream', {
     };
     _startAuthSubscription();
 
-    // ── On iframe load: send any already-available auth state ───────────────
-    // This fires when the iframe finishes loading its HTML. At this point the
-    // parent may already have a currentUser (from _startAuthSubscription above);
-    // always push that state so the iframe can cancel its gate timer immediately.
+    // ── On iframe load: send config + any already-available auth state ───────
+    // This fires when the iframe finishes loading its HTML. Always send the
+    // AVN_CONFIG first (so the iframe has the backend URL), then auth state.
     frame.addEventListener('load', () => {
       _frameLoaded = true;
-      // Always send a message — even if uid is null, the iframe needs to know
+      // Send backend URL first — the iframe needs this before it can start the engine.
+      _pushConfig();
+      // Then send auth state — even if uid is null, the iframe needs to know
       // the parent is present so it can manage its own gate timer correctly.
       _pushToFrame(_latestToken, _latestUid);
     });

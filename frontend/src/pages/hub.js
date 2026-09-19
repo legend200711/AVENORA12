@@ -234,8 +234,11 @@ function renderExploreSection(user) {
 
   // Read cached preferences for card order/visibility (applied optimistically;
   // the customize page syncs these via the full preferences API)
+  // 'cloudstream' is intentionally excluded from the default visible set.
+  // The feature is still accessible via navigation (#cloudstream) and Creator Studio.
+  // Users can re-enable it from Customize if desired.
   let cardOrder   = ['cloudstream','live','social','dj','music','gallery'];
-  let visibleSet  = new Set(cardOrder);
+  let visibleSet  = new Set(['live','social','dj','music','gallery']);
 
   try {
     const raw = localStorage.getItem('avn_prefs_cache');

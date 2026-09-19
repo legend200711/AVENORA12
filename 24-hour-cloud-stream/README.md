@@ -1,4 +1,16 @@
-# 24-Hour Audio Cloud Stream
+# 24-Hour Audio Cloud Stream — STANDALONE COPY (NOT DEPLOYED)
+
+> ⚠️ **This directory (`24-hour-cloud-stream/`) is NOT the production copy.**
+>
+> The production Cloud Stream is at **`frontend/cloud-stream/`** and is served from
+> the main SPA at `frontend/index.html` (GitHub Pages deployment).
+>
+> All production fixes must be applied to `frontend/cloud-stream/js/cloud-stream.js`
+> and `frontend/src/pages/cloudstream.js`.
+>
+> This copy is kept for reference only.
+
+---
 
 ---
 

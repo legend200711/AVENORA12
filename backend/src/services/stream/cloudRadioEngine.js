@@ -48,6 +48,25 @@
 const https  = require('https');
 const logger = require('../../utils/logger');
 
+// ─── Firebase Admin SDK — preferred for server-side Firestore writes ─────────
+// Lazy-loaded so the engine still works even if firebase-admin is not installed
+// (though it is in this project). The Admin SDK is used for:
+//   1. Startup recovery — reading active cloudStreams documents
+//   2. Now Playing writes — more reliable than REST + anonymous token
+//
+// Falls back to the existing REST-based path if Admin SDK is unavailable.
+let _adminDb = null;
+function _getAdminDb() {
+  if (_adminDb) return _adminDb;
+  try {
+    const { getDb } = require('../config/firestore');
+    _adminDb = getDb();
+    return _adminDb;
+  } catch (_e) {
+    return null;
+  }
+}
+
 // ─── Constants ────────────────────────────────────────────
 const HEARTBEAT_INTERVAL_MS    = 10_000;   // publish Now Playing every 10 s
 const DEFAULT_TRACK_DURATION_MS = 240_000; // fallback if duration unknown (4 min)
@@ -168,8 +187,30 @@ function _httpPost(url, body) {
   });
 }
 
-/** Write a Firestore document via REST (PATCH = create-or-update). */
+/**
+ * Write a Firestore document.
+ * Prefers Admin SDK (reliable server-to-server auth) and falls back to REST.
+ */
 async function _firestorePatch(path, fields) {
+  // ── Primary: Firebase Admin SDK ────────────────────────────────────────
+  const db = _getAdminDb();
+  if (db) {
+    try {
+      // path is like "studioCloudStreamMusic/streamId" or "cloudStreams/streamId"
+      const parts = path.split('/');
+      if (parts.length === 2) {
+        const ref = db.collection(parts[0]).doc(parts[1]);
+        // merge=true so we never wipe fields not included in `fields`
+        await ref.set(fields, { merge: true });
+        return;
+      }
+    } catch (adminErr) {
+      logger.warn(`[CloudRadio] Admin SDK write failed (${path}): ${adminErr.message} — falling back to REST`);
+      // fall through to REST
+    }
+  }
+
+  // ── Fallback: REST API with bearer token ────────────────────────────────
   const token = await _getFirestoreToken();
   if (!token) return; // degraded mode — skip Firestore writes
 
@@ -598,6 +639,168 @@ function stopAll() {
   return count;
 }
 
+// ─── Startup recovery ─────────────────────────────────────
+/**
+ * On backend start/restart, read Firestore for active cloudStreams records and
+ * reconstruct in-memory sessions so 24-hour broadcasts continue automatically.
+ *
+ * Strategy:
+ *   1. Read all cloudStreams docs where status == 'active'.
+ *   2. For each, load the corresponding studioCloudStreamMusic doc to get the
+ *      current queue, track index, and trackStartedAt.
+ *   3. Reconstruct a CloudRadioSession starting at the correct track.
+ *   4. Publish the current Now Playing immediately.
+ *
+ * Non-fatal: if Firestore is unavailable, recovery is skipped and the server
+ * still starts normally. Active streams will resume from Song 1 when the next
+ * client calls /api/cloud-radio/start, or the operator can use the dashboard.
+ */
+async function recoverActiveSessions() {
+  const db = _getAdminDb();
+  if (!db) {
+    logger.warn('[CloudRadio] Recovery skipped — Firebase Admin SDK not available');
+    return;
+  }
+
+  let docs;
+  try {
+    const snap = await db.collection('cloudStreams')
+      .where('status', 'in', ['active', 'recovering'])
+      .get();
+    docs = snap.docs;
+  } catch (err) {
+    logger.warn('[CloudRadio] Recovery: could not read cloudStreams: ' + err.message);
+    return;
+  }
+
+  if (!docs || docs.length === 0) {
+    logger.info('[CloudRadio] Recovery: no active streams found — nothing to resume');
+    return;
+  }
+
+  logger.info(`[CloudRadio] Recovery: found ${docs.length} active stream(s) — resuming…`);
+
+  for (const d of docs) {
+    const streamId = d.id;
+    const data     = d.data();
+
+    // Skip if already running (edge case: recovery called more than once)
+    if (_sessions.has(streamId)) {
+      logger.info(`[CloudRadio] Recovery: ${streamId} already running — skipping`);
+      continue;
+    }
+
+    try {
+      // Mark as recovering in Firestore so the dashboard shows correct status
+      await db.collection('cloudStreams').doc(streamId).update({
+        status:       'recovering',
+        workerStatus: 'recovering',
+        lastHeartbeat: Date.now(),
+      }).catch(() => {});
+
+      // Load the current Now Playing doc to determine queue and position
+      let nowPlaying = null;
+      try {
+        const npSnap = await db.collection('studioCloudStreamMusic').doc(streamId).get();
+        if (npSnap.exists) nowPlaying = npSnap.data();
+      } catch (_) {}
+
+      let queue      = [];
+      let queueIndex = 0;
+      let trackStartedAt = Date.now();
+
+      if (nowPlaying && Array.isArray(nowPlaying.queue) && nowPlaying.queue.length > 0) {
+        queue          = nowPlaying.queue;
+        queueIndex     = typeof nowPlaying.queueIndex === 'number' ? nowPlaying.queueIndex : 0;
+        trackStartedAt = typeof nowPlaying.trackStartedAt === 'number' && nowPlaying.trackStartedAt > 0
+          ? nowPlaying.trackStartedAt
+          : Date.now();
+      } else if (data.musicQueue && Array.isArray(data.musicQueue) && data.musicQueue.length > 0) {
+        // Fallback: queue stored on the cloudStreams doc itself
+        queue = data.musicQueue;
+      } else {
+        logger.warn(`[CloudRadio] Recovery: ${streamId} has no queue — cannot resume. Mark stopped.`);
+        await db.collection('cloudStreams').doc(streamId).update({ status: 'stopped', workerStatus: 'stopped' }).catch(() => {});
+        continue;
+      }
+
+      // Clamp queueIndex to valid range
+      queueIndex = Math.max(0, Math.min(queueIndex, queue.length - 1));
+
+      // Calculate how much time has already elapsed on the current track so we
+      // resume from the correct position when the server rebuilds its scheduler.
+      const elapsedMs = Date.now() - trackStartedAt;
+      const track     = queue[queueIndex];
+      const durationMs = track && track.duration > 0
+        ? track.duration * 1000
+        : DEFAULT_TRACK_DURATION_MS;
+
+      // Compute remaining duration — if the track already finished, advance index.
+      let advanceExtra = 0;
+      let remainingMs  = durationMs - elapsedMs;
+      while (remainingMs <= 0 && advanceExtra < queue.length) {
+        advanceExtra++;
+        queueIndex = (queueIndex + advanceExtra) % queue.length;
+        remainingMs = DEFAULT_TRACK_DURATION_MS; // assume next track needs full slot
+      }
+
+      // Reconstruct the session at the correct queue position
+      const session = new CloudRadioSession({
+        streamId,
+        uid:             data.uid || '',
+        queue,
+        shuffle:         data.shuffle === true,
+        repeat:          data.repeat !== false,
+        durationMinutes: data.durationMinutes || 1440,
+      });
+
+      // Override the queue index and track timing so the advance timer fires
+      // at the right moment rather than playing from the start of the current track.
+      session.queueIndex     = queueIndex;
+      session.trackStartedAt = trackStartedAt + advanceExtra * DEFAULT_TRACK_DURATION_MS;
+
+      // Restore expiry from Firestore (or recompute from durationMinutes)
+      if (data.expiresAt && typeof data.expiresAt === 'number' && data.expiresAt > Date.now()) {
+        session.expiresAt = data.expiresAt;
+      } else if (data.expiresAt && data.expiresAt.toMillis) {
+        session.expiresAt = data.expiresAt.toMillis();
+      }
+
+      _sessions.set(streamId, session);
+
+      // Manually start the heartbeat and advance timer (skipping shuffle/reset)
+      session.isRunning  = true;
+      session.status     = 'running';
+      session._scheduleAdvance();
+      session._startHeartbeat();
+
+      // Publish recovered Now Playing immediately
+      await session._publishNowPlaying();
+      await session._publishWorkerStatus('running');
+
+      // Mark active again in cloudStreams
+      await db.collection('cloudStreams').doc(streamId).update({
+        status:       'active',
+        workerStatus: 'running',
+        lastHeartbeat: Date.now(),
+      }).catch(() => {});
+
+      logger.info(`[CloudRadio] Recovery: resumed ${streamId} at track "${track?.title || '?'}" (index ${queueIndex})`);
+
+    } catch (err) {
+      logger.error(`[CloudRadio] Recovery: failed to resume ${streamId}: ${err.message}`);
+      // Mark as failed so the dashboard reflects reality
+      db.collection('cloudStreams').doc(streamId).update({
+        status:       'failed',
+        workerStatus: 'error',
+        lastError:    err.message,
+      }).catch(() => {});
+    }
+  }
+
+  logger.info(`[CloudRadio] Recovery complete — ${_sessions.size} session(s) now running`);
+}
+
 // ─── Graceful shutdown ────────────────────────────────────
 process.on('SIGTERM', () => { const n = stopAll(); logger.info(`[CloudRadio] SIGTERM — stopped ${n} sessions`); });
 process.on('SIGINT',  () => { const n = stopAll(); logger.info(`[CloudRadio] SIGINT — stopped ${n} sessions`); });
@@ -609,4 +812,5 @@ module.exports = {
   getSessionStatus,
   listSessions,
   stopAll,
+  recoverActiveSessions,
 };

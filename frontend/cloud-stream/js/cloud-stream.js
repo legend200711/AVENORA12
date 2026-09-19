@@ -445,16 +445,22 @@ async function _checkHealth() {
         backendAnswered = true;
         if (data.success && data.status) {
           const s = data.status;
-          if (s.status === 'running') _engineRunning = true;
-          _el('csrInfoWorker').textContent = s.status || 'running';
+          // Update _engineRunning from authoritative server response
+          _engineRunning = (s.status === 'running' || s.running === true);
+          const workerEl = _el('csrInfoWorker');
+          if (workerEl) workerEl.textContent = s.status || 'running';
           if (s.currentTrack) {
-            _el('csrNpTitle').textContent  = s.currentTrack.title  || '—';
-            _el('csrNpArtist').textContent = s.currentTrack.artist || '';
-            _el('csrNpNext').textContent   = s.nextTrack ? 'Next: ' + s.nextTrack.title : '';
+            const npTitle  = _el('csrNpTitle');
+            const npArtist = _el('csrNpArtist');
+            const npNext   = _el('csrNpNext');
+            if (npTitle)  npTitle.textContent  = s.currentTrack.title  || '—';
+            if (npArtist) npArtist.textContent = s.currentTrack.artist || '';
+            if (npNext)   npNext.textContent   = s.nextTrack ? 'Next: ' + s.nextTrack.title : '';
           }
         } else if (data.success && !data.running) {
           _engineRunning = false;
-          _el('csrInfoWorker').textContent = 'offline';
+          const workerEl = _el('csrInfoWorker');
+          if (workerEl) workerEl.textContent = 'offline';
         }
       } catch (_apiErr) {
         backendAnswered = false;
@@ -1049,6 +1055,19 @@ async function _initListenerForStream(streamId, streamData) {
   _player.broadcastTitle = streamData?.streamName || 'Avenora Cloud Radio';
   _player.hostName       = streamData?.displayName || streamData?.hostName || '';
 
+  // Check server engine status once on connect — prevents listeners from acting
+  // as a fallback broadcaster when the real engine is running server-side.
+  if (_API_BASE && !_engineRunning) {
+    try {
+      const statusData = await _apiRequest('GET', `/cloud-radio/status/${streamId}`);
+      if (statusData.success && statusData.status && (statusData.status.status === 'running' || statusData.status.running)) {
+        _engineRunning = true;
+      }
+    } catch (_) {
+      // Backend unreachable — leave _engineRunning as-is
+    }
+  }
+
   // Update player UI header
   _setText('csrPlayerBroadcastTitle', _player.broadcastTitle);
   _setText('csrPlayerHost', _player.hostName ? 'by ' + _player.hostName : '');
@@ -1177,14 +1196,13 @@ function _loadAndPlayTrack(url, dur) {
     const code = e.target?.error?.code;
     const msg  = e.target?.error?.message || 'unknown';
     console.warn('[CSR] audio error for track (code=' + code + '):', url, msg);
-    // Skip to next track after a brief delay.
-    // Using _onTrackEnded() triggers the same flow as a natural track end,
-    // so the Firestore queue is advanced and all listeners get the next track.
+    // If server engine is running, it will advance the queue — just wait for snapshot.
+    // In local mode, advance via Firestore.
     setTimeout(() => {
       if (_player.audio === audio) {
         _stopProgressRaf();
         _setPlayBtn(false);
-        _autoAdvanceQueue();
+        if (!_engineRunning) _autoAdvanceQueue();
       }
     }, 1500);
   });
@@ -1202,12 +1220,22 @@ function _loadAndPlayTrack(url, dur) {
 }
 
 function _onTrackEnded() {
-  // Track has finished playing. Auto-advance:
-  // If this client is the creator (owns _streamId), advance the queue in Firestore
-  // so all listeners get the next track. Non-creator listeners just wait for the
-  // Firestore snapshot to update (driven by the creator's client or the backend).
+  // Track has finished playing.
+  //
+  // If the server engine is running, it will publish the next Now Playing via
+  // Firestore within seconds — do NOT write from the client. Just stop local
+  // playback and wait for the snapshot update.
+  //
+  // If the server engine is NOT running (local/fallback mode) and this client
+  // is the stream owner, advance the Firestore queue so all listeners get the
+  // next track.
   _stopProgressRaf();
   _setPlayBtn(false);
+
+  if (_engineRunning) {
+    // Server-managed: do nothing. Firestore snapshot will drive the next track.
+    return;
+  }
   _autoAdvanceQueue();
 }
 
