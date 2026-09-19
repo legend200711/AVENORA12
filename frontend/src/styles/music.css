@@ -752,3 +752,1282 @@
     grid-template-columns: repeat(2, 1fr);
   }
 }
+
+/* ─── Music Hub tabs — horizontal scroll on mobile ───────────── */
+.music-hub-tabs {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  flex-wrap: nowrap;
+  gap: 4px;
+}
+
+.music-hub-tabs::-webkit-scrollbar { display: none; }
+
+/* ─── Discover search bar ─────────────────────────────────────── */
+.music-discover-search {
+  margin-bottom: var(--space-lg);
+}
+
+.music-discover-search .search-bar {
+  max-width: 100%;
+}
+
+/* ─── Quick-access row ────────────────────────────────────────── */
+.music-quick-access {
+  display: flex;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xl);
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  padding-bottom: 4px;
+}
+
+.music-quick-access::-webkit-scrollbar { display: none; }
+
+.music-qa-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 68px;
+  flex-shrink: 0;
+  padding: var(--space-sm) var(--space-xs);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+  text-align: center;
+}
+
+.music-qa-btn:hover {
+  border-color: var(--border-blue);
+  background: var(--bg-elevated);
+  box-shadow: 0 2px 12px rgba(0,120,255,0.12);
+  text-decoration: none;
+}
+
+.music-qa-btn.radio:hover   { border-color: var(--avenora-gold); box-shadow: 0 2px 12px rgba(201,168,76,0.18); }
+.music-qa-btn.favorites:hover { border-color: #e25f6a; box-shadow: 0 2px 12px rgba(226,95,106,0.18); }
+
+.music-qa-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.music-qa-label {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+/* ─── Discover radio teaser strip ─────────────────────────────── */
+.music-discover-radio-teaser {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  background: linear-gradient(90deg, rgba(0,40,100,0.40) 0%, rgba(184,149,75,0.06) 100%);
+  border: 1px solid rgba(201,168,76,0.22);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  margin-bottom: var(--space-xl);
+  transition: border-color var(--transition-base), background var(--transition-base);
+}
+
+.music-discover-radio-teaser:hover {
+  border-color: rgba(201,168,76,0.48);
+  background: linear-gradient(90deg, rgba(0,40,100,0.55) 0%, rgba(184,149,75,0.10) 100%);
+}
+
+.music-discover-radio-left {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+  min-width: 0;
+  flex: 1;
+}
+
+.music-discover-radio-name {
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  letter-spacing: 0.12em;
+  color: var(--avenora-gold);
+  flex-shrink: 0;
+}
+
+.music-discover-radio-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── System playlist card badge ──────────────────────────────── */
+.music-sys-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: rgba(0,0,0,0.72);
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  font-family: var(--font-display);
+  letter-spacing: 0.14em;
+  padding: 1px 5px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255,255,255,0.08);
+}
+
+/* ─── Track context menu ──────────────────────────────────────── */
+.music-track-ctx-menu {
+  position: fixed;
+  z-index: calc(var(--z-modal) + 10);
+  min-width: 200px;
+  max-width: 260px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.50), 0 2px 8px rgba(0,0,0,0.30);
+  overflow: hidden;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  animation: ctx-menu-in 0.12s ease-out;
+}
+
+@keyframes ctx-menu-in {
+  from { opacity: 0; transform: scale(0.96) translateY(-4px); }
+  to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .music-track-ctx-menu { animation: none; }
+}
+
+.music-track-ctx-menu.hidden { display: none; }
+
+.music-ctx-header {
+  padding: 10px var(--space-md) 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.music-ctx-title {
+  font-weight: 600;
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-ctx-sub {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-top: 2px;
+}
+
+.music-ctx-divider {
+  height: 1px;
+  background: var(--border-subtle);
+}
+
+.music-ctx-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  width: 100%;
+  padding: 10px var(--space-md);
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.music-ctx-item:hover {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-primary);
+}
+
+.music-ctx-item span:first-child {
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 0.95rem;
+}
+
+.music-ctx-cancel {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+/* ─── Add-to-playlist checkbox list ─────────────────────────────── */
+.music-pl-check-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 40vh;
+  overflow-y: auto;
+}
+
+.music-pl-check-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 9px var(--space-sm);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+}
+
+.music-pl-check-row:hover {
+  background: var(--bg-elevated);
+  border-color: var(--border-subtle);
+}
+
+.music-pl-check-row.has-track {
+  border-color: rgba(74,158,114,0.22);
+  background: rgba(74,158,114,0.04);
+}
+
+.music-pl-check-row input[type="checkbox"] {
+  accent-color: #4a9e72;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.music-pl-check-icon {
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.music-pl-check-name {
+  flex: 1;
+  font-size: 0.85rem;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.music-pl-check-count {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.music-pl-has-badge {
+  font-size: 0.72rem;
+  color: #4a9e72;
+  flex-shrink: 0;
+}
+
+/* ─── Section divider with label ─────────────────────────────── */
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-md);
+  gap: var(--space-sm);
+}
+
+/**
+ * AVENORA MUSIC HUB — COSMIC UPGRADE
+ * 🌌 Electric Blue × Neon Green × Deep Space Black
+ * All new cosmic components appended to existing styles.
+ * No existing selectors overwritten — mobile-first, reduced-motion safe.
+ */
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC HERO
+   ═══════════════════════════════════════════════════════════ */
+.music-hero {
+  position: relative;
+  text-align: center;
+  padding: var(--space-3xl) var(--space-lg) var(--space-xl);
+  overflow: hidden;
+  background: linear-gradient(180deg, rgba(0,20,60,0.55) 0%, transparent 100%);
+}
+
+.music-hero-bg {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 90% 70% at 50% 0%,  rgba(0,100,255,0.14)  0%, transparent 65%),
+    radial-gradient(ellipse 60% 50% at 80% 90%,  rgba(0,200,255,0.09)  0%, transparent 60%),
+    radial-gradient(ellipse 50% 45% at 20% 70%,  rgba(57,255,20,0.05)  0%, transparent 60%);
+  pointer-events: none;
+}
+
+.music-hub-hero-content {
+  position: relative;
+  z-index: 1;
+  max-width: 680px;
+  margin: 0 auto;
+}
+
+.music-hub-badge {
+  display: inline-block;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.36em;
+  color: #00ccff;
+  text-transform: uppercase;
+  margin-bottom: var(--space-md);
+  padding: 4px 16px;
+  border: 1px solid rgba(0,204,255,0.25);
+  border-radius: var(--radius-full);
+  background: rgba(0,204,255,0.06);
+}
+
+.music-hub-title {
+  font-family: var(--font-display);
+  font-size: clamp(1.8rem, 6vw, 3.8rem);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  line-height: 1.1;
+  margin-bottom: var(--space-sm);
+}
+
+.mh-title-avenora {
+  background: linear-gradient(135deg, #00ccff 0%, #50d8ff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  filter: drop-shadow(0 0 18px rgba(0,204,255,0.45));
+}
+
+.mh-title-music {
+  background: linear-gradient(135deg, #39ff14 0%, #00e676 60%, #00ccff 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  filter: drop-shadow(0 0 18px rgba(57,255,20,0.35));
+}
+
+.music-hub-tagline {
+  font-size: clamp(0.82rem, 2vw, 1rem);
+  color: rgba(200,220,255,0.65);
+  letter-spacing: 0.06em;
+  margin-bottom: var(--space-xl);
+}
+
+/* ─── Hero search bar ─────────────────────────────────────── */
+.music-hero-search {
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.mh-search-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  background: rgba(0,10,30,0.75);
+  border: 1px solid rgba(0,204,255,0.25);
+  border-radius: var(--radius-full);
+  padding: 10px 20px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 0 24px rgba(0,204,255,0.12), inset 0 1px 0 rgba(255,255,255,0.05);
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
+}
+
+.mh-search-inner:focus-within {
+  border-color: rgba(0,204,255,0.50);
+  box-shadow: 0 0 32px rgba(0,204,255,0.20), inset 0 1px 0 rgba(255,255,255,0.05);
+}
+
+.mh-search-inner svg { color: rgba(0,204,255,0.50); flex-shrink: 0; }
+
+.mh-search-inner input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--text-primary);
+  font-size: 0.92rem;
+  font-family: var(--font-main);
+}
+
+.mh-search-inner input::placeholder { color: rgba(150,180,220,0.45); }
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC NAV CARDS
+   ═══════════════════════════════════════════════════════════ */
+.music-cosmic-nav {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xl);
+}
+
+.mcn-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-md) var(--space-sm);
+  background: rgba(0,10,30,0.70);
+  border: 1px solid rgba(0,204,255,0.18);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  text-align: center;
+  transition: border-color var(--transition-base), background var(--transition-base), box-shadow var(--transition-base), transform var(--transition-fast);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  min-height: 80px;
+  justify-content: center;
+}
+
+.mcn-card:hover {
+  border-color: rgba(0,204,255,0.55);
+  background: rgba(0,30,70,0.80);
+  box-shadow: 0 4px 24px rgba(0,204,255,0.20), 0 0 0 1px rgba(0,204,255,0.20);
+  transform: translateY(-2px);
+  text-decoration: none;
+}
+
+.mcn-card.mcn-radio { border-color: rgba(201,168,76,0.22); }
+.mcn-card.mcn-radio:hover {
+  border-color: rgba(201,168,76,0.55);
+  box-shadow: 0 4px 24px rgba(201,168,76,0.22), 0 0 0 1px rgba(201,168,76,0.22);
+}
+
+.mcn-card.mcn-playlists:hover {
+  border-color: rgba(57,255,20,0.45);
+  box-shadow: 0 4px 24px rgba(57,255,20,0.15);
+}
+
+.mcn-icon {
+  font-size: 1.6rem;
+  line-height: 1;
+}
+
+.mcn-title {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  letter-spacing: 0.22em;
+  color: #00ccff;
+  font-weight: 700;
+}
+
+.mcn-sub {
+  font-size: 0.62rem;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+@media (max-width: 600px) {
+  .music-cosmic-nav {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (max-width: 380px) {
+  .music-cosmic-nav {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC RADIO PORTAL (radio tab card)
+   ═══════════════════════════════════════════════════════════ */
+.cosmic-radio-portal {
+  position: relative;
+  background: linear-gradient(145deg, rgba(0,10,40,0.92), rgba(0,5,20,0.96));
+  border: 1px solid rgba(0,204,255,0.28);
+  border-radius: var(--radius-xl);
+  padding: var(--space-xl);
+  text-align: center;
+  cursor: pointer;
+  margin-bottom: var(--space-lg);
+  overflow: hidden;
+  transition: border-color var(--transition-base), box-shadow var(--transition-base);
+  box-shadow: 0 8px 40px rgba(0,204,255,0.12), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+
+.cosmic-radio-portal:hover {
+  border-color: rgba(0,204,255,0.55);
+  box-shadow: 0 12px 48px rgba(0,204,255,0.22), inset 0 1px 0 rgba(255,255,255,0.06);
+}
+
+/* Sweeping glow line at top */
+.cosmic-radio-portal::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, #00ccff, transparent);
+  opacity: 0.65;
+}
+
+.crp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-md);
+  flex-wrap: wrap;
+  gap: var(--space-sm);
+}
+
+.crp-station-name {
+  font-family: var(--font-display);
+  font-size: 0.88rem;
+  letter-spacing: 0.22em;
+  color: #00ccff;
+  font-weight: 700;
+}
+
+.crp-onair-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-display);
+  font-size: 0.68rem;
+  letter-spacing: 0.24em;
+  color: rgba(0,220,80,0.90);
+  padding: 3px 10px;
+  border: 1px solid rgba(0,220,80,0.28);
+  border-radius: var(--radius-full);
+  background: rgba(0,220,80,0.06);
+}
+
+.crp-body {
+  margin-bottom: var(--space-md);
+}
+
+.crp-art-placeholder, .crp-art-img {
+  width: 88px;
+  height: 88px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, rgba(0,30,80,0.90), rgba(0,10,40,0.95));
+  border: 1px solid rgba(0,204,255,0.22);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.4rem;
+  margin: 0 auto var(--space-md);
+  box-shadow: 0 0 24px rgba(0,204,255,0.18);
+  object-fit: cover;
+}
+
+.crp-np-label {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  letter-spacing: 0.36em;
+  color: rgba(0,204,255,0.50);
+  margin-bottom: 6px;
+  text-transform: uppercase;
+}
+
+.crp-track-title {
+  font-family: var(--font-display);
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: #f0e8d8;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 400px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.crp-track-artist {
+  font-size: 0.85rem;
+  color: rgba(0,200,255,0.70);
+  margin-bottom: var(--space-md);
+}
+
+.crp-listen-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-sm);
+  background: linear-gradient(135deg, rgba(0,204,255,0.18), rgba(0,140,200,0.12));
+  border: 1px solid rgba(0,204,255,0.40);
+  color: #00ccff;
+  font-family: var(--font-display);
+  font-size: 0.82rem;
+  letter-spacing: 0.18em;
+  padding: 10px 28px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  margin-bottom: var(--space-md);
+  transition: background var(--transition-base), box-shadow var(--transition-base), transform var(--transition-fast);
+}
+
+.crp-listen-btn:hover {
+  background: linear-gradient(135deg, rgba(0,204,255,0.30), rgba(0,140,200,0.22));
+  box-shadow: 0 0 22px rgba(0,204,255,0.35);
+  transform: translateY(-1px);
+  text-decoration: none;
+}
+
+.crp-tagline {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  letter-spacing: 0.1em;
+}
+
+/* Next Up in portal */
+.crp-upcoming {
+  margin-top: var(--space-md);
+  padding-top: var(--space-md);
+  border-top: 1px solid rgba(0,204,255,0.12);
+  text-align: left;
+}
+
+.crp-upcoming-label {
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  letter-spacing: 0.3em;
+  color: rgba(0,204,255,0.45);
+  margin-bottom: var(--space-sm);
+}
+
+.crp-upcoming-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.crp-upcoming-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  padding: 3px 0;
+}
+
+.crp-upcoming-num {
+  color: rgba(0,204,255,0.35);
+  min-width: 16px;
+  font-size: 0.72rem;
+}
+
+.crp-upcoming-artist { color: var(--text-muted); font-size: 0.78rem; }
+
+/* Station info row */
+.cosmic-radio-info-row {
+  display: flex;
+  gap: var(--space-md);
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-bottom: var(--space-lg);
+}
+
+.cri-stat {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  background: rgba(0,10,30,0.60);
+  border: 1px solid rgba(0,204,255,0.12);
+  border-radius: var(--radius-full);
+}
+
+.cri-stat-icon { font-size: 0.85rem; }
+
+.cri-stat-label {
+  font-family: var(--font-display);
+  font-size: 0.58rem;
+  letter-spacing: 0.2em;
+  color: rgba(0,204,255,0.55);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC RADIO PORTAL TEASER (in discover tab)
+   ═══════════════════════════════════════════════════════════ */
+.music-radio-portal {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  padding: var(--space-md) var(--space-lg);
+  background: linear-gradient(90deg, rgba(0,20,70,0.75) 0%, rgba(0,10,30,0.60) 100%);
+  border: 1px solid rgba(0,204,255,0.28);
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  margin-bottom: var(--space-lg);
+  position: relative;
+  overflow: hidden;
+  transition: border-color var(--transition-base), background var(--transition-base);
+}
+
+.music-radio-portal::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent 0%, rgba(0,204,255,0.55) 50%, transparent 100%);
+}
+
+.music-radio-portal:hover {
+  border-color: rgba(0,204,255,0.55);
+  background: linear-gradient(90deg, rgba(0,30,90,0.85) 0%, rgba(0,15,40,0.70) 100%);
+  text-decoration: none;
+}
+
+.mrp-glow {
+  position: absolute;
+  right: -30px; top: 50%;
+  transform: translateY(-50%);
+  width: 120px;
+  height: 120px;
+  background: radial-gradient(circle, rgba(0,204,255,0.12), transparent 70%);
+  pointer-events: none;
+}
+
+.mrp-left { display: flex; align-items: center; gap: var(--space-md); min-width: 0; flex: 1; }
+
+.mrp-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-display);
+  font-size: 0.6rem;
+  letter-spacing: 0.22em;
+  color: rgba(0,220,80,0.90);
+  white-space: nowrap;
+  padding: 2px 8px;
+  border: 1px solid rgba(0,220,80,0.25);
+  border-radius: var(--radius-full);
+  flex-shrink: 0;
+}
+
+.mrp-name {
+  font-family: var(--font-display);
+  font-size: 0.82rem;
+  letter-spacing: 0.12em;
+  color: #00ccff;
+  flex-shrink: 0;
+}
+
+.mrp-sub {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.mrp-listen-btn {
+  background: linear-gradient(135deg, rgba(0,204,255,0.18), rgba(0,140,200,0.10));
+  border: 1px solid rgba(0,204,255,0.38);
+  color: #00ccff;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  letter-spacing: 0.16em;
+  padding: 8px 20px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background var(--transition-base), box-shadow var(--transition-fast), transform var(--transition-fast);
+}
+
+.mrp-listen-btn:hover {
+  background: linear-gradient(135deg, rgba(0,204,255,0.28), rgba(0,140,200,0.18));
+  box-shadow: 0 0 14px rgba(0,204,255,0.30);
+  transform: scale(1.03);
+  text-decoration: none;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   EXPLORE GRID (discover shortcuts)
+   ═══════════════════════════════════════════════════════════ */
+.music-explore-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xl);
+}
+
+.mex-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: var(--space-md) var(--space-sm);
+  background: rgba(0,8,22,0.70);
+  border: 1px solid rgba(0,204,255,0.14);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  text-align: center;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+  transition: border-color var(--transition-fast), background var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.mex-card span:first-child { font-size: 1.4rem; line-height: 1; }
+
+.mex-card:hover {
+  border-color: rgba(0,204,255,0.38);
+  background: rgba(0,20,55,0.80);
+  box-shadow: 0 2px 12px rgba(0,204,255,0.12);
+  color: #00ccff;
+  text-decoration: none;
+}
+
+@media (max-width: 480px) {
+  .music-explore-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC SECTION TITLES
+   ═══════════════════════════════════════════════════════════ */
+.cosmic-section-title {
+  font-family: var(--font-display);
+  font-size: clamp(0.85rem, 2.5vw, 1.05rem);
+  letter-spacing: 0.18em;
+  color: #00ccff;
+  text-shadow: 0 0 12px rgba(0,204,255,0.35);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC PLAYLIST CARDS
+   ═══════════════════════════════════════════════════════════ */
+.cosmic-playlist-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: var(--space-md);
+}
+
+.cosmic-pl-card {
+  background: rgba(0,8,22,0.82);
+  border: 1px solid rgba(0,204,255,0.16);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform var(--transition-base), border-color var(--transition-base), box-shadow var(--transition-base);
+  display: flex;
+  flex-direction: column;
+}
+
+.cosmic-pl-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(0,204,255,0.45);
+  box-shadow: 0 8px 32px rgba(0,204,255,0.18), 0 0 0 1px rgba(0,204,255,0.12);
+  text-decoration: none;
+}
+
+.cosmic-pl-card--radio {
+  border-color: rgba(201,168,76,0.22);
+}
+
+.cosmic-pl-card--radio:hover {
+  border-color: rgba(201,168,76,0.50);
+  box-shadow: 0 8px 32px rgba(201,168,76,0.18);
+}
+
+/* Playlist artwork */
+.cosmic-pl-art {
+  width: 100%;
+  aspect-ratio: 1;
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cosmic-pl-art-icon {
+  font-size: 2.6rem;
+  position: relative;
+  z-index: 1;
+  line-height: 1;
+  transition: transform var(--transition-base);
+}
+
+.cosmic-pl-card:hover .cosmic-pl-art-icon {
+  transform: scale(1.12);
+}
+
+.cosmic-pl-art-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.cosmic-pl-art-stars {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(circle at 20% 25%, rgba(255,255,255,0.8) 1px, transparent 1px),
+    radial-gradient(circle at 75% 15%, rgba(255,255,255,0.6) 1px, transparent 1px),
+    radial-gradient(circle at 50% 60%, rgba(255,255,255,0.7) 1px, transparent 1px),
+    radial-gradient(circle at 85% 75%, rgba(255,255,255,0.5) 1px, transparent 1px),
+    radial-gradient(circle at 10% 80%, rgba(255,255,255,0.7) 1px, transparent 1px),
+    radial-gradient(circle at 65% 40%, rgba(255,255,255,0.5) 1px, transparent 1px),
+    radial-gradient(circle at 35% 85%, rgba(255,255,255,0.6) 1px, transparent 1px);
+  pointer-events: none;
+}
+
+/* Play overlay on hover */
+.cosmic-pl-art::after {
+  content: '▶';
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #00ccff;
+  font-size: 1.6rem;
+  opacity: 0;
+  transition: opacity var(--transition-base);
+  z-index: 2;
+}
+
+.cosmic-pl-card:hover .cosmic-pl-art::after {
+  opacity: 1;
+}
+
+/* Body */
+.cosmic-pl-body {
+  padding: var(--space-sm) var(--space-sm) var(--space-md);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cosmic-pl-name {
+  font-weight: 700;
+  font-size: 0.88rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  letter-spacing: 0.04em;
+}
+
+.cosmic-pl-desc {
+  font-size: 0.73rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.cosmic-pl-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.cosmic-pl-count {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+.cosmic-pl-radio-badge {
+  font-size: 0.6rem;
+  font-family: var(--font-display);
+  letter-spacing: 0.14em;
+  color: var(--avenora-gold);
+  background: rgba(201,168,76,0.10);
+  border: 1px solid rgba(201,168,76,0.22);
+  border-radius: var(--radius-full);
+  padding: 1px 6px;
+}
+
+.cosmic-pl-sys-badge {
+  font-size: 0.58rem;
+  font-family: var(--font-display);
+  letter-spacing: 0.14em;
+  color: rgba(0,204,255,0.60);
+}
+
+.cosmic-pl-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.cosmic-pl-play-btn {
+  background: linear-gradient(135deg, rgba(0,204,255,0.14), rgba(0,140,200,0.08));
+  border: 1px solid rgba(0,204,255,0.30);
+  color: #00ccff;
+  font-family: var(--font-display);
+  font-size: 0.65rem;
+  letter-spacing: 0.16em;
+  padding: 5px 12px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.cosmic-pl-play-btn:hover {
+  background: linear-gradient(135deg, rgba(0,204,255,0.24), rgba(0,140,200,0.16));
+  box-shadow: 0 0 10px rgba(0,204,255,0.25);
+}
+
+.cosmic-pl-add-btn {
+  background: transparent;
+  border: 1px solid rgba(57,255,20,0.22);
+  color: rgba(57,255,20,0.70);
+  font-size: 0.65rem;
+  font-family: var(--font-display);
+  letter-spacing: 0.14em;
+  padding: 5px 10px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.cosmic-pl-add-btn:hover { border-color: rgba(57,255,20,0.45); color: #39ff14; }
+
+.cosmic-pl-edit-btn {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,0.10);
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast);
+}
+
+.cosmic-pl-edit-btn:hover { border-color: rgba(0,204,255,0.30); color: #00ccff; }
+.cosmic-pl-del-btn:hover  { border-color: rgba(255,60,60,0.40); color: #ff4040; }
+
+@media (max-width: 600px) {
+  .cosmic-playlist-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC EMPTY STATE
+   ═══════════════════════════════════════════════════════════ */
+.cosmic-empty-card {
+  text-align: center;
+  padding: var(--space-2xl) var(--space-lg);
+  background: rgba(0,8,22,0.55);
+  border: 1px solid rgba(0,204,255,0.10);
+  border-radius: var(--radius-lg);
+  margin: var(--space-md) 0;
+}
+
+.cosmic-empty-icon {
+  font-size: 2.8rem;
+  display: block;
+  margin-bottom: var(--space-md);
+  opacity: 0.7;
+  filter: drop-shadow(0 0 10px rgba(0,204,255,0.30));
+}
+
+.cosmic-empty-title {
+  font-family: var(--font-display);
+  font-size: 1rem;
+  letter-spacing: 0.14em;
+  color: #00ccff;
+  margin-bottom: var(--space-sm);
+}
+
+.cosmic-empty-sub {
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  margin-bottom: var(--space-lg);
+  max-width: 420px;
+  margin-left: auto;
+  margin-right: auto;
+  line-height: 1.6;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC BUTTONS
+   ═══════════════════════════════════════════════════════════ */
+.btn-cosmic {
+  background: linear-gradient(135deg, rgba(0,204,255,0.18), rgba(0,140,200,0.10));
+  border: 1px solid rgba(0,204,255,0.40);
+  color: #00ccff;
+  font-family: var(--font-display);
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  padding: 10px 22px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background var(--transition-base), box-shadow var(--transition-fast), transform var(--transition-fast);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+
+.btn-cosmic:hover {
+  background: linear-gradient(135deg, rgba(0,204,255,0.28), rgba(0,140,200,0.18));
+  box-shadow: 0 0 18px rgba(0,204,255,0.30);
+  transform: translateY(-1px);
+  color: #00ccff;
+  text-decoration: none;
+}
+
+.btn-cosmic.btn-sm { padding: 6px 16px; font-size: 0.72rem; }
+
+.btn-cosmic:disabled { opacity: 0.42; cursor: not-allowed; transform: none; }
+
+.btn-cosmic-outline {
+  background: transparent;
+  border: 1px solid rgba(0,204,255,0.28);
+  color: rgba(0,204,255,0.70);
+  font-family: var(--font-display);
+  font-size: 0.8rem;
+  letter-spacing: 0.12em;
+  padding: 10px 22px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  text-decoration: none;
+}
+
+.btn-cosmic-outline:hover {
+  border-color: rgba(0,204,255,0.55);
+  color: #00ccff;
+  box-shadow: 0 0 12px rgba(0,204,255,0.18);
+  text-decoration: none;
+}
+
+.btn-cosmic-outline.btn-sm { padding: 6px 16px; font-size: 0.72rem; }
+
+/* ═══════════════════════════════════════════════════════════
+   COSMIC UPLOAD INFO CARD
+   ═══════════════════════════════════════════════════════════ */
+.cosmic-upload-info {
+  display: flex;
+  gap: var(--space-md);
+  align-items: flex-start;
+  padding: var(--space-md) var(--space-lg);
+  background: rgba(0,204,255,0.04);
+  border: 1px solid rgba(0,204,255,0.16);
+  border-radius: var(--radius-md);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   PLAYER BAR — COSMIC UPGRADE
+   ═══════════════════════════════════════════════════════════ */
+.music-player-bar {
+  background: rgba(0,5,20,0.97);
+  border: 1px solid rgba(0,204,255,0.18);
+  box-shadow: 0 4px 32px rgba(0,0,0,0.50), 0 0 20px rgba(0,204,255,0.06);
+}
+
+.mp-play-btn {
+  background: linear-gradient(135deg, rgba(0,204,255,0.22), rgba(0,140,200,0.14));
+  border: 1px solid rgba(0,204,255,0.40);
+  color: #00ccff;
+}
+
+.mp-play-btn:hover {
+  box-shadow: 0 0 22px rgba(0,204,255,0.40);
+  transform: scale(1.05);
+}
+
+.mp-seek-fill {
+  background: linear-gradient(90deg, #00ccff, #39ff14);
+}
+
+.mp-seek-bar:hover .mp-seek-fill {
+  box-shadow: 0 0 6px rgba(0,204,255,0.45);
+}
+
+.mp-icon-btn.active { color: #00ccff; }
+
+/* ═══════════════════════════════════════════════════════════
+   TRACK ROWS — COSMIC UPGRADE
+   ═══════════════════════════════════════════════════════════ */
+.mtrack-row.playing {
+  background: rgba(0,204,255,0.06);
+  border-color: rgba(0,204,255,0.20);
+}
+
+.mtrack-row.playing .mtrack-title { color: #00ccff; }
+.mtrack-playing-icon { color: #00ccff; }
+
+/* ═══════════════════════════════════════════════════════════
+   GENRE PILLS — COSMIC
+   ═══════════════════════════════════════════════════════════ */
+.genre-pill:hover { border-color: rgba(0,204,255,0.45); color: #00ccff; }
+
+.genre-pill.active {
+  background: rgba(0,204,255,0.10);
+  border-color: rgba(0,204,255,0.38);
+  color: #00ccff;
+}
+
+/* ═══════════════════════════════════════════════════════════
+   UPLOAD ZONE — COSMIC
+   ═══════════════════════════════════════════════════════════ */
+.music-upload-zone:hover,
+.music-upload-zone.drag-over {
+  border-color: rgba(0,204,255,0.50);
+  background: rgba(0,204,255,0.04);
+}
+
+.upload-progress-fill {
+  background: linear-gradient(90deg, #00ccff, #39ff14);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ARTIST CARD HOVER
+   ═══════════════════════════════════════════════════════════ */
+.cosmic-artist-card:hover {
+  border-color: rgba(0,204,255,0.40);
+  box-shadow: 0 8px 24px rgba(0,204,255,0.14);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   MUSIC CARD — COSMIC GLOW OVERRIDE
+   ═══════════════════════════════════════════════════════════ */
+.music-card:hover {
+  border-color: rgba(0,204,255,0.40);
+  box-shadow: 0 8px 32px rgba(0,204,255,0.14);
+}
+
+.music-card-play-icon {
+  background: rgba(0,50,100,0.90);
+  box-shadow: 0 0 18px rgba(0,204,255,0.40);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   QUEUE PANEL — COSMIC
+   ═══════════════════════════════════════════════════════════ */
+.music-queue-panel {
+  background: rgba(0,5,18,0.97);
+  border-left: 1px solid rgba(0,204,255,0.14);
+}
+
+/* ═══════════════════════════════════════════════════════════
+   REDUCED MOTION
+   ═══════════════════════════════════════════════════════════ */
+@media (prefers-reduced-motion: reduce) {
+  .cosmic-pl-card,
+  .mcn-card,
+  .mex-card,
+  .music-radio-portal,
+  .cosmic-radio-portal { transition: none; transform: none !important; }
+}
+

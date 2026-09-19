@@ -160,6 +160,23 @@ service cloud.firestore {
       allow write: if request.auth != null;
     }
 
+    // ── Avenora Radio ──────────────────────────────────────
+    // radioStations and stationNowPlaying are written exclusively by the
+    // backend Node.js process via the Firebase Admin SDK (which bypasses
+    // security rules). Clients only need read access.
+    match /radioStations/{stationId} {
+      allow read: if true;
+      allow write: if false;  // backend Admin SDK only
+    }
+    match /stationNowPlaying/{stationId} {
+      allow read: if true;
+      allow write: if false;  // backend Admin SDK only
+    }
+    // Listener favourites — each user manages their own.
+    match /radioFavorites/{uid}/tracks/{trackId} {
+      allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
     // ── Creator Playlists ──────────────────────────────────
     // Owners manage their own playlists; no one else can read or write.
     match /studioPlaylists/{uid}/playlists/{plId} {

@@ -46,6 +46,8 @@
   <link rel="stylesheet" href="src/styles/theme-control.css">
   <!-- DJ System — Cosmic Edition visual upgrade -->
   <link rel="stylesheet" href="src/styles/dj-cosmic.css">
+  <!-- Avenora Radio -->
+  <link rel="stylesheet" href="src/styles/radio.css">
 
   <!-- Page-specific styles loaded dynamically -->
 </head>
@@ -193,6 +195,23 @@
       </li>
     </ul>
   </nav>
+
+  <!-- ═══════ MINI RADIO PLAYER ════════════════════════════════ -->
+  <!-- Persistent mini-player shown when radio is active but user is on another page -->
+  <div class="radio-mini-player hidden" id="radio-mini-player" aria-label="Avenora Radio mini player">
+    <div class="radio-mini-inner" onclick="navigateTo('radio')" role="button" tabindex="0"
+         onkeydown="if(event.key==='Enter')navigateTo('radio')">
+      <span class="radio-mini-dot" aria-hidden="true"></span>
+      <div class="radio-mini-info">
+        <div class="radio-mini-station">AVENORA RADIO</div>
+        <div class="radio-mini-track" id="radio-mini-track">Loading…</div>
+      </div>
+      <div class="radio-mini-controls" onclick="event.stopPropagation()">
+        <button class="radio-mini-btn" id="radio-mini-play" onclick="radioMiniTogglePlay()" aria-label="Play/Pause">▶</button>
+        <button class="radio-mini-btn" onclick="radioMiniClose()" aria-label="Close mini player" title="Close">✕</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ═══════ TOAST CONTAINER ══════════════════════════════════ -->
   <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
@@ -366,6 +385,8 @@
   <script src="src/pages/cloudstudio.js"></script>
   <script src="src/pages/dj.js"></script>
   <script src="src/pages/music.js"></script>
+  <script src="src/pages/radio.js"></script>
+  <script src="src/pages/radioadmin.js"></script>
   <script src="src/pages/arcade.js"></script>
   <script src="src/pages/chat.js"></script>
   <script src="src/pages/gallery.js"></script>

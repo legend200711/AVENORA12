@@ -67,6 +67,8 @@
       cloudstudio: 'CREATOR STUDIO',
       dj: 'DJ SYSTEM',
       music: 'MUSIC HUB',
+      radio: 'AVENORA RADIO',
+      radioadmin: 'RADIO ADMIN',
       arcade: 'ARCADE',
       chat: 'CHAT',
       gallery: 'GALLERY',
@@ -593,6 +595,82 @@
       }
     });
   }
+
+  // ─── Mini Radio Player (global persistent) ───────────────────
+  // Shown when the user navigated away from the radio page while audio is playing.
+  // Subscribes to the Firestore stationNowPlaying doc and shows/hides based on
+  // whether there is an active audio element from the radio page.
+  (function initMiniRadioPlayer() {
+    let _miniUnsubscribe = null;
+    let _miniVisible = false;
+
+    function _updateMiniTrack(title, artist) {
+      const el = document.getElementById('radio-mini-track');
+      if (el) el.textContent = artist ? `${title} • ${artist}` : title;
+    }
+
+    function _showMini(show) {
+      const el = document.getElementById('radio-mini-player');
+      if (!el) return;
+      _miniVisible = show;
+      el.classList.toggle('hidden', !show);
+    }
+
+    function _syncMiniPlayBtn() {
+      const audio = document.getElementById('radio-audio');
+      const btn   = document.getElementById('radio-mini-play');
+      if (btn) btn.textContent = (audio && !audio.paused) ? '⏸' : '▶';
+    }
+
+    // Listen to the Firestore doc for now-playing updates
+    async function _subscribeMini() {
+      try {
+        const { getFirestore } = window.AvenoraFirebase || {};
+        if (!getFirestore) return;
+        const db = await getFirestore();
+        _miniUnsubscribe = db.collection('stationNowPlaying').doc('avenoraRadio')
+          .onSnapshot((snap) => {
+            if (!snap.exists) return;
+            const d = snap.data();
+            if (d.status === 'playing' && d.currentTitle) {
+              _updateMiniTrack(d.currentTitle, d.currentArtist || '');
+            }
+          }, () => {});
+      } catch {}
+    }
+
+    // Show the mini player whenever user navigates away from the radio page
+    // but audio is still loaded/playing.
+    window.addEventListener('hashchange', () => {
+      const page    = (location.hash.replace('#', '') || 'hub').split('/')[0];
+      const audio   = document.getElementById('radio-audio');
+      const hasAudio = audio && audio.src && !audio.ended;
+
+      if (page !== 'radio' && hasAudio) {
+        _showMini(true);
+        _syncMiniPlayBtn();
+        if (!_miniUnsubscribe) _subscribeMini();
+      } else {
+        _showMini(false);
+      }
+    });
+
+    // Global mini player controls (referenced in index.html)
+    window.radioMiniTogglePlay = function () {
+      const audio = document.getElementById('radio-audio');
+      if (!audio || !audio.src) { navigateTo('radio'); return; }
+      if (audio.paused) { audio.play().catch(() => {}); }
+      else              { audio.pause(); }
+      _syncMiniPlayBtn();
+    };
+
+    window.radioMiniClose = function () {
+      const audio = document.getElementById('radio-audio');
+      if (audio) { audio.pause(); audio.src = ''; }
+      _showMini(false);
+      if (_miniUnsubscribe) { _miniUnsubscribe(); _miniUnsubscribe = null; }
+    };
+  })();
 
   // Run after DOM is ready
   if (document.readyState === 'loading') {

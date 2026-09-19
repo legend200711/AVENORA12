@@ -1,25 +1,28 @@
 /**
  * AVENORA MUSIC HUB — music.js
- * Full music listening & discovery platform.
+ * 🌌 COSMIC MUSIC UNIVERSE — Full listening & discovery platform.
  *
  * Features:
  *   - HTML5 Audio player (real playback only — no fake play state)
  *   - Import local files (MP3, WAV, OGG, FLAC, AAC, M4A, OPUS)
- *   - Backend library (tracks, albums, artists) when MongoDB is connected
+ *   - Backend library (tracks, albums, artists)
+ *   - 12 Cosmic system playlists + Avenora Cloud Radio playlist
  *   - Playlists (create, rename, reorder, delete, play)
+ *   - Per-track ⋮ context menu (play, add to playlist, like, view album/artist)
  *   - Favorites (local + synced to backend when logged in)
  *   - Recently played (local + backend)
- *   - Global search (songs, albums, artists)
- *   - Genre filters
- *   - Upload form (detects missing storage, shows honest status)
- *   - External service links (Spotify, YouTube Music, Apple Music, Amazon)
- *   - Audio-reactive visualizer (Canvas API, prefers-reduced-motion aware)
+ *   - Global search bar integrated in Discover
+ *   - Genre filters & cosmic genre explorer
+ *   - Upload form with post-upload "Add to Sound World" prompt
+ *   - 📻 AVENORA 24-HOUR CLOUD RADIO inline card (Firestore live, listener count)
+ *   - Audio-reactive visualizer
  *   - DJ System integration bridge
  *   - Mobile-first, touch-friendly
  */
 
 registerPage('music', {
   async render(container) {
+    musicEnsureSystemPlaylists();
     container.innerHTML = buildMusicShell();
     initMusicPlayer();
     await musicTabSwitch('discover');
@@ -27,27 +30,113 @@ registerPage('music', {
   }
 });
 
+// ─── Cosmic System Playlists ────────────────────────────────
+// Created once in localStorage on first visit. Never duplicated.
+// Each playlist has a stable sysId — never recreated on login.
+const SYSTEM_PLAYLISTS = [
+  { sysId: 'sys-cosmic',    name: '🌌 Cosmic Frequency',  icon: '🌌', color: '#00ccff',            description: 'The gateway to the Avenora music universe' },
+  { sysId: 'sys-midnight',  name: '🌙 Midnight Eclipse',  icon: '🌙', color: '#7c5cd8',             description: 'Dark, emotional, late-night music' },
+  { sysId: 'sys-neon',      name: '⚡ Neon Rush',          icon: '⚡', color: '#39ff14',             description: 'High-energy music' },
+  { sysId: 'sys-shadow',    name: '🔥 Shadowfire',         icon: '🔥', color: '#ff4400',             description: 'Rock, metal, hard-hitting music' },
+  { sysId: 'sys-greenlight',name: '💚 Greenlight Vibes',  icon: '💚', color: '#00e676',             description: 'Positive, uplifting and feel-good music' },
+  { sysId: 'sys-deepspace', name: '🌊 Deep Space Drift',  icon: '🌊', color: '#0088bb',             description: 'Relaxing, chill, atmospheric music' },
+  { sysId: 'sys-darkmatter',name: '🖤 Dark Matter',        icon: '🖤', color: '#aa44ff',             description: 'Dark, mysterious and atmospheric' },
+  { sysId: 'sys-hyperdrive',name: '🚀 Hyperdrive',         icon: '🚀', color: '#00ccff',             description: 'Fast, energetic — workout and driving music' },
+  { sysId: 'sys-starlight', name: '💫 Starlight Sessions', icon: '💫', color: '#ffd060',             description: 'Smooth, melodic and beautiful music' },
+  { sysId: 'sys-hiphop',    name: '🎤 Cosmic Hip-Hop',    icon: '🎤', color: '#00ccff',             description: 'Hip-hop and rap' },
+  { sysId: 'sys-rock',      name: '🎸 Electric Galaxy',   icon: '🎸', color: '#ff6600',             description: 'Rock and alternative music' },
+  { sysId: 'sys-aftermidnight', name: '🕯️ After Midnight',icon: '🕯️', color: '#c9a84c',            description: 'Emotional, reflective and slower music' },
+  { sysId: 'sys-radio',     name: '📻 Avenora Cloud Radio',icon: '📻', color: 'var(--avenora-gold)', description: 'Official 24/7 radio station playlist', isRadio: true },
+];
+
+function musicEnsureSystemPlaylists() {
+  const existing = LS.get('lu_music_playlists', []);
+  const existingSysIds = new Set(existing.map(p => p.sysId).filter(Boolean));
+  let changed = false;
+  for (const sp of SYSTEM_PLAYLISTS) {
+    if (!existingSysIds.has(sp.sysId)) {
+      existing.push({
+        id:          sp.sysId,
+        sysId:       sp.sysId,
+        name:        sp.name,
+        icon:        sp.icon,
+        color:       sp.color,
+        description: sp.description,
+        isRadio:     sp.isRadio || false,
+        isSystem:    true,
+        tracks:      [],
+        visibility:  sp.isRadio ? 'private' : 'private',
+        createdAt:   new Date().toISOString(),
+      });
+      changed = true;
+    }
+  }
+  if (changed) LS.set('lu_music_playlists', existing);
+}
+
 // ─── Shell HTML ──────────────────────────────────────────────
 function buildMusicShell() {
   return `
+    <!-- ✦ COSMIC HERO ✦ -->
     <div class="music-hero">
       <div class="music-hero-bg"></div>
+      <div class="music-hero-stars" aria-hidden="true"></div>
       <div class="music-ambient-flame"></div>
-      <h1 class="music-hub-title">
-        <span style="color:var(--neon-blue)">AVENORA</span>
-        <span style="color:var(--neon-green)"> MUSIC</span>
-        <span> HUB</span>
-      </h1>
-      <p class="music-hub-tagline">YOUR MUSIC. YOUR UNIVERSE.</p>
-      <div style="display:flex;justify-content:center;gap:var(--space-sm);flex-wrap:wrap">
-        <span class="dj-ready-badge">🎛 DJ SYSTEM READY</span>
-        <span class="dj-ready-badge" style="color:var(--avenora-gold);border-color:rgba(184,149,75,0.30);background:rgba(184,149,75,0.08)">📻 24-HR RADIO READY</span>
+      <div class="music-hub-hero-content">
+        <div class="music-hub-badge">🎵 AVENORA MUSIC</div>
+        <h1 class="music-hub-title">
+          <span class="mh-title-avenora">ENTER THE</span>
+          <span class="mh-title-music"> SOUND UNIVERSE</span>
+        </h1>
+        <p class="music-hub-tagline">Discover music. Build your world. Tune into the universe.</p>
+
+        <!-- Hero search -->
+        <div class="music-hero-search">
+          <div class="mh-search-inner">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+            <input type="search" id="discover-search-input" placeholder="🔍  Search the music universe…"
+                   aria-label="Search music"
+                   oninput="musicDiscoverSearch(this.value)"
+                   onfocus="musicTabSwitch('search')">
+          </div>
+        </div>
       </div>
     </div>
 
     <div class="container-lg" style="padding-bottom:var(--space-3xl)">
 
-      <!-- Sticky Player -->
+      <!-- ✦ Cosmic Nav Cards ✦ -->
+      <div class="music-cosmic-nav" aria-label="Music sections">
+        <button class="mcn-card" onclick="musicTabSwitch('discover',document.querySelectorAll('.music-hub-tab-btn')[0])">
+          <span class="mcn-icon">🌌</span>
+          <span class="mcn-title">DISCOVER</span>
+          <span class="mcn-sub">Explore the music universe</span>
+        </button>
+        <button class="mcn-card mcn-music" onclick="musicTabSwitch('library',document.querySelectorAll('.music-hub-tab-btn')[2])">
+          <span class="mcn-icon">🎧</span>
+          <span class="mcn-title">YOUR MUSIC</span>
+          <span class="mcn-sub">Your personal collection</span>
+        </button>
+        <button class="mcn-card mcn-playlists" onclick="musicTabSwitch('playlists',document.querySelectorAll('.music-hub-tab-btn')[3])">
+          <span class="mcn-icon">📂</span>
+          <span class="mcn-title">SOUND WORLDS</span>
+          <span class="mcn-sub">Your cosmic playlists</span>
+        </button>
+        <button class="mcn-card mcn-radio" onclick="musicTabSwitch('radio',document.querySelectorAll('.music-hub-tab-btn')[1])">
+          <span class="mcn-icon">📻</span>
+          <span class="mcn-title">CLOUD RADIO</span>
+          <span class="mcn-sub">Non-stop music 24/7</span>
+        </button>
+        <button class="mcn-card mcn-upload" onclick="musicTabSwitch('upload',document.querySelectorAll('.music-hub-tab-btn')[9])">
+          <span class="mcn-icon">⬆</span>
+          <span class="mcn-title">UPLOAD</span>
+          <span class="mcn-sub">Add music to the universe</span>
+        </button>
+      </div>
+
+      <!-- ✦ Sticky Player ✦ -->
       <div class="music-player-bar" id="mp-bar">
         <div class="mp-main-row">
           <div class="mp-art" id="mp-art">🎵</div>
@@ -104,26 +193,27 @@ function buildMusicShell() {
           <div class="mp-volume-row">
             <span>🔊</span>
             <input type="range" min="0" max="100" value="80"
-                   oninput="mpSetVolume(this.value)" aria-label="Volume" style="flex:1;accent-color:var(--neon-green)">
+                   oninput="mpSetVolume(this.value)" aria-label="Volume" style="flex:1;accent-color:#00ccff">
           </div>
         </div>
       </div>
 
-      <!-- Tabs -->
-      <div class="tabs" role="tablist" style="margin-bottom:var(--space-xl)">
+      <!-- ✦ Tabs ✦ -->
+      <div class="tabs music-hub-tabs" role="tablist" style="margin-bottom:var(--space-xl)">
         ${[
-          ['discover',        '🌌 Discover'],
-          ['library',         '🎵 Library'],
-          ['playlists',       '📂 Playlists'],
-          ['albums',          '💿 Albums'],
-          ['artists',         '🎤 Artists'],
-          ['favorites',       '♥ Favorites'],
-          ['recent',          '🕐 Recent'],
-          ['search',          '🔍 Search'],
-          ['upload',          '⬆ Upload'],
-          ['external',        '🔗 Services'],
+          ['discover',  '🌌 Discover'],
+          ['radio',     '📻 Radio'],
+          ['library',   '🎵 Songs'],
+          ['playlists', '📂 Sound Worlds'],
+          ['albums',    '💿 Albums'],
+          ['artists',   '🎤 Artists'],
+          ['favorites', '❤️ Liked'],
+          ['recent',    '🕘 Recent'],
+          ['search',    '🔍 Search'],
+          ['upload',    '⬆ Upload'],
+          ['external',  '🔗 Services'],
         ].map(([id, label], i) =>
-          `<button class="tab-btn${i===0?' active':''}" role="tab"
+          `<button class="tab-btn music-hub-tab-btn${i===0?' active':''}" role="tab"
              onclick="musicTabSwitch('${id}',this)">${label}</button>`
         ).join('')}
       </div>
@@ -135,14 +225,17 @@ function buildMusicShell() {
     <!-- Queue panel (slide-in) -->
     <div class="music-queue-panel" id="mp-queue-panel" aria-label="Playback queue">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <h4 style="font-family:var(--font-display);letter-spacing:0.1em;margin:0">QUEUE</h4>
+        <h4 style="font-family:var(--font-display);letter-spacing:0.1em;margin:0;color:#00ccff">⚡ QUEUE</h4>
         <button class="mp-icon-btn" onclick="mpToggleQueue()">✕</button>
       </div>
-      <button class="btn btn-green btn-sm w-full" onclick="mpImport()">📂 Import Music Files</button>
+      <button class="btn btn-cosmic btn-sm w-full" onclick="mpImport()">📂 Import Music Files</button>
       <div id="mp-queue-list" style="flex:1;overflow-y:auto">
         <p style="color:var(--text-muted);font-size:0.85rem;text-align:center;padding:var(--space-lg) 0">Queue empty</p>
       </div>
     </div>
+
+    <!-- Track context menu (shared) -->
+    <div id="music-track-menu" class="music-track-ctx-menu hidden" role="menu"></div>
 
     <!-- Hidden audio element -->
     <audio id="mp-audio" preload="auto" style="display:none"></audio>
@@ -163,11 +256,15 @@ window.musicTabSwitch = async function (tab, clickedBtn) {
   const el = document.getElementById('music-content');
   if (!el) return;
 
+  // Clean up any active real-time listeners from previous tab
+  if (typeof _radioTabCleanup === 'function') _radioTabCleanup();
+
   el.innerHTML = `<div class="loading-state" style="min-height:40vh"><div class="spinner"></div></div>`;
 
   try {
     switch (tab) {
       case 'discover':        el.innerHTML = await renderDiscover();        break;
+      case 'radio':           el.innerHTML = await renderRadioTab();        break;
       case 'library':         el.innerHTML = await renderLibrary();         break;
       case 'playlists':       el.innerHTML = await renderPlaylists();       break;
       case 'albums':          el.innerHTML = await renderAlbums();          break;
@@ -204,7 +301,9 @@ async function renderDiscover() {
     if (tracksData.tracks && tracksData.tracks.length > 0) {
       _mpContextTracks['popular'] = tracksData.tracks;
       trackSection = `
-        <div class="section-header"><h2 class="section-title">🔥 POPULAR</h2></div>
+        <div class="section-header">
+          <h2 class="section-title cosmic-section-title">🔥 TRENDING NOW</h2>
+        </div>
         <div class="music-track-list" style="margin-bottom:var(--space-xl)">
           ${tracksData.tracks.map((t, i) => renderTrackRow(t, i, tracksData.tracks, 'popular')).join('')}
         </div>`;
@@ -212,7 +311,9 @@ async function renderDiscover() {
 
     if (albumsData.albums && albumsData.albums.length > 0) {
       albumSection = `
-        <div class="section-header"><h2 class="section-title">💿 NEW ALBUMS</h2></div>
+        <div class="section-header">
+          <h2 class="section-title cosmic-section-title">✨ NEW IN THE GALAXY</h2>
+        </div>
         <div class="music-card-grid" style="margin-bottom:var(--space-xl)">
           ${albumsData.albums.map(a => renderAlbumCard(a)).join('')}
         </div>`;
@@ -221,7 +322,9 @@ async function renderDiscover() {
 
   // Local imported tracks
   const localSection = MP.queue.length > 0 ? `
-    <div class="section-header"><h2 class="section-title">YOUR LIBRARY</h2></div>
+    <div class="section-header">
+      <h2 class="section-title cosmic-section-title">🎧 YOUR LIBRARY</h2>
+    </div>
     <div class="music-track-list" style="margin-bottom:var(--space-xl)">
       ${MP.queue.map((t, i) => renderLocalTrackRow(t, i)).join('')}
     </div>` : '';
@@ -230,63 +333,420 @@ async function renderDiscover() {
 
   return `
     <div>
+      <!-- 📻 Cosmic Radio Teaser Portal -->
+      <div class="music-radio-portal" onclick="musicTabSwitch('radio',document.querySelectorAll('.music-hub-tab-btn')[1])"
+           role="button" tabindex="0" onkeydown="if(event.key==='Enter')musicTabSwitch('radio')">
+        <div class="mrp-glow" aria-hidden="true"></div>
+        <div class="mrp-left">
+          <div class="mrp-badge">
+            <span class="radio-on-air-dot" style="width:8px;height:8px"></span>
+            ON AIR
+          </div>
+          <div class="mrp-name">📻 AVENORA 24-HOUR CLOUD RADIO</div>
+          <div class="mrp-sub" id="discover-radio-np">Non-stop music • No skipping</div>
+        </div>
+        <button class="mrp-listen-btn" onclick="event.stopPropagation();musicTabSwitch('radio',document.querySelectorAll('.music-hub-tab-btn')[1])">
+          ▶ LISTEN LIVE
+        </button>
+      </div>
+
+      <!-- 🌌 Explore the Universe — section grid -->
+      <div class="section-header" style="margin-top:var(--space-xl)">
+        <h2 class="section-title cosmic-section-title">🌌 EXPLORE THE UNIVERSE</h2>
+      </div>
+      <div class="music-explore-grid">
+        <button class="mex-card" onclick="musicTabSwitch('favorites',document.querySelectorAll('.music-hub-tab-btn')[6])">
+          <span>❤️</span><span>Favorites</span>
+        </button>
+        <button class="mex-card" onclick="musicTabSwitch('recent',document.querySelectorAll('.music-hub-tab-btn')[7])">
+          <span>🕘</span><span>Recent Orbits</span>
+        </button>
+        <button class="mex-card" onclick="musicTabSwitch('albums',document.querySelectorAll('.music-hub-tab-btn')[4])">
+          <span>💿</span><span>Album Galaxy</span>
+        </button>
+        <button class="mex-card" onclick="musicTabSwitch('artists',document.querySelectorAll('.music-hub-tab-btn')[5])">
+          <span>🎤</span><span>Artist Constellations</span>
+        </button>
+        <button class="mex-card" onclick="musicTabSwitch('library',document.querySelectorAll('.music-hub-tab-btn')[2])">
+          <span>🎵</span><span>All Songs</span>
+        </button>
+        <button class="mex-card" onclick="musicTabSwitch('upload',document.querySelectorAll('.music-hub-tab-btn')[9])">
+          <span>⬆</span><span>Upload Music</span>
+        </button>
+      </div>
+
       ${noContent ? renderDiscoverEmpty() : ''}
       ${localSection}
       ${trackSection}
       ${albumSection}
+
+      <!-- 🌌 Sound Worlds preview -->
       ${renderPlaylistCards()}
     </div>
   `;
 }
 
+// Kick off a background fetch of radio now-playing for the teaser card
+(function _discoverRadioNP() {
+  setTimeout(async () => {
+    const el = document.getElementById('discover-radio-np');
+    if (!el) return;
+    try {
+      const { getFirestore } = window.AvenoraFirebase || {};
+      if (getFirestore) {
+        const db   = await getFirestore();
+        const snap = await db.collection('stationNowPlaying').doc('avenoraRadio').get();
+        if (snap.exists) {
+          const d = snap.data();
+          if (d.currentTitle) {
+            el.textContent = `${d.currentTitle}${d.currentArtist ? ' — ' + d.currentArtist : ''}`;
+            return;
+          }
+        }
+      }
+    } catch {}
+    // Fallback to API
+    try {
+      const apiBase = (window.LU_CONFIG?.apiUrl || '').replace(/\/$/, '');
+      const data = await fetch(`${apiBase}/radio/status`).then(r => r.json());
+      if (data?.currentTrack?.title) {
+        el.textContent = `${data.currentTrack.title}${data.currentTrack.artist ? ' — ' + data.currentTrack.artist : ''}`;
+        return;
+      }
+    } catch {}
+    el.textContent = '24 hours a day • 7 days a week';
+  }, 800);
+}());
+
+window.musicDiscoverSearch = function (q) {
+  if (q && q.trim().length >= 2) {
+    musicTabSwitch('search');
+    setTimeout(() => {
+      const inp = document.getElementById('music-search-input');
+      if (inp) { inp.value = q; musicSearch(q); }
+    }, 100);
+  }
+};
+
 function renderDiscoverEmpty() {
   return `
-    <div class="card" style="border-color:var(--border-green);margin-bottom:var(--space-xl)">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:var(--space-md)">
-        <div>
-          <h3 style="font-family:var(--font-display);color:var(--neon-green);letter-spacing:0.08em;margin-bottom:6px">
-            NO MUSIC AVAILABLE YET
-          </h3>
-          <p style="color:var(--text-secondary);font-size:0.9rem;max-width:480px">
-            Import your own audio files to start listening, or explore the cloud library when it becomes available.
-          </p>
-          <ul style="color:var(--text-muted);font-size:0.82rem;margin:var(--space-sm) 0 0 var(--space-md);line-height:1.8">
-            <li>Supported formats: MP3, WAV, OGG, FLAC, AAC, M4A, OPUS</li>
-            <li>Files stay local in your browser — nothing is uploaded</li>
-          </ul>
-        </div>
-        <button class="btn btn-green" onclick="mpImport()">📂 Import Files</button>
+    <div class="cosmic-empty-card" style="margin-bottom:var(--space-xl)">
+      <div class="cosmic-empty-icon">🌌</div>
+      <h3 class="cosmic-empty-title">YOUR UNIVERSE AWAITS</h3>
+      <p class="cosmic-empty-sub">
+        Import your own music or upload tracks to begin your journey through the sound universe.
+      </p>
+      <ul style="color:var(--text-muted);font-size:0.82rem;text-align:left;margin:var(--space-sm) auto var(--space-lg);max-width:360px;line-height:2">
+        <li>🎵 Supported: MP3, WAV, OGG, FLAC, AAC, M4A, OPUS</li>
+        <li>☁️ Upload to your cloud library from the Upload tab</li>
+      </ul>
+      <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center">
+        <button class="btn btn-cosmic" onclick="mpImport()">📂 Import Local Files</button>
+        <button class="btn btn-cosmic-outline" onclick="musicTabSwitch('upload')">⬆ Upload Track</button>
       </div>
     </div>`;
 }
 
-function renderPlaylistCards() {
-  const presets = [
-    { name: 'AVENORA HITS',       icon: '⭐', color: 'var(--neon-blue)' },
-    { name: 'AVENORA ESSENTIALS', icon: '🌑', color: 'var(--neon-green)' },
-    { name: 'AVENORA CHILL',      icon: '🌙', color: 'var(--neon-purple)' },
-    { name: 'AVENORA ROCK',       icon: '🎸', color: 'var(--neon-orange)' },
-    { name: '24/7 RADIO',         icon: '📻', color: 'var(--neon-red)' },
-  ];
-  const localPlaylists = LS.get('lu_music_playlists', []);
-  const all = [...presets.map(p => ({ ...p, isPreset: true })), ...localPlaylists.map(p => ({
-    name: p.name, icon: '📂', color: 'var(--neon-blue)', id: p.id
-  }))];
+// ─── RADIO TAB ────────────────────────────────────────────
+// Shows the Avenora Radio card inline in the Music Hub with a real-time
+// Firestore onSnapshot listener that updates Now Playing/listener count without
+// re-rendering the whole tab. Falls back to API polling if Firestore is unavailable.
+
+let _radioTabUnsub = null; // cleanup handle for the onSnapshot subscription
+
+function _radioTabCleanup() {
+  if (_radioTabUnsub) { try { _radioTabUnsub(); } catch {} _radioTabUnsub = null; }
+}
+
+function _renderRadioCardContent(d) {
+  // d is the Firestore document data (stationNowPlaying/avenoraRadio)
+  const isPlaying   = d?.status === 'playing';
+  const title       = d?.currentTitle  || '';
+  const artist      = d?.currentArtist || '';
+  const coverUrl    = d?.currentCoverUrl || null;
+  const upcoming    = (d?.upcoming || []).slice(0, 4);
+  const stationName = d?.stationName || 'AVENORA RADIO';
+  const plLen       = d?.playlistLength || 0;
+  const listeners   = d?.listenerCount  || 0;
+
+  const artHtml = coverUrl
+    ? `<img src="${escapeHtml(coverUrl)}" alt="Cover"
+           style="width:100%;height:100%;object-fit:cover;border-radius:inherit"
+           onerror="this.parentElement.innerHTML='🎵'">`
+    : '🎵';
+
+  const nowPlayingSection = title ? `
+    <div class="music-radio-body">
+      <div class="music-radio-np-art">${artHtml}</div>
+      <div class="music-radio-np-info">
+        <div class="music-radio-np-title">${escapeHtml(title)}</div>
+        ${artist ? `<div class="music-radio-np-artist">${escapeHtml(artist)}</div>` : ''}
+        ${listeners > 0 ? `<div style="font-size:0.72rem;color:var(--text-muted);margin-top:4px">👥 ${listeners} listener${listeners!==1?'s':''}</div>` : ''}
+      </div>
+      <button class="music-radio-listen-btn" onclick="navigateTo('radio')">▶ LISTEN LIVE</button>
+    </div>` : `
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:var(--space-md)">
+      <div style="color:var(--text-muted);font-size:0.85rem">
+        ${isPlaying === false && d ? 'Station is paused.' : 'Waiting for station data…'}
+      </div>
+      <button class="music-radio-listen-btn" onclick="navigateTo('radio')">📻 OPEN RADIO</button>
+    </div>`;
+
+  const upcomingSection = upcoming.length ? `
+    <div class="music-radio-upcoming">
+      <div class="music-radio-upcoming-title">NEXT UP</div>
+      <div class="music-radio-upcoming-list">
+        ${upcoming.map((t, i) => `
+          <div class="music-radio-upcoming-item">
+            <span class="num">${i + 1}.</span>
+            <span>${escapeHtml(t.title || 'Untitled')}</span>
+            ${t.artist ? `<span style="color:var(--text-muted)"> — ${escapeHtml(t.artist)}</span>` : ''}
+          </div>`).join('')}
+      </div>
+    </div>` : '';
 
   return `
-    <div class="section-header"><h2 class="section-title">📂 PLAYLISTS</h2></div>
-    <div class="music-card-grid" style="margin-bottom:var(--space-xl)">
-      ${all.map(p => `
-        <div class="music-card" onclick="${p.id ? `musicPlayLocalPlaylist('${p.id}')` : `musicTabSwitch('playlists')`}">
-          <div class="music-card-art" style="background:var(--bg-elevated)">
-            <div style="font-size:2.5rem">${p.icon}</div>
-            <div class="music-card-art-overlay">
-              <div class="music-card-play-icon">▶</div>
-            </div>
+    <div class="music-radio-header">
+      <div class="music-radio-title">${escapeHtml(stationName)}</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        ${isPlaying ? `
+          <span class="radio-live-badge" style="font-size:0.6rem;padding:2px 8px">
+            <span class="radio-on-air-dot" style="width:6px;height:6px"></span>
+            ON AIR
+          </span>` : `<span style="font-size:0.72rem;color:var(--text-muted);letter-spacing:0.18em">${d ? 'PAUSED' : 'LOADING'}</span>`}
+        ${plLen ? `<span style="font-size:0.65rem;color:rgba(0,160,255,0.45);letter-spacing:0.2em">${plLen} TRACKS</span>` : ''}
+      </div>
+    </div>
+    ${nowPlayingSection}
+    ${upcomingSection}`;
+}
+
+async function renderRadioTab() {
+  // Render a cosmic broadcast portal shell immediately
+  const html = `
+    <div>
+      <!-- COSMIC BROADCAST PORTAL -->
+      <div class="cosmic-radio-portal" id="music-radio-tab-card"
+           onclick="navigateTo('radio')" role="button" tabindex="0"
+           onkeydown="if(event.key==='Enter')navigateTo('radio')"
+           aria-label="Open Avenora Radio Station">
+        <div class="crp-header">
+          <div class="crp-station-name">📻 AVENORA RADIO</div>
+          <div class="crp-onair-badge" id="crp-onair-badge">
+            <span class="radio-on-air-dot"></span> LOADING…
           </div>
-          <div class="music-card-body">
-            <div class="music-card-title" style="color:${p.color}">${escapeHtml(p.name)}</div>
-            <div class="music-card-sub">${p.isPreset ? 'Add your tracks' : 'Your playlist'}</div>
+        </div>
+        <div id="music-radio-tab-inner" class="crp-body">
+          <div class="crp-art-placeholder">📻</div>
+          <div class="crp-np-label">NOW PLAYING</div>
+          <div class="crp-track-title" id="crp-track-title">Connecting to station…</div>
+          <div class="crp-track-artist" id="crp-track-artist"></div>
+        </div>
+        <button class="crp-listen-btn" onclick="event.stopPropagation();navigateTo('radio')">▶ LISTEN LIVE</button>
+        <div class="crp-tagline">Non-stop music • No skipping • Always broadcasting</div>
+      </div>
+
+      <!-- Station info -->
+      <div class="cosmic-radio-info-row">
+        <div class="cri-stat">
+          <span class="cri-stat-icon">📡</span>
+          <span class="cri-stat-label">24/7 BROADCAST</span>
+        </div>
+        <div class="cri-stat">
+          <span class="cri-stat-icon">🎵</span>
+          <span class="cri-stat-label">SERVER-CONTROLLED</span>
+        </div>
+        <div class="cri-stat">
+          <span class="cri-stat-icon">🔒</span>
+          <span class="cri-stat-label">LISTENER — NO SKIP</span>
+        </div>
+      </div>
+
+      <div style="display:flex;gap:var(--space-sm);justify-content:center;flex-wrap:wrap;margin-bottom:var(--space-xl)">
+        <button class="btn btn-cosmic" onclick="navigateTo('radio')">📻 Open Full Radio Player</button>
+        <button class="btn btn-cosmic-outline btn-sm" onclick="navigateTo('radioadmin')">⚙️ Radio Admin</button>
+      </div>
+    </div>`;
+
+  // Kick off real-time listener asynchronously (non-blocking)
+  _radioTabCleanup();
+  setTimeout(async () => {
+    const innerEl = document.getElementById('music-radio-tab-inner');
+    if (!innerEl) return;
+
+    // Try Firestore onSnapshot
+    try {
+      const { getFirestore } = window.AvenoraFirebase || {};
+      if (getFirestore) {
+        const db = await getFirestore();
+        const fsModule = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+        const docRef = fsModule.doc(db, 'stationNowPlaying', 'avenoraRadio');
+        _radioTabUnsub = fsModule.onSnapshot(docRef, (snap) => {
+          _updateCosmicRadioPortal(snap.exists() ? snap.data() : null);
+        });
+        return; // onSnapshot set up — done
+      }
+    } catch (fsErr) {
+      console.warn('[AVN Radio Tab] Firestore listener failed:', fsErr.message);
+    }
+
+    // Firestore unavailable — fall back to one API call + 30s polling
+    async function _apiFetch() {
+      if (!document.getElementById('music-radio-tab-inner')) return;
+      try {
+        const apiBase = (window.LU_CONFIG?.apiUrl || '').replace(/\/$/, '');
+        const data = await fetch(`${apiBase}/radio/status`).then(r => r.json());
+        if (data?.currentTrack) {
+          const t = data.currentTrack;
+          _updateCosmicRadioPortal({
+            status:         data.status,
+            stationName:    data.stationName || 'AVENORA RADIO',
+            currentTitle:   t.title,
+            currentArtist:  t.artist,
+            currentCoverUrl:t.coverUrl || null,
+            upcoming:       data.upcoming || [],
+            playlistLength: data.playlistLength || 0,
+            listenerCount:  data.listenerCount || 0,
+          });
+        }
+      } catch {}
+    }
+    _apiFetch();
+    const _pollTimer = setInterval(() => {
+      if (!document.getElementById('music-radio-tab-inner')) { clearInterval(_pollTimer); return; }
+      _apiFetch();
+    }, 30000);
+  }, 200);
+
+  return html;
+}
+
+// Update the cosmic radio portal with real-time data (called from Firestore + API fallback)
+function _updateCosmicRadioPortal(d) {
+  const isPlaying = d?.status === 'playing';
+  const title     = d?.currentTitle  || '';
+  const artist    = d?.currentArtist || '';
+  const coverUrl  = d?.currentCoverUrl || null;
+  const upcoming  = (d?.upcoming || []).slice(0, 4);
+  const listeners = d?.listenerCount  || 0;
+
+  // Update discover teaser
+  const teaserEl = document.getElementById('discover-radio-np');
+  if (teaserEl && title) teaserEl.textContent = `${title}${artist ? ' — ' + artist : ''}`;
+
+  // Update cosmic portal card
+  const badgeEl  = document.getElementById('crp-onair-badge');
+  const titleEl  = document.getElementById('crp-track-title');
+  const artistEl = document.getElementById('crp-track-artist');
+  const artEl    = document.querySelector('.crp-art-placeholder');
+
+  if (badgeEl) {
+    badgeEl.innerHTML = isPlaying
+      ? `<span class="radio-on-air-dot"></span> ON AIR`
+      : `<span style="color:var(--text-muted)">${d ? 'PAUSED' : 'LOADING…'}</span>`;
+  }
+
+  if (title) {
+    if (titleEl)  titleEl.textContent  = title;
+    if (artistEl) artistEl.textContent = artist || '';
+    if (artEl && coverUrl) {
+      artEl.outerHTML = `<img src="${escapeHtml(coverUrl)}" class="crp-art-img" alt="Cover"
+        onerror="this.outerHTML='<div class=\\'crp-art-placeholder\\'>🎵</div>'">`;
+    }
+    // Also update upcoming
+    const innerEl = document.getElementById('music-radio-tab-inner');
+    if (innerEl && upcoming.length) {
+      let upHtml = innerEl.innerHTML;
+      const upSection = document.getElementById('crp-upcoming');
+      if (!upSection) {
+        innerEl.insertAdjacentHTML('beforeend', `
+          <div id="crp-upcoming" class="crp-upcoming">
+            <div class="crp-upcoming-label">NEXT UP</div>
+            <div class="crp-upcoming-list">
+              ${upcoming.map((t,i) => `
+                <div class="crp-upcoming-item">
+                  <span class="crp-upcoming-num">${i+1}</span>
+                  <span>${escapeHtml(t.title||'?')}${t.artist?' <span class="crp-upcoming-artist">— '+escapeHtml(t.artist)+'</span>':''}</span>
+                </div>`).join('')}
+            </div>
+          </div>`);
+      } else {
+        upSection.querySelector('.crp-upcoming-list').innerHTML =
+          upcoming.map((t,i) => `
+            <div class="crp-upcoming-item">
+              <span class="crp-upcoming-num">${i+1}</span>
+              <span>${escapeHtml(t.title||'?')}${t.artist?' <span class="crp-upcoming-artist">— '+escapeHtml(t.artist)+'</span>':''}</span>
+            </div>`).join('');
+      }
+    }
+  }
+}
+
+// ─── COSMIC PLAYLIST ARTWORK — CSS gradients per system playlist ─
+const PLAYLIST_ARTWORK = {
+  'sys-cosmic':       { bg: 'linear-gradient(135deg, #000428 0%, #004e92 100%)',      stars: true },
+  'sys-midnight':     { bg: 'linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%)' },
+  'sys-neon':         { bg: 'linear-gradient(135deg, #1a0040 0%, #00ff7f20 100%)',    neon: '#39ff14' },
+  'sys-shadow':       { bg: 'linear-gradient(135deg, #1a0000 0%, #ff440020 100%)',    neon: '#ff4400' },
+  'sys-greenlight':   { bg: 'linear-gradient(135deg, #003300 0%, #00e67620 100%)',    neon: '#00e676' },
+  'sys-deepspace':    { bg: 'linear-gradient(135deg, #000428 0%, #0088bb30 100%)' },
+  'sys-darkmatter':   { bg: 'linear-gradient(135deg, #0a0014 0%, #aa44ff20 100%)',    neon: '#aa44ff' },
+  'sys-hyperdrive':   { bg: 'linear-gradient(135deg, #000022 0%, #00ccff30 100%)' },
+  'sys-starlight':    { bg: 'linear-gradient(135deg, #1a1a2e 0%, #ffd06020 100%)',    neon: '#ffd060' },
+  'sys-hiphop':       { bg: 'linear-gradient(135deg, #001122 0%, #00ccff25 100%)' },
+  'sys-rock':         { bg: 'linear-gradient(135deg, #1a0a00 0%, #ff660025 100%)',    neon: '#ff6600' },
+  'sys-aftermidnight':{ bg: 'linear-gradient(135deg, #0d0d0d 0%, #c9a84c18 100%)',   neon: '#c9a84c' },
+  'sys-radio':        { bg: 'linear-gradient(135deg, #001030 0%, #c9a84c20 100%)',    neon: '#c9a84c', isRadio: true },
+};
+
+function _playlistArtHtml(sysId, icon, color) {
+  const aw = PLAYLIST_ARTWORK[sysId] || { bg: 'var(--bg-elevated)' };
+  const glowColor = aw.neon || '#00ccff';
+  return `<div class="cosmic-pl-art" style="background:${aw.bg}">
+    <div class="cosmic-pl-art-icon" style="text-shadow:0 0 20px ${glowColor}88">${icon}</div>
+    ${aw.stars ? '<div class="cosmic-pl-art-stars" aria-hidden="true"></div>' : ''}
+    <div class="cosmic-pl-art-glow" style="background:radial-gradient(ellipse 60% 40% at 50% 100%, ${glowColor}22, transparent)"></div>
+  </div>`;
+}
+
+function renderPlaylistCards() {
+  const playlists = LS.get('lu_music_playlists', []);
+  // Show all system playlists (including radio) + user-created playlists
+  const sysCards  = SYSTEM_PLAYLISTS.map(sp => {
+    const stored = playlists.find(p => p.sysId === sp.sysId);
+    const count  = (stored?.tracks || []).length;
+    return { id: sp.sysId, name: sp.name, icon: sp.icon, color: sp.color,
+             description: sp.description, count, isSystem: true, sysId: sp.sysId, isRadio: sp.isRadio || false };
+  });
+  const userCards = playlists
+    .filter(p => !p.isSystem)
+    .map(p => ({ id: p.id, name: p.name, icon: '🌌', color: '#00ccff',
+                 description: p.description || 'Your playlist', count: (p.tracks||[]).length, isSystem: false, sysId: null }));
+
+  const all = [...sysCards, ...userCards];
+
+  return `
+    <div class="section-header" style="margin-top:var(--space-xl)">
+      <h2 class="section-title cosmic-section-title">🌌 YOUR SOUND WORLDS</h2>
+      <button class="btn btn-cosmic-outline btn-sm" onclick="musicTabSwitch('playlists',document.querySelectorAll('.music-hub-tab-btn')[3])">
+        View All →
+      </button>
+    </div>
+    <div class="cosmic-playlist-grid" style="margin-bottom:var(--space-2xl)">
+      ${all.map(p => `
+        <div class="cosmic-pl-card ${p.isRadio ? 'cosmic-pl-card--radio' : ''}" onclick="musicOpenPlaylist('${p.id}')">
+          ${_playlistArtHtml(p.sysId, p.icon, p.color)}
+          <div class="cosmic-pl-body">
+            <div class="cosmic-pl-name" style="color:${p.color}">${escapeHtml(p.name)}</div>
+            <div class="cosmic-pl-desc">${escapeHtml(p.description || '')}</div>
+            <div class="cosmic-pl-meta">
+              <span class="cosmic-pl-count">${p.count} track${p.count!==1?'s':''}</span>
+              ${p.isRadio ? '<span class="cosmic-pl-radio-badge">📻 RADIO</span>' : ''}
+            </div>
+            <div class="cosmic-pl-actions" onclick="event.stopPropagation()">
+              <button class="cosmic-pl-play-btn" onclick="musicPlayLocalPlaylist('${p.id}')" title="Play">▶ PLAY</button>
+              ${!p.isRadio ? `<button class="cosmic-pl-add-btn" onclick="musicTabSwitch('upload')" title="Add Music">+ ADD</button>` : ''}
+            </div>
           </div>
         </div>`).join('')}
     </div>`;
@@ -360,19 +820,19 @@ async function renderLibrary(genre = null) {
         </div>` : ''}
 
       ${!hasAny ? `
-        <div class="music-empty">
-          <span class="music-empty-icon">🎵</span>
-          <p>No music available yet.</p>
-          <p style="font-size:0.82rem;color:var(--text-muted)">Upload tracks via the Upload tab, import local files, or sign in to see your cloud library.</p>
-          <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center;margin-top:var(--space-md)">
-            <button class="btn btn-green" onclick="musicTabSwitch('upload')">⬆ Upload Music</button>
-            <button class="btn btn-outline" onclick="mpImport()">📂 Import Files</button>
+        <div class="cosmic-empty-card" style="margin-bottom:var(--space-xl)">
+          <div class="cosmic-empty-icon">🎵</div>
+          <h3 class="cosmic-empty-title">🎧 YOUR MUSIC UNIVERSE</h3>
+          <p class="cosmic-empty-sub">Upload tracks, import local files, or sign in to see your cloud library.</p>
+          <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center">
+            <button class="btn btn-cosmic" onclick="musicTabSwitch('upload')">⬆ Upload Music</button>
+            <button class="btn btn-cosmic-outline" onclick="mpImport()">📂 Import Files</button>
           </div>
         </div>` : ''}
 
       ${localTracks.length > 0 ? `
         <div class="section-header">
-          <h3 class="section-title">IMPORTED FILES</h3>
+          <h3 class="section-title cosmic-section-title">📂 IMPORTED FILES</h3>
           <span style="font-size:0.8rem;color:var(--text-muted)">${localTracks.length} track${localTracks.length!==1?'s':''}</span>
         </div>
         <div class="music-track-list" style="margin-bottom:var(--space-xl)">
@@ -381,7 +841,7 @@ async function renderLibrary(genre = null) {
 
       ${cloudTracks.length > 0 ? `
         <div class="section-header">
-          <h3 class="section-title">MY CLOUD UPLOADS</h3>
+          <h3 class="section-title cosmic-section-title">☁️ MY CLOUD UPLOADS</h3>
           <span style="font-size:0.8rem;color:var(--text-muted)">${cloudTracks.length} track${cloudTracks.length!==1?'s':''}</span>
         </div>
         <div class="music-track-list" style="margin-bottom:var(--space-xl)">
@@ -390,7 +850,7 @@ async function renderLibrary(genre = null) {
 
       ${backendTracks.length > 0 ? `
         <div class="section-header">
-          <h3 class="section-title">CLOUD LIBRARY</h3>
+          <h3 class="section-title cosmic-section-title">🌌 CLOUD LIBRARY</h3>
           <span style="font-size:0.8rem;color:var(--text-muted)">${backendTracks.length} track${backendTracks.length!==1?'s':''}</span>
         </div>
         <div class="music-track-list">
@@ -408,7 +868,6 @@ window.musicTabLibraryGenre = function (genre) {
 
 // ─── PLAYLISTS TAB ───────────────────────────────────────────
 async function renderPlaylists() {
-  // Load local playlists (always available)
   let playlists = LS.get('lu_music_playlists', []);
 
   // Try to merge with backend playlists if logged in
@@ -416,7 +875,6 @@ async function renderPlaylists() {
     try {
       const data = await LegendAPI.music.playlists();
       if (data.playlists) {
-        // Mark backend playlists distinctly
         playlists = [
           ...playlists,
           ...data.playlists.map(p => ({ ...p, _isBackend: true })),
@@ -425,60 +883,72 @@ async function renderPlaylists() {
     } catch { /* not connected */ }
   }
 
+  const systemPlaylists = playlists.filter(p => p.isSystem);
+  const userPlaylists   = playlists.filter(p => !p.isSystem);
+
   return `
     <div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-lg);flex-wrap:wrap;gap:var(--space-sm)">
-        <h2 class="section-title" style="margin:0">MY PLAYLISTS</h2>
-        <button class="btn btn-green btn-sm" onclick="musicCreatePlaylistModal()">+ New Playlist</button>
+        <h2 class="section-title cosmic-section-title" style="margin:0">🌌 YOUR SOUND WORLDS</h2>
+        <button class="btn btn-cosmic btn-sm" onclick="musicCreatePlaylistModal()">+ New Sound World</button>
       </div>
 
-      ${playlists.length === 0 ? `
-        <div class="music-empty">
-          <span class="music-empty-icon">📂</span>
-          <p>No playlists yet.</p>
-          <button class="btn btn-green btn-sm" onclick="musicCreatePlaylistModal()">Create Your First Playlist</button>
+      ${systemPlaylists.length > 0 ? `
+        <div class="section-header" style="margin-bottom:var(--space-md)">
+          <h3 class="section-title" style="font-size:0.75rem;color:#00ccff;letter-spacing:0.22em;opacity:0.7">✦ COSMIC COLLECTIONS</h3>
+        </div>
+        <div class="cosmic-playlist-grid" style="margin-bottom:var(--space-xl)">
+          ${systemPlaylists.map(p => renderPlaylistCard(p)).join('')}
+        </div>` : ''}
+
+      ${userPlaylists.length > 0 ? `
+        <div class="section-header" style="margin-bottom:var(--space-md)">
+          <h3 class="section-title" style="font-size:0.75rem;color:#c9a84c;letter-spacing:0.22em;opacity:0.7">✦ YOUR PERSONAL WORLDS</h3>
+        </div>
+        <div class="cosmic-playlist-grid">
+          ${userPlaylists.map(p => renderPlaylistCard(p)).join('')}
         </div>` : `
-        <div class="music-card-grid">
-          ${playlists.map(p => renderPlaylistCard(p)).join('')}
+        <div class="cosmic-empty-card" style="padding:var(--space-xl) 0;margin-top:var(--space-md)">
+          <div class="cosmic-empty-icon" style="font-size:2rem">🌌</div>
+          <p style="color:var(--text-muted);font-size:0.9rem;margin-bottom:var(--space-md)">No custom sound worlds yet.</p>
+          <button class="btn btn-cosmic btn-sm" onclick="musicCreatePlaylistModal()">✦ Create Your First Sound World</button>
         </div>`}
-
-      <div class="divider" style="margin-top:var(--space-2xl)"></div>
-      <div style="margin-top:var(--space-lg)">
-        <h3 style="font-family:var(--font-display);letter-spacing:0.08em;margin-bottom:var(--space-md);font-size:0.9rem;color:var(--text-secondary)">
-          DEFAULT COLLECTIONS
-        </h3>
-        <p style="font-size:0.85rem;color:var(--text-muted)">
-          Create playlists named <strong>AVENORA HITS</strong>, <strong>AVENORA ESSENTIALS</strong>,
-          <strong>AVENORA CHILL</strong>, or <strong>AVENORA ROCK</strong> — these will
-          automatically appear in the Discover feed and DJ System.
-        </p>
-      </div>
     </div>`;
 }
 
 function renderPlaylistCard(p) {
   const trackCount = (p.tracks || []).length;
+  const pid    = escapeHtml(p.id || p._id || '');
+  const pname  = escapeHtml(p.name);
+  const sp     = SYSTEM_PLAYLISTS.find(s => s.sysId === p.sysId);
+  const icon   = sp ? sp.icon : '🌌';
+  const color  = sp ? sp.color : '#00ccff';
+  const sysId  = p.sysId || null;
+  const isRadio = sp?.isRadio || false;
+
+  const editBtns = p.isSystem ? '' : `
+    <span onclick="event.stopPropagation()" style="display:flex;gap:4px;margin-top:4px">
+      <button class="cosmic-pl-edit-btn" onclick="musicRenamePlaylist('${pid}','${pname}')">✏</button>
+      <button class="cosmic-pl-edit-btn cosmic-pl-del-btn" onclick="musicDeletePlaylist('${pid}','${pname}')">🗑</button>
+    </span>`;
+
   return `
-    <div class="music-card" onclick="musicOpenPlaylist('${escapeHtml(p.id || p._id || '')}')">
-      <div class="music-card-art" style="background:var(--bg-elevated)">
-        ${p.coverUrl
-          ? `<img src="${escapeHtml(p.coverUrl)}" alt="${escapeHtml(p.name)}" loading="lazy">`
-          : `<div style="font-size:2.5rem">📂</div>`}
-        <div class="music-card-art-overlay">
-          <div class="music-card-play-icon" onclick="event.stopPropagation();musicPlayLocalPlaylist('${escapeHtml(p.id||p._id||'')}')">▶</div>
+    <div class="cosmic-pl-card ${isRadio ? 'cosmic-pl-card--radio' : ''}" onclick="musicOpenPlaylist('${pid}')">
+      ${p.coverUrl
+        ? `<div class="cosmic-pl-art"><img src="${escapeHtml(p.coverUrl)}" alt="${pname}" loading="lazy" style="width:100%;height:100%;object-fit:cover"></div>`
+        : _playlistArtHtml(sysId, icon, color)}
+      <div class="cosmic-pl-body">
+        <div class="cosmic-pl-name" style="color:${color}">${pname}</div>
+        <div class="cosmic-pl-desc">${escapeHtml(sp?.description || p.description || (p.isSystem ? 'Cosmic collection' : (p.visibility === 'public' ? 'Public' : 'Private')))}</div>
+        <div class="cosmic-pl-meta">
+          <span class="cosmic-pl-count">${trackCount} track${trackCount!==1?'s':''}</span>
+          ${isRadio ? '<span class="cosmic-pl-radio-badge">📻 RADIO</span>' : ''}
+          ${p.isSystem && !isRadio ? '<span class="cosmic-pl-sys-badge">✦ COSMIC</span>' : ''}
         </div>
-        <span class="music-card-count">${trackCount} track${trackCount!==1?'s':''}</span>
-      </div>
-      <div class="music-card-body">
-        <div class="music-card-title">${escapeHtml(p.name)}</div>
-        <div class="music-card-sub" style="display:flex;justify-content:space-between">
-          <span>${p.visibility === 'public' ? 'Public' : 'Private'}</span>
-          <span onclick="event.stopPropagation()" style="display:flex;gap:4px">
-            <button class="mp-icon-btn" style="font-size:0.75rem;padding:2px 6px"
-              onclick="musicRenamePlaylist('${escapeHtml(p.id||p._id||'')}','${escapeHtml(p.name)}')">✏</button>
-            <button class="mp-icon-btn" style="font-size:0.75rem;padding:2px 6px;color:var(--neon-red)"
-              onclick="musicDeletePlaylist('${escapeHtml(p.id||p._id||'')}','${escapeHtml(p.name)}')">🗑</button>
-          </span>
+        <div class="cosmic-pl-actions" onclick="event.stopPropagation()">
+          <button class="cosmic-pl-play-btn" onclick="musicPlayLocalPlaylist('${pid}')">▶ PLAY</button>
+          ${!isRadio ? `<button class="cosmic-pl-add-btn" onclick="musicAddToPlaylistViaCardBtn && musicAddToPlaylistViaCardBtn('${pid}')">+ ADD</button>` : ''}
+          ${editBtns}
         </div>
       </div>
     </div>`;
@@ -493,15 +963,21 @@ async function renderAlbums() {
   } catch { /* backend offline */ }
 
   if (!albums.length) return `
-    <div class="music-empty">
-      <span class="music-empty-icon">💿</span>
-      <p>No music available yet.</p>
-      <p style="font-size:0.82rem">Albums will appear here once tracks are uploaded via the Upload tab.</p>
+    <div class="cosmic-empty-card">
+      <div class="cosmic-empty-icon">💿</div>
+      <h3 class="cosmic-empty-title">💿 ALBUM GALAXY</h3>
+      <p class="cosmic-empty-sub">Albums will appear here once tracks are uploaded.</p>
+      <button class="btn btn-cosmic btn-sm" onclick="musicTabSwitch('upload')">⬆ Upload Music</button>
     </div>`;
 
   return `
-    <div class="music-card-grid">
-      ${albums.map(a => renderAlbumCard(a)).join('')}
+    <div>
+      <div class="section-header" style="margin-bottom:var(--space-lg)">
+        <h2 class="section-title cosmic-section-title">💿 ALBUM GALAXY</h2>
+      </div>
+      <div class="music-card-grid">
+        ${albums.map(a => renderAlbumCard(a)).join('')}
+      </div>
     </div>`;
 }
 
@@ -533,27 +1009,33 @@ async function renderArtists() {
   } catch { /* backend offline */ }
 
   if (!artists.length) return `
-    <div class="music-empty">
-      <span class="music-empty-icon">🎤</span>
-      <p>No music available yet.</p>
-      <p style="font-size:0.82rem">Artists appear here once tracks with artist metadata are uploaded.</p>
+    <div class="cosmic-empty-card">
+      <div class="cosmic-empty-icon">🎤</div>
+      <h3 class="cosmic-empty-title">🎤 ARTIST CONSTELLATIONS</h3>
+      <p class="cosmic-empty-sub">Artists appear here once tracks with artist metadata are uploaded.</p>
+      <button class="btn btn-cosmic btn-sm" onclick="musicTabSwitch('upload')">⬆ Upload Music</button>
     </div>`;
 
   return `
-    <div class="music-card-grid">
-      ${artists.map(a => `
-        <div class="music-card" onclick="musicOpenArtist('${escapeHtml(String(a.id))}')">
-          <div class="music-card-art" style="border-radius:50%;overflow:hidden;margin:var(--space-md) auto var(--space-sm);width:80%;aspect-ratio:1">
-            ${a.avatarUrl
-              ? `<img src="${escapeHtml(a.avatarUrl)}" alt="${escapeHtml(a.name)}" loading="lazy">`
-              : `<div style="font-size:2.5rem">🎤</div>`}
-          </div>
-          <div class="music-card-body" style="text-align:center">
-            <div class="music-card-title">${escapeHtml(a.name)}</div>
-            ${a.isVerified ? '<div class="music-card-sub" style="color:var(--neon-blue)">✓ Verified</div>' : ''}
-            ${a.genres && a.genres.length ? `<div class="music-card-sub">${a.genres.slice(0,2).map(escapeHtml).join(', ')}</div>` : ''}
-          </div>
-        </div>`).join('')}
+    <div>
+      <div class="section-header" style="margin-bottom:var(--space-lg)">
+        <h2 class="section-title cosmic-section-title">🎤 ARTIST CONSTELLATIONS</h2>
+      </div>
+      <div class="music-card-grid">
+        ${artists.map(a => `
+          <div class="music-card cosmic-artist-card" onclick="musicOpenArtist('${escapeHtml(String(a.id))}')">
+            <div class="music-card-art" style="border-radius:50%;overflow:hidden;margin:var(--space-md) auto var(--space-sm);width:80%;aspect-ratio:1;border:2px solid rgba(0,204,255,0.25)">
+              ${a.avatarUrl
+                ? `<img src="${escapeHtml(a.avatarUrl)}" alt="${escapeHtml(a.name)}" loading="lazy">`
+                : `<div style="font-size:2.5rem;background:radial-gradient(ellipse at 40% 40%,rgba(0,204,255,0.15),transparent)">🎤</div>`}
+            </div>
+            <div class="music-card-body" style="text-align:center">
+              <div class="music-card-title">${escapeHtml(a.name)}</div>
+              ${a.isVerified ? `<div class="music-card-sub" style="color:#00ccff">✓ Verified</div>` : ''}
+              ${a.genres && a.genres.length ? `<div class="music-card-sub">${a.genres.slice(0,2).map(escapeHtml).join(' · ')}</div>` : ''}
+            </div>
+          </div>`).join('')}
+      </div>
     </div>`;
 }
 
@@ -574,18 +1056,22 @@ async function renderFavorites() {
   const hasAny = localFavTracks.length > 0 || backendFavs.length > 0;
 
   if (!hasAny) return `
-    <div class="music-empty">
-      <span class="music-empty-icon">♥</span>
-      <p>No favorites yet.</p>
-      <p style="font-size:0.82rem">Tap ♥ on any track to add it here.</p>
+    <div class="cosmic-empty-card">
+      <div class="cosmic-empty-icon">❤️</div>
+      <h3 class="cosmic-empty-title">❤️ FAVORITE FREQUENCIES</h3>
+      <p class="cosmic-empty-sub">Tap ♥ on any track to add it to your favorites.</p>
     </div>`;
 
   return `
     <div>
+      <div class="section-header" style="margin-bottom:var(--space-lg)">
+        <h2 class="section-title cosmic-section-title">❤️ FAVORITE FREQUENCIES</h2>
+      </div>
+
       ${localFavTracks.length > 0 ? `
         <div class="section-header">
-          <h3 class="section-title">LOCAL FAVORITES</h3>
-          <button class="btn btn-green btn-sm" onclick="mpPlayAll(${JSON.stringify(localFavTracks.map((_,i)=>MP.queue.indexOf(localFavTracks[i])))})">▶ Play All</button>
+          <h3 class="section-title cosmic-section-title">📂 LOCAL FAVORITES</h3>
+          <button class="btn btn-cosmic btn-sm" onclick="mpPlayAll(${JSON.stringify(localFavTracks.map((_,i)=>MP.queue.indexOf(localFavTracks[i])))})">▶ Play All</button>
         </div>
         <div class="music-track-list" style="margin-bottom:var(--space-xl)">
           ${localFavTracks.map((t, i) => renderLocalTrackRow(t, MP.queue.indexOf(t))).join('')}
@@ -593,7 +1079,7 @@ async function renderFavorites() {
 
       ${backendFavs.length > 0 ? `
         <div class="section-header">
-          <h3 class="section-title">CLOUD FAVORITES</h3>
+          <h3 class="section-title cosmic-section-title">☁️ CLOUD FAVORITES</h3>
         </div>
         <div class="music-track-list">
           ${backendFavs.map((t, i) => renderTrackRow(t, i, backendFavs, 'favorites')).join('')}
@@ -616,16 +1102,22 @@ async function renderRecent() {
   const hasAny = localRecent.length > 0 || backendRecent.length > 0;
 
   if (!hasAny) return `
-    <div class="music-empty">
-      <span class="music-empty-icon">🕐</span>
-      <p>Nothing played yet.</p>
-      <p style="font-size:0.82rem">Tracks you play will appear here.</p>
+    <div class="cosmic-empty-card">
+      <div class="cosmic-empty-icon">🕘</div>
+      <h3 class="cosmic-empty-title">🕘 RECENT ORBITS</h3>
+      <p class="cosmic-empty-sub">Tracks you play will appear here. Start your journey through the sound universe.</p>
     </div>`;
 
   return `
     <div>
+      <div class="section-header" style="margin-bottom:var(--space-lg)">
+        <h2 class="section-title cosmic-section-title">🕘 RECENT ORBITS</h2>
+      </div>
+
       ${localRecent.length > 0 ? `
-        <div class="section-header"><h3 class="section-title">RECENTLY PLAYED (LOCAL)</h3></div>
+        <div class="section-header">
+          <h3 class="section-title cosmic-section-title">📂 LOCAL RECENTLY PLAYED</h3>
+        </div>
         <div class="music-track-list" style="margin-bottom:var(--space-xl)">
           ${localRecent.slice(0, 20).map((t, i) => {
             const queueIdx = MP.queue.findIndex(q => q.id === t.id);
@@ -634,14 +1126,16 @@ async function renderRecent() {
                 <div class="mtrack-art">🎵</div>
                 <div class="mtrack-info">
                   <div class="mtrack-title">${escapeHtml(t.name || 'Unknown')}</div>
-                  <div class="mtrack-meta">Not in queue</div>
+                  <div class="mtrack-meta" style="color:rgba(0,204,255,0.45)">Not in current queue</div>
                 </div>
               </div>`;
           }).join('')}
         </div>` : ''}
 
       ${backendRecent.length > 0 ? `
-        <div class="section-header"><h3 class="section-title">RECENTLY PLAYED (CLOUD)</h3></div>
+        <div class="section-header">
+          <h3 class="section-title cosmic-section-title">☁️ CLOUD RECENTLY PLAYED</h3>
+        </div>
         <div class="music-track-list">
           ${backendRecent.map((t, i) => renderTrackRow(t, i, backendRecent, 'recent')).join('')}
         </div>` : ''}
@@ -652,12 +1146,18 @@ async function renderRecent() {
 function renderSearchTab() {
   return `
     <div>
-      <div class="search-bar" style="max-width:600px;margin-bottom:var(--space-xl)">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
-        </svg>
-        <input type="search" id="music-search-input" placeholder="Search songs, artists, albums…"
-               aria-label="Search music" oninput="musicSearch(this.value)">
+      <div class="section-header" style="margin-bottom:var(--space-lg)">
+        <h2 class="section-title cosmic-section-title">🔍 SEARCH THE UNIVERSE</h2>
+      </div>
+
+      <div class="music-hero-search" style="margin-bottom:var(--space-lg)">
+        <div class="mh-search-inner">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          <input type="search" id="music-search-input" placeholder="Search songs, artists, albums, playlists…"
+                 aria-label="Search music" oninput="musicSearch(this.value)">
+        </div>
       </div>
 
       <!-- Category filters -->
@@ -669,9 +1169,10 @@ function renderSearchTab() {
       </div>
 
       <div id="music-search-results">
-        <div class="music-empty">
-          <span class="music-empty-icon">🔍</span>
-          <p>Type to search across songs, albums, and artists.</p>
+        <div class="cosmic-empty-card">
+          <div class="cosmic-empty-icon">🔍</div>
+          <h3 class="cosmic-empty-title">SEARCH THE MUSIC UNIVERSE</h3>
+          <p class="cosmic-empty-sub">Search for songs, artists, albums, and playlists.</p>
         </div>
       </div>
     </div>`;
@@ -695,7 +1196,7 @@ window.musicSearch = function (q) {
     if (!el) return;
     const query = q.trim();
     if (!query || query.length < 2) {
-      el.innerHTML = '<div class="music-empty"><span class="music-empty-icon">🔍</span><p>Type at least 2 characters.</p></div>';
+      el.innerHTML = '<div class="cosmic-empty-card"><div class="cosmic-empty-icon">🔍</div><p class="cosmic-empty-sub">Type at least 2 characters to search.</p></div>';
       return;
     }
 
@@ -727,7 +1228,7 @@ window.musicSearch = function (q) {
       (!showArtists|| backendResults.artists.length === 0);
 
     if (allEmpty) {
-      el.innerHTML = `<div class="music-empty"><span class="music-empty-icon">🔍</span><p>No results for "<strong>${escapeHtml(query)}</strong>".</p></div>`;
+      el.innerHTML = `<div class="cosmic-empty-card"><div class="cosmic-empty-icon">🔍</div><h3 class="cosmic-empty-title">NO SIGNALS DETECTED</h3><p class="cosmic-empty-sub">No results for "<strong>${escapeHtml(query)}</strong>".</p></div>`;
       return;
     }
 
@@ -760,27 +1261,27 @@ function renderUploadTab() {
 
   return `
     <div style="max-width:680px;margin:0 auto">
-      <h2 class="section-title" style="margin-bottom:var(--space-lg)">UPLOAD MUSIC</h2>
+      <div class="section-header" style="margin-bottom:var(--space-lg)">
+        <h2 class="section-title cosmic-section-title">⬆ UPLOAD TO THE UNIVERSE</h2>
+      </div>
 
       <!-- Cloud upload info -->
-      <div class="card" style="border-color:rgba(57,255,20,0.2);background:rgba(57,255,20,0.03);margin-bottom:var(--space-xl)">
-        <div style="display:flex;gap:var(--space-md);align-items:flex-start">
-          <span style="font-size:1.4rem;flex-shrink:0">☁️</span>
-          <div>
-            <h4 style="margin:0 0 6px;color:var(--neon-green);font-family:var(--font-display);letter-spacing:0.06em">
-              CLOUD UPLOAD
-            </h4>
-            <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:0">
-              Upload audio to your cloud library. Uploaded tracks appear in your Cloud Stream playlists and are available across all devices.
-            </p>
-          </div>
+      <div class="cosmic-upload-info" style="margin-bottom:var(--space-xl)">
+        <span style="font-size:1.6rem;flex-shrink:0">☁️</span>
+        <div>
+          <h4 style="margin:0 0 4px;color:#00ccff;font-family:var(--font-display);letter-spacing:0.08em">
+            ADD MUSIC TO YOUR UNIVERSE
+          </h4>
+          <p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:0">
+            Upload audio to your cloud library. Tracks become available in your Sound Worlds and across all devices.
+          </p>
         </div>
       </div>
 
       ${!isLoggedIn ? `
-        <div class="card" style="border-color:var(--border-blue);margin-bottom:var(--space-xl);text-align:center">
-          <p style="color:var(--text-secondary);margin-bottom:var(--space-md)">Sign in to upload music to the cloud library.</p>
-          <button class="btn btn-primary" onclick="Modal.open('auth-modal')">Sign In</button>
+        <div class="card" style="border-color:rgba(0,204,255,0.22);margin-bottom:var(--space-xl);text-align:center;background:rgba(0,204,255,0.04)">
+          <p style="color:var(--text-secondary);margin-bottom:var(--space-md)">Sign in to upload music to your cloud library.</p>
+          <button class="btn btn-cosmic" onclick="Modal.open('auth-modal')">Sign In</button>
         </div>` : ''}
 
       <!-- Upload form -->
@@ -791,8 +1292,8 @@ function renderUploadTab() {
              ondragover="event.preventDefault();this.classList.add('drag-over')"
              ondragleave="this.classList.remove('drag-over')"
              ondrop="musicDropFile(event)">
-          <p style="font-size:2rem;margin-bottom:var(--space-sm)">🎵</p>
-          <p style="font-weight:600;margin-bottom:4px">Drag & drop audio file here</p>
+          <p style="font-size:2.4rem;margin-bottom:var(--space-sm)">🎵</p>
+          <p style="font-weight:600;margin-bottom:4px;color:#00ccff">Drag & drop audio file here</p>
           <p style="font-size:0.82rem;color:var(--text-muted)">MP3, WAV, OGG, FLAC, AAC, M4A, OPUS — max 100 MB</p>
           <input type="file" id="music-upload-file" accept="audio/*" style="display:none"
                  onchange="musicUploadFileSelected(this)">
@@ -859,13 +1360,13 @@ function renderUploadTab() {
                     border:1px solid rgba(57,255,20,0.3);border-radius:var(--radius-sm);
                     font-size:0.85rem;color:var(--neon-green)"></div>
 
-        <div style="margin-top:var(--space-lg);display:flex;gap:var(--space-sm)">
-          <button type="submit" class="btn btn-green" id="music-upload-btn"
+        <div style="margin-top:var(--space-lg);display:flex;gap:var(--space-sm);flex-wrap:wrap">
+          <button type="submit" class="btn btn-cosmic" id="music-upload-btn"
                   ${!isLoggedIn ? 'disabled title="Sign in first"' : ''}>
-            ⬆ Upload Track
+            ⬆ Upload to Universe
           </button>
-          <button type="button" class="btn btn-outline" onclick="musicImportLocalOnly()">
-            📂 Import Locally (No Upload)
+          <button type="button" class="btn btn-cosmic-outline" onclick="musicImportLocalOnly()">
+            📂 Import Locally
           </button>
         </div>
       </form>
@@ -1026,7 +1527,7 @@ window.musicUploadSubmit = async function (e) {
 
     // Show success message
     if (succEl) {
-      succEl.textContent = `✓ "${titleVal}" uploaded successfully! It is now available in your Music Hub and Cloud Stream library.`;
+      succEl.textContent = `✓ "${titleVal}" uploaded successfully!`;
       succEl.classList.remove('hidden');
     }
     Toast.success(`Track "${titleVal}" uploaded!`);
@@ -1034,6 +1535,12 @@ window.musicUploadSubmit = async function (e) {
     // Reset form
     form.reset();
     document.getElementById('music-upload-file-preview').innerHTML = '';
+
+    // Post-upload: offer to add to a playlist
+    const uploadedTrackId = data?.track?.id || data?.track?._id;
+    if (uploadedTrackId) {
+      setTimeout(() => musicAddToPlaylistModal(String(uploadedTrackId), titleVal), 400);
+    }
 
   } catch (err) {
     console.warn('[AVN] Music upload error:', err);
@@ -1151,8 +1658,8 @@ function renderLocalTrackRow(track, index) {
           title="${isFav ? 'Remove from favorites' : 'Add to favorites'}"
           style="font-size:0.85rem">♥</button>
         <button class="mp-icon-btn"
-          onclick="event.stopPropagation();musicAddToPlaylistModal('${track.id}','${escapeHtml(track.name)}')"
-          title="Add to playlist" style="font-size:0.85rem">+</button>
+          onclick="event.stopPropagation();musicOpenTrackMenu(event,{id:'${track.id}',name:${JSON.stringify(track.name)},artist:${JSON.stringify(track.artist||'')},_isLocal:true,_localIndex:${index}})"
+          title="More options" style="font-size:1rem;padding:4px 6px">⋮</button>
       </div>
     </div>`;
 }
@@ -1166,6 +1673,13 @@ function renderTrackRow(track, index, queue, context) {
   if (Array.isArray(queue) && queue.length > 0 && context) {
     _mpContextTracks[context] = queue;
   }
+
+  // Encode only what the context menu needs
+  const menuData = JSON.stringify({
+    id: track.id, title: track.title, artistName: track.artistName || '',
+    albumTitle: track.albumTitle || '', albumId: track.albumId || null,
+    artistId: track.artistId || null, context, index
+  }).replace(/"/g, '&quot;');
 
   return `
     <div class="mtrack-row ${isCurrent ? 'playing' : ''}"
@@ -1191,9 +1705,125 @@ function renderTrackRow(track, index, queue, context) {
         <button class="mp-icon-btn ${isFav ? 'active' : ''}"
           onclick="event.stopPropagation();mpToggleBackendFavorite('${track.id}')"
           style="font-size:0.85rem" title="${isFav ? 'Unfavorite' : 'Favorite'}">♥</button>
+        <button class="mp-icon-btn"
+          onclick="event.stopPropagation();musicOpenTrackMenu(event,JSON.parse(this.dataset.t))"
+          data-t="${menuData}"
+          title="More options" style="font-size:1rem;padding:4px 6px">⋮</button>
       </div>
     </div>`;
 }
+
+// ─── Track context menu ────────────────────────────────────────
+
+let _trackMenuTrack = null;
+let _trackMenuDismiss = null;
+
+window.musicOpenTrackMenu = function (evtOrBtn, trackData) {
+  // evtOrBtn can be an event or a DOM element when called from onclick
+  const evt = (evtOrBtn instanceof Event) ? evtOrBtn : window.event;
+  if (evt) evt.stopPropagation();
+
+  const menu = document.getElementById('music-track-menu');
+  if (!menu) return;
+
+  _trackMenuTrack = trackData;
+
+  const isLocal = trackData._isLocal;
+  const trackId = String(trackData.id || '');
+  const trackName = trackData.name || trackData.title || 'Track';
+  const artistName = trackData.artist || trackData.artistName || '';
+  const hasAlbum = !!trackData.albumId;
+  const hasArtist = !!trackData.artistId;
+
+  menu.innerHTML = `
+    <div class="music-ctx-header">
+      <div class="music-ctx-title">${escapeHtml(trackName)}</div>
+      ${artistName ? `<div class="music-ctx-sub">${escapeHtml(artistName)}</div>` : ''}
+    </div>
+    <div class="music-ctx-divider"></div>
+    <button class="music-ctx-item" onclick="musicCtxPlay()">
+      <span>▶</span> Play Now
+    </button>
+    <button class="music-ctx-item" onclick="musicCtxAddToPlaylist()">
+      <span>📂</span> Add to Playlist…
+    </button>
+    <button class="music-ctx-item" onclick="musicCtxToggleLike()">
+      <span>♥</span> ${new Set(LS.get('lu_mp_favorites',[])).has(trackId) ? 'Remove from Liked' : 'Add to Liked'}
+    </button>
+    ${hasAlbum ? `<button class="music-ctx-item" onclick="musicOpenAlbum('${escapeHtml(String(trackData.albumId))}');musicCtxClose()">
+      <span>💿</span> View Album
+    </button>` : ''}
+    ${hasArtist ? `<button class="music-ctx-item" onclick="musicOpenArtist('${escapeHtml(String(trackData.artistId))}');musicCtxClose()">
+      <span>🎤</span> View Artist
+    </button>` : ''}
+    <div class="music-ctx-divider"></div>
+    <button class="music-ctx-item music-ctx-cancel" onclick="musicCtxClose()">
+      Cancel
+    </button>
+  `;
+
+  // Position near the click / button
+  const btn = evt?.currentTarget || evt?.target;
+  if (btn) {
+    const rect = btn.getBoundingClientRect();
+    const menuW = 200;
+    let left = rect.right - menuW;
+    let top  = rect.bottom + 4;
+    if (left < 8) left = 8;
+    if (top + 260 > window.innerHeight) top = rect.top - 4 - Math.min(260, window.innerHeight - 100);
+    menu.style.left = left + 'px';
+    menu.style.top  = top  + 'px';
+  }
+
+  menu.classList.remove('hidden');
+
+  // Dismiss on outside click
+  if (_trackMenuDismiss) document.removeEventListener('click', _trackMenuDismiss);
+  _trackMenuDismiss = (e) => {
+    if (!menu.contains(e.target)) musicCtxClose();
+  };
+  setTimeout(() => document.addEventListener('click', _trackMenuDismiss), 10);
+};
+
+window.musicCtxClose = function () {
+  const menu = document.getElementById('music-track-menu');
+  if (menu) menu.classList.add('hidden');
+  if (_trackMenuDismiss) {
+    document.removeEventListener('click', _trackMenuDismiss);
+    _trackMenuDismiss = null;
+  }
+};
+
+window.musicCtxPlay = function () {
+  musicCtxClose();
+  if (!_trackMenuTrack) return;
+  if (_trackMenuTrack._isLocal) {
+    mpLoadTrack(_trackMenuTrack._localIndex);
+  } else {
+    const ctx = _trackMenuTrack.context;
+    const idx = _trackMenuTrack.index;
+    const tracks = ctx ? (_mpContextTracks[ctx] || []) : [];
+    const track  = tracks[idx];
+    if (track) window.mpLoadBackendTrack(track, idx, ctx, tracks);
+  }
+};
+
+window.musicCtxToggleLike = function () {
+  musicCtxClose();
+  if (!_trackMenuTrack) return;
+  if (_trackMenuTrack._isLocal) {
+    mpToggleFavorite(String(_trackMenuTrack.id));
+  } else {
+    mpToggleBackendFavorite(String(_trackMenuTrack.id));
+  }
+};
+
+window.musicCtxAddToPlaylist = function () {
+  musicCtxClose();
+  if (!_trackMenuTrack) return;
+  const name = _trackMenuTrack.name || _trackMenuTrack.title || 'Track';
+  musicAddToPlaylistModal(String(_trackMenuTrack.id), name);
+};
 
 // ─── Detail views ─────────────────────────────────────────────
 
@@ -1304,25 +1934,59 @@ window.musicOpenPlaylist = function (id) {
   const el = document.getElementById('music-content');
   if (!el) return;
 
-  const tracks = (pl.tracks || []).map(tid => MP.queue.find(t => t.id === tid)).filter(Boolean);
+  // Resolve tracks: prefer local queue, then fire-and-forget cloud lookups
+  const trackIds = pl.tracks || [];
+  const localTracks = trackIds.map(tid => MP.queue.find(t => t.id === tid)).filter(Boolean);
+
+  // Build the valid local indices for play-all / shuffle
+  const localIndices = localTracks.map(t => MP.queue.indexOf(t)).filter(i => i >= 0);
+
+  const sp = SYSTEM_PLAYLISTS.find(s => s.sysId === pl.sysId);
+  const icon = sp ? sp.icon : '📂';
+  const color = sp ? sp.color : 'var(--neon-blue)';
+
+  const editControls = pl.isSystem ? '' : `
+    <button class="btn btn-outline btn-sm"
+      onclick="musicRenamePlaylist('${escapeHtml(id)}','${escapeHtml(pl.name)}')">✏ Rename</button>
+    <button class="btn btn-outline btn-sm" style="color:var(--neon-red);border-color:rgba(255,60,80,0.3)"
+      onclick="musicDeletePlaylist('${escapeHtml(id)}','${escapeHtml(pl.name)}')">🗑 Delete</button>`;
 
   el.innerHTML = `
     <div>
       <button class="btn btn-ghost btn-sm" style="margin-bottom:var(--space-lg)"
         onclick="musicTabSwitch('playlists')">← Back to Playlists</button>
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-lg);flex-wrap:wrap;gap:var(--space-sm)">
-        <div>
-          <h2 style="font-family:var(--font-display);letter-spacing:0.08em;margin-bottom:4px">${escapeHtml(pl.name)}</h2>
-          <p style="color:var(--text-muted);font-size:0.85rem">${tracks.length} track${tracks.length!==1?'s':''}</p>
+
+      <div style="display:flex;gap:var(--space-lg);align-items:flex-start;flex-wrap:wrap;margin-bottom:var(--space-xl)">
+        <div style="width:100px;height:100px;border-radius:var(--radius-md);background:var(--bg-elevated);
+                    display:flex;align-items:center;justify-content:center;font-size:3rem;flex-shrink:0">
+          ${icon}
         </div>
-        <div style="display:flex;gap:var(--space-sm)">
-          <button class="btn btn-green btn-sm" onclick="musicPlayPlaylistTracks(${JSON.stringify(tracks.map((_,i)=>MP.queue.indexOf(tracks[i])))})">▶ Play All</button>
-          <button class="btn btn-outline btn-sm" onclick="mpShufflePlaylist(${JSON.stringify(tracks.map((_,i)=>MP.queue.indexOf(tracks[i])))})">⇄ Shuffle</button>
+        <div style="flex:1;min-width:0">
+          <h2 style="font-family:var(--font-display);letter-spacing:0.08em;color:${color};margin-bottom:4px">
+            ${escapeHtml(pl.name)}
+          </h2>
+          ${pl.description ? `<p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:var(--space-sm)">${escapeHtml(pl.description)}</p>` : ''}
+          <p style="color:var(--text-muted);font-size:0.8rem">${trackIds.length} track${trackIds.length!==1?'s':''}</p>
+          <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;margin-top:var(--space-md)">
+            <button class="btn btn-green btn-sm" onclick="musicPlayPlaylistTracks(${JSON.stringify(localIndices)})">▶ Play All</button>
+            <button class="btn btn-outline btn-sm" onclick="mpShufflePlaylist(${JSON.stringify(localIndices)})">⇄ Shuffle</button>
+            <button class="btn btn-outline btn-sm" onclick="musicTabSwitch('library')">+ Add Tracks</button>
+            ${editControls}
+          </div>
         </div>
       </div>
-      ${!tracks.length
-        ? `<div class="music-empty"><span class="music-empty-icon">📂</span><p>No tracks in this playlist yet.</p><p style="font-size:0.82rem">Import music and tap + on tracks to add them.</p></div>`
-        : `<div class="music-track-list">${tracks.map((t) => renderLocalTrackRow(t, MP.queue.indexOf(t))).join('')}</div>`}
+
+      ${!localTracks.length
+        ? `<div class="music-empty">
+             <span class="music-empty-icon">${icon}</span>
+             <p>${trackIds.length > 0 ? 'Tracks not in current queue. Import music first.' : 'This playlist is empty.'}</p>
+             <p style="font-size:0.82rem;color:var(--text-muted)">Import music files or go to the Songs tab and tap ⋮ → Add to Playlist.</p>
+             <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center;margin-top:var(--space-md)">
+               <button class="btn btn-green btn-sm" onclick="mpImport()">📂 Import Files</button>
+               <button class="btn btn-outline btn-sm" onclick="musicTabSwitch('library')">Browse Songs</button>
+             </div>
+           </div>`
+        : `<div class="music-track-list">${localTracks.map((t) => renderLocalTrackRow(t, MP.queue.indexOf(t))).join('')}</div>`}
     </div>`;
 };
 
@@ -1347,11 +2011,11 @@ window.musicAddAlbumToPlaylist = function (tracks) {
 window.musicCreatePlaylistModal = function () {
   Modal.create({
     id: 'create-playlist-modal',
-    title: 'New Playlist',
+    title: '🌌 NEW SOUND WORLD',
     body: `
       <div class="form-group">
-        <label class="form-label">Playlist Name</label>
-        <input class="form-input" id="new-pl-name" placeholder="e.g. AVENORA HITS" maxlength="200" autofocus>
+        <label class="form-label" style="color:#00ccff;letter-spacing:0.08em">Sound World Name</label>
+        <input class="form-input" id="new-pl-name" placeholder="e.g. MIDNIGHT SESSIONS" maxlength="200" autofocus>
       </div>
       <div class="form-group">
         <label class="form-label">Description (optional)</label>
@@ -1359,7 +2023,7 @@ window.musicCreatePlaylistModal = function () {
       </div>`,
     actions: [
       { label: 'Cancel', class: 'btn-outline', onclick: `Modal.close('create-playlist-modal')` },
-      { label: 'Create', class: 'btn-green', onclick: `musicConfirmCreatePlaylist()` },
+      { label: '✦ Create Sound World', class: 'btn-cosmic', onclick: `musicConfirmCreatePlaylist()` },
     ],
   });
   Modal.open('create-playlist-modal');
@@ -1424,39 +2088,80 @@ window.musicAddToPlaylistModal = function (trackId, trackName) {
     if (confirm('No playlists yet. Create one now?')) musicCreatePlaylistModal();
     return;
   }
+
+  // Build checkbox list — all playlists (system + user), mark which already contain this track
+  const items = playlists.map(p => {
+    const has = (p.tracks || []).includes(trackId);
+    const sp  = SYSTEM_PLAYLISTS.find(s => s.sysId === p.sysId);
+    const icon = sp ? sp.icon : '📂';
+    return `
+      <label class="music-pl-check-row ${has ? 'has-track' : ''}">
+        <input type="checkbox" name="pl-check" value="${escapeHtml(p.id)}" ${has ? 'checked' : ''}
+               data-name="${escapeHtml(p.name)}">
+        <span class="music-pl-check-icon">${icon}</span>
+        <span class="music-pl-check-name">${escapeHtml(p.name)}</span>
+        <span class="music-pl-check-count">${(p.tracks||[]).length} tracks</span>
+        ${has ? '<span class="music-pl-has-badge">✓</span>' : ''}
+      </label>`;
+  }).join('');
+
   Modal.create({
     id: 'add-to-pl-modal',
-    title: `Add to Playlist`,
+    title: '🌌 ADD TO YOUR SOUND WORLDS',
     body: `
-      <p style="font-size:0.85rem;color:var(--text-muted);margin-bottom:var(--space-md)">${escapeHtml(trackName)}</p>
-      <div style="display:flex;flex-direction:column;gap:var(--space-xs)">
-        ${playlists.map(p => `
-          <button class="btn btn-outline w-full" style="text-align:left;justify-content:flex-start"
-            onclick="musicConfirmAddToPlaylist('${p.id}','${trackId}','${escapeHtml(p.name)}')">
-            📂 ${escapeHtml(p.name)}
-            <span style="color:var(--text-muted);font-size:0.78rem;margin-left:auto">${(p.tracks||[]).length} tracks</span>
-          </button>`).join('')}
+      <p style="font-size:0.85rem;color:#00ccff;margin-bottom:var(--space-md);font-family:var(--font-display);letter-spacing:0.06em">${escapeHtml(trackName)}</p>
+      <div class="music-pl-check-list" id="music-pl-check-list">
+        ${items}
       </div>`,
     actions: [
-      { label: 'New Playlist', class: 'btn-green', onclick: `Modal.close('add-to-pl-modal');musicCreatePlaylistModal()` },
+      { label: '✦ New Sound World', class: 'btn-cosmic-outline btn-sm', onclick: `Modal.close('add-to-pl-modal');musicCreatePlaylistModal()` },
+      { label: 'Done', class: 'btn-cosmic', onclick: `musicConfirmAddToPlaylist('${trackId}')` },
     ],
   });
   Modal.open('add-to-pl-modal');
 };
 
-window.musicConfirmAddToPlaylist = function (playlistId, trackId, playlistName) {
+window.musicConfirmAddToPlaylist = function (trackId) {
+  const checked = document.querySelectorAll('#music-pl-check-list input[name="pl-check"]');
+  if (!checked.length) { Modal.close('add-to-pl-modal'); return; }
+
   const playlists = LS.get('lu_music_playlists', []);
-  const pl = playlists.find(p => p.id === playlistId);
-  if (!pl) { Toast.error('Playlist not found'); return; }
-  if (!pl.tracks) pl.tracks = [];
-  if (!pl.tracks.includes(trackId)) {
-    pl.tracks.push(trackId);
-    LS.set('lu_music_playlists', playlists);
-    Toast.success(`Added to ${playlistName}`);
-  } else {
-    Toast.info('Already in this playlist');
-  }
+  let added = 0, removed = 0;
+
+  checked.forEach(cb => {
+    const pl = playlists.find(p => p.id === cb.value);
+    if (!pl) return;
+    if (!pl.tracks) pl.tracks = [];
+    if (cb.checked) {
+      if (!pl.tracks.includes(trackId)) { pl.tracks.push(trackId); added++; }
+    } else {
+      const idx = pl.tracks.indexOf(trackId);
+      if (idx !== -1) { pl.tracks.splice(idx, 1); removed++; }
+    }
+  });
+
+  LS.set('lu_music_playlists', playlists);
+
+  if (added > 0 && removed === 0) Toast.success(`Added to ${added} playlist${added!==1?'s':''}`);
+  else if (removed > 0 && added === 0) Toast.info(`Removed from ${removed} playlist${removed!==1?'s':''}`);
+  else if (added > 0 || removed > 0) Toast.success('Playlists updated');
+  else Toast.info('No changes');
+
   Modal.close('add-to-pl-modal');
+};
+
+// Alias used by cosmic playlist "+ ADD" buttons (opens the add-to-playlist modal
+// for any song currently in the queue — or prompts to import music first).
+window.musicAddToPlaylistViaCardBtn = function (playlistId) {
+  const current = MP.currentTrack;
+  if (current) {
+    musicAddToPlaylistModal(current.id || String(current.name), current.name || current.title || 'Track');
+  } else if (MP.queue.length > 0) {
+    const t = MP.queue[0];
+    musicAddToPlaylistModal(t.id || t.name, t.name || t.title || 'Track');
+  } else {
+    Toast.info('Play a track first, or use ⋮ menu on any track to add it to a playlist.');
+  }
 };
 
 window.musicPlayLocalPlaylist = function (id) {

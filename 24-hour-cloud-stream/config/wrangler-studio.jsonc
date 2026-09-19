@@ -1,6 +1,0 @@
-// REMOVED — wrangler configuration is no longer used.
-// The CloudStream Cloudflare Worker has been removed.
-// All stream control is handled by the AVENORA backend API.
-// See SUPABASE_SETUP.md for details.
-//
-// DO NOT deploy this file.

@@ -41,6 +41,8 @@ const preferencesRoutes = require('./api/routes/preferences');
 const cloudStreamRoutes = require('./api/routes/cloudStream');
 const cloudRadioRoutes  = require('./api/routes/cloudRadio');
 const cloudRadioEngine  = require('./services/stream/cloudRadioEngine');
+const radioRoutes       = require('./api/routes/radio');
+const radioEngine       = require('./services/stream/radioEngine');
 const liveRoutes = require('./api/routes/live');
 const pushRoutes = require('./api/routes/push');
 
@@ -166,6 +168,7 @@ app.use('/api/preferences', preferencesRoutes);
 
 app.use('/api/admin/cloud-stream', cloudStreamRoutes);
 app.use('/api/cloud-radio', cloudRadioRoutes);
+app.use('/api/radio', radioRoutes);
 app.use('/api/live', liveRoutes);
 app.use('/api/push', pushRoutes);
 
@@ -350,6 +353,16 @@ async function start() {
   } catch (recoveryErr) {
     logger.warn(`⚠️  Cloud Radio recovery failed: ${recoveryErr.message}`);
     logger.warn('   Streams will need to be restarted manually from Creator Studio.');
+  }
+
+  // ── Avenora Radio startup recovery ──────────────────────────────────────
+  // Recover the persistent radio station from Firestore. Non-fatal.
+  try {
+    logger.info('[Radio] Running Avenora Radio startup recovery…');
+    await radioEngine.recoverStation();
+  } catch (radioErr) {
+    logger.warn(`⚠️  Avenora Radio recovery failed: ${radioErr.message}`);
+    logger.warn('   Radio station will start fresh when admin activates it.');
   }
 
   // Start HTTP server — this MUST succeed; if it fails, there is nothing to do
