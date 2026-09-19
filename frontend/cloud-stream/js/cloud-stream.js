@@ -100,9 +100,14 @@ let _artworkDataUrl = null; // base64 cover artwork
 let _engineRunning = false;
 
 // Set to true when the parent SPA sends AVN_AUTH_TOKEN confirming sign-in.
+// Even a uid-only message (token=null) counts as parent confirmation —
+// it means the parent SPA verified the user is logged in.
 let _parentConfirmedAuth = false;
 // Set to true once we have called _startApp (prevents double-init).
 let _appInitialised = false;
+
+// Tracks whether we are currently polling for auth after parent confirmation.
+let _waitForAuthInterval = null;
 
 /* Listener player state */
 let _player = {
@@ -204,12 +209,17 @@ async function _startApp(user) {
 
 let _authGateTimer = null;
 
-// Parent SPA → iframe postMessage bridge (same as frontend/cloud-stream version).
-// Also handles standalone open (no parent frame) where AVN_AUTH_TOKEN never arrives.
+// Parent SPA → iframe postMessage bridge.
+// The iframe's own Firebase SDK (v12.18.0) restores the session from
+// localStorage independently.  The postMessage bridge is a belt-and-
+// suspenders signal that:
+//   a) cancels the gate timer early (avoids brief "Sign In Required" flash),
+//   b) starts an auth poll if the iframe's own onAuthStateChanged hasn't fired yet.
 window.addEventListener('message', async (event) => {
   try {
     if (!event.data) return;
 
+    // ── AVN_CONFIG: backend API URL (not needed in Firebase-only mode) ──────
     if (event.data.type === 'AVN_CONFIG') {
       const apiUrl = event.data.apiUrl || '';
       if (apiUrl && !_API_BASE) {
@@ -218,62 +228,94 @@ window.addEventListener('message', async (event) => {
       return;
     }
 
+    // ── AVN_AUTH_TOKEN: parent confirmed auth state ──────────────────────────
     if (event.data.type === 'AVN_AUTH_TOKEN') {
-      // Parent SPA has confirmed its auth state.
-      // Even if idToken is null, uid being present means the parent sees a signed-in user.
-      // This clears the gate timer so we don't show "Sign In Required" prematurely.
+      // Mark parent as having confirmed auth.  Even a null uid counts —
+      // it means the parent ran its own onAuthStateChanged and is telling us
+      // the result.  We NEVER show the auth gate when the parent has sent this.
       _parentConfirmedAuth = true;
+
+      // Cancel any pending gate timer immediately.
       if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
-      if (!_appInitialised) {
-        _show('csrLoading', true);
-        _show('csrAuthGate', false);
-        // Firebase auth resolves from localStorage independently in the iframe.
-        // If currentUser is already available, start now; otherwise wait for
-        // onAuthStateChanged which will fire shortly.
-        if (_auth.currentUser) {
-          await _startApp(_auth.currentUser);
-        } else if (event.data.uid) {
-          // Parent confirmed a signed-in user but the iframe's Firebase hasn't
-          // resolved yet. Wait up to 8 s for onAuthStateChanged before giving up.
-          let _waitAttempts = 0;
-          const _waitForAuth = setInterval(async () => {
-            _waitAttempts++;
-            if (_auth.currentUser) {
-              clearInterval(_waitForAuth);
-              if (!_appInitialised) await _startApp(_auth.currentUser);
-            } else if (_waitAttempts >= 16) {
-              clearInterval(_waitForAuth);
-              // Still no user after 8 s — show gate so user can tap "Back to Avenora"
-              if (!_appInitialised) {
-                _show('csrLoading', false);
-                _show('csrAuthGate', true);
-              }
-            }
-          }, 500);
-        }
+
+      // If the app is already running, nothing more to do.
+      if (_appInitialised) return;
+
+      // Keep the loading spinner visible — do NOT show the auth gate.
+      _show('csrLoading', true);
+      _show('csrAuthGate', false);
+
+      // If the iframe's own Firebase already has the user, start immediately.
+      if (_auth.currentUser) {
+        await _startApp(_auth.currentUser);
+        return;
       }
+
+      // If the parent says the user IS signed in (uid present) but the iframe's
+      // Firebase hasn't resolved yet, poll until it does.
+      // Max wait: 20 s (40 × 500 ms).  In practice it resolves in < 2 s.
+      if (event.data.uid && !_waitForAuthInterval) {
+        let _waitAttempts = 0;
+        _waitForAuthInterval = setInterval(async () => {
+          _waitAttempts++;
+          if (_auth.currentUser) {
+            clearInterval(_waitForAuthInterval);
+            _waitForAuthInterval = null;
+            if (!_appInitialised) await _startApp(_auth.currentUser);
+          } else if (_waitAttempts >= 40) {
+            clearInterval(_waitForAuthInterval);
+            _waitForAuthInterval = null;
+            // 20 s elapsed and still no user — Firebase may have failed to
+            // restore the session.  Show the auth gate so the user can tap
+            // "Back to Avenora" and re-enter normally.
+            if (!_appInitialised) {
+              _show('csrLoading', false);
+              _show('csrAuthGate', true);
+            }
+          }
+        }, 500);
+      }
+      // If parent sent null uid it means the user is genuinely not signed in —
+      // onAuthStateChanged will handle showing the gate via the timer below.
     }
   } catch (_) {}
 });
 
+// ── Firebase own auth state change ──────────────────────────────────────────
+// This fires from localStorage restoration — typically within 1-2 s of page load.
+// It is the PRIMARY auth signal; postMessage above is secondary / belt-and-suspenders.
 onAuthStateChanged(_auth, async user => {
-  // Any auth state change cancels the gate timer.
+  // Cancel any pending gate timer — auth has resolved one way or another.
   if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
 
+  // Cancel any parent-triggered auth poll — no longer needed.
+  if (_waitForAuthInterval) { clearInterval(_waitForAuthInterval); _waitForAuthInterval = null; }
+
   if (user) {
-    // Signed-in user found — start the app regardless of parent signal.
+    // Signed-in user found — start the app.
     await _startApp(user);
   } else if (!_appInitialised) {
-    // No user yet. Firebase may still be resolving from localStorage.
-    // Give Firebase a generous grace period before showing the auth gate:
-    //   - 30 s when embedded in the SPA (parent will have sent AVN_AUTH_TOKEN
-    //     if the user is logged in, which cancels this timer anyway).
-    //   - 15 s when opened as a standalone page.
-    // In practice, Firebase resolves from localStorage in < 2 s, so this timer
-    // only fires when the user is genuinely not signed in.
-    const gateDelay = _parentConfirmedAuth ? 60000 : 15000;
+    // No user yet.  Firebase has definitively returned null from localStorage.
+    //
+    // Two cases:
+    //   A) Parent has already sent AVN_AUTH_TOKEN → parent is still working;
+    //      NEVER show the gate — let the parent poll drive the next attempt.
+    //      Set a very long safety timer that only fires if everything stalls.
+    //   B) No parent message yet (standalone open or parent slow to send) →
+    //      give 15 s for the parent to arrive before showing the gate.
+    //
+    // In both cases the timer is cancelled the moment a signed-in user arrives
+    // (either via a second onAuthStateChanged or via the poll in the message handler).
+    if (_parentConfirmedAuth) {
+      // Parent already confirmed — do not show gate.  Just keep the spinner.
+      // No timer needed — the parent's poll will call _startApp when Firebase resolves.
+      return;
+    }
+    // No parent confirmation yet — start a grace period.
+    const gateDelay = 15000;
     _authGateTimer = setTimeout(() => {
       _authGateTimer = null;
+      // Final check: if parent has since confirmed auth, do NOT show the gate.
       if (!_appInitialised && !_parentConfirmedAuth) {
         _show('csrLoading', false);
         _show('csrAuthGate', true);
@@ -773,6 +815,8 @@ window.csrStartBroadcast = async function() {
         uid:             _user.uid,
         playlistId:      _creator.selectedPl.id,
         queue:           musicQueue,
+        shuffle,
+        repeat,          // persist so _autoAdvanceQueue can read it
         currentTrackId:  first.id,
         currentTitle:    first.title,
         currentArtist:   first.artist,
@@ -1015,23 +1059,53 @@ async function _initListenerForStream(streamId, streamData) {
     if (art) art.innerHTML = `<img src="${_esc(streamData.coverArt)}" alt="Cover" style="width:100%;height:100%;object-fit:cover;border-radius:12px;">`;
   }
 
-  // Subscribe to Now Playing from Firestore
-  if (_player.unsub) { try { _player.unsub(); } catch(_) {} }
-  _player.unsub = onSnapshot(
-    doc(_db, 'studioCloudStreamMusic', streamId),
-    snap => {
-      if (!snap.exists()) { _showPlayerOffline('Broadcast ended.'); return; }
-      const d = snap.data();
-      if (d.status === 'stopped' || d.status === 'ended') {
-        _showPlayerOffline('Broadcast ended.');
-        return;
+  // Subscribe to Now Playing from Firestore with automatic reconnect on error.
+  // We re-subscribe up to 5 times with exponential back-off before giving up.
+  let _snapshotRetries = 0;
+  const _maxSnapshotRetries = 5;
+
+  const _subscribeNowPlayingForListener = () => {
+    if (_player.unsub) { try { _player.unsub(); } catch(_) {} _player.unsub = null; }
+    _player.unsub = onSnapshot(
+      doc(_db, 'studioCloudStreamMusic', streamId),
+      snap => {
+        // Successful snapshot — reset retry counter.
+        _snapshotRetries = 0;
+        if (!snap.exists()) { _showPlayerOffline('Broadcast ended.'); return; }
+        const d = snap.data();
+        if (d.status === 'stopped' || d.status === 'ended') {
+          _showPlayerOffline('Broadcast ended.');
+          return;
+        }
+        _syncListenerToNowPlaying(d);
+      },
+      err => {
+        console.warn('[CSR] listener nowPlaying error:', err.message);
+        _snapshotRetries++;
+        if (_snapshotRetries <= _maxSnapshotRetries) {
+          const delay = Math.min(2000 * Math.pow(2, _snapshotRetries - 1), 30000);
+          console.info('[CSR] Retrying Firestore snapshot in', delay, 'ms (attempt', _snapshotRetries, ')');
+          // Show a transient reconnecting notice (not the offline screen).
+          const offlineEl = _el('csrPlayerOffline');
+          const msgEl = offlineEl && offlineEl.querySelector('.csr-player-offline-msg');
+          if (msgEl && _player.audio) {
+            // Audio is still playing — just show a reconnecting message.
+            msgEl.textContent = 'Connection temporarily unavailable. Reconnecting…';
+            _show('csrPlayerOffline', true);
+          }
+          setTimeout(() => {
+            // If audio is still playing, hide the reconnecting notice.
+            if (_player.audio && _player.playing) _show('csrPlayerOffline', false);
+            _subscribeNowPlayingForListener();
+          }, delay);
+        } else {
+          // All retries exhausted — show offline state but do NOT redirect to login.
+          _showPlayerOffline('Connection temporarily unavailable. Refresh the page to retry.');
+        }
       }
-      _syncListenerToNowPlaying(d);
-    },
-    err => {
-      console.warn('[CSR] listener nowPlaying error:', err.message);
-    }
-  );
+    );
+  };
+  _subscribeNowPlayingForListener();
 
   // Note: listener count is maintained by the cloud worker via health heartbeats.
   // Clients do not write to cloudStreams directly (permission denied for non-owners).
@@ -1139,13 +1213,6 @@ function _onTrackEnded() {
 
 /**
  * Advance the Now Playing queue by one track.
- * Only the creator's client writes to studioCloudStreamMusic — and only when
- * the server engine is NOT running (local/fallback mode).
- * When _engineRunning is true the server engine handles all track advancement;
- * the client must not interfere or they will race and cause double-skips.
- */
-/**
- * Advance the Now Playing queue by one track.
  *
  * Architecture:
  *   - When the server engine IS running (_engineRunning=true): the engine manages
@@ -1155,13 +1222,12 @@ function _onTrackEnded() {
  *     All other listeners receive the update via the Firestore onSnapshot and
  *     start the next track automatically — they do NOT call this function.
  *
- *   If the owner's browser is closed: listeners' tracks will play to the end
- *   but the queue won't advance because no client has write authority.
- *   This is the correct behavior for a Firebase-only architecture — it avoids
- *   multiple clients racing to write the queue simultaneously.
+ *   Repeat logic:
+ *     - repeat=true (default): loops back to track 0 after the last track.
+ *     - repeat=false: stops the broadcast when the last track finishes.
  *
- *   To keep the channel running without the owner's browser: use the backend
- *   cloud radio engine (requires a backend deployment with /api/cloud-radio).
+ *   Skip-on-error: if a track URL is missing/broken, it is skipped and the
+ *   next valid track is used.  If ALL tracks are broken the broadcast stops.
  */
 async function _autoAdvanceQueue() {
   // _streamId is only set for the stream OWNER (creator mode).
@@ -1187,6 +1253,20 @@ async function _autoAdvanceQueue() {
     if (!queue.length) return;
 
     const currentIndex = typeof ms.queueIndex === 'number' ? ms.queueIndex : 0;
+    // repeat: stored in the stream doc; default to true so the broadcast loops.
+    const repeat = ms.repeat !== false;
+    const isLastTrack = currentIndex >= queue.length - 1;
+
+    // If repeat is off and we are on the last track, end the broadcast.
+    if (!repeat && isLastTrack) {
+      console.info('[CSR] auto-advance: end of playlist, repeat=false — stopping broadcast');
+      await updateDoc(musicRef, { status: 'ended', updatedAt: serverTimestamp() }).catch(() => {});
+      await updateDoc(doc(_db, 'cloudStreams', _streamId), { status: 'stopped', stoppedAt: serverTimestamp() }).catch(() => {});
+      _stopPlayerAudio();
+      _setStatusBadge('ended');
+      _toast('Broadcast ended — all tracks played.', 'info');
+      return;
+    }
 
     // Find the next VALID track (has a playable URL). Skip broken entries.
     let nextIndex = currentIndex;
@@ -1199,7 +1279,9 @@ async function _autoAdvanceQueue() {
     const nextTrack = queue[nextIndex] || {};
     // Skip if still no valid URL found (all tracks in queue are broken)
     if (!nextTrack.url && !nextTrack.downloadURL) {
-      console.warn('[CSR] auto-advance: no valid tracks in queue');
+      console.warn('[CSR] auto-advance: no valid tracks in queue — stopping broadcast');
+      await updateDoc(musicRef, { status: 'ended', updatedAt: serverTimestamp() }).catch(() => {});
+      _showPlayerOffline('All tracks in the queue are unavailable.');
       return;
     }
 
@@ -1223,6 +1305,10 @@ async function _autoAdvanceQueue() {
     });
   } catch (e) {
     console.warn('[CSR] auto-advance failed:', e.message);
+    // Retry once after 3 s if we get a transient Firestore error.
+    setTimeout(() => {
+      if (_streamId && !_engineRunning) _autoAdvanceQueue().catch(() => {});
+    }, 3000);
   }
 }
 

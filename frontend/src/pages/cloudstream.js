@@ -95,11 +95,11 @@ registerPage('cloudstream', {
     let _unsubAuth    = null;
 
     // ── Helper: push auth state to iframe ──────────────────────────────────
+    // Sends AVN_AUTH_TOKEN so the iframe knows the parent has run its own auth check.
+    // uid=null means the user is genuinely not signed in; the iframe will show the gate.
     const _pushToFrame = (token, uid) => {
       if (!frame.contentWindow || !_frameLoaded) return;
       try {
-        // Always send AVN_PARENT_READY so the iframe knows its parent is the SPA.
-        // If we also have a token, include it.
         frame.contentWindow.postMessage(
           { type: 'AVN_AUTH_TOKEN', idToken: token || null, uid: uid || null },
           _targetOrigin
@@ -118,9 +118,29 @@ registerPage('cloudstream', {
         const { onAuthStateChanged } = await import(
           `https://www.gstatic.com/firebasejs/${SDK_VER}/firebase-auth.js`
         );
+
+        // ── Immediate sync: if the parent already has a currentUser, push now ──
+        // This fires before the iframe's own onAuthStateChanged, which is the key
+        // fix for the "Sign In Required" flash — the iframe receives the parent's
+        // confirmation immediately on load and cancels its gate timer right away.
+        if (auth.currentUser) {
+          try {
+            const token = await auth.currentUser.getIdToken(false);
+            _latestToken = token;
+            _latestUid   = auth.currentUser.uid;
+          } catch (_) {
+            _latestUid = auth.currentUser.uid;
+          }
+          // Push immediately if frame is already loaded; otherwise it will be sent
+          // by the frame.load handler below.
+          _pushToFrame(_latestToken, _latestUid);
+        }
+
         _unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
           if (!fbUser) {
-            // User signed out — send a null signal so the iframe shows the gate.
+            // User signed out — send a null signal.
+            _latestToken = null;
+            _latestUid   = null;
             _pushToFrame(null, null);
             return;
           }
@@ -132,6 +152,7 @@ registerPage('cloudstream', {
           } catch (_) {
             // Token fetch failed — send uid-only confirmation so the iframe
             // at least knows the parent considers the user signed in.
+            _latestUid = fbUser.uid;
             _pushToFrame(null, fbUser.uid);
           }
         });
@@ -150,10 +171,13 @@ registerPage('cloudstream', {
     _startAuthSubscription();
 
     // ── On iframe load: send any already-available auth state ───────────────
+    // This fires when the iframe finishes loading its HTML. At this point the
+    // parent may already have a currentUser (from _startAuthSubscription above);
+    // always push that state so the iframe can cancel its gate timer immediately.
     frame.addEventListener('load', () => {
       _frameLoaded = true;
-      // Always send a ready signal — even if token is null, the iframe
-      // needs to know the parent is here so it can extend its gate timer.
+      // Always send a message — even if uid is null, the iframe needs to know
+      // the parent is present so it can manage its own gate timer correctly.
       _pushToFrame(_latestToken, _latestUid);
     });
 
