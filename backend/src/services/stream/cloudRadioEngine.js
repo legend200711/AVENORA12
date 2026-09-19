@@ -553,6 +553,8 @@ class CloudRadioSession {
  * @returns {{ ok: boolean, message?: string }}
  */
 function startSession(opts) {
+  logger.info(`[CLOUD RADIO] startSession — streamId=${opts.streamId} uid=${opts.uid} queueLength=${Array.isArray(opts.queue) ? opts.queue.length : 0}`);
+
   if (!opts.streamId) return { ok: false, message: 'streamId is required' };
   if (!opts.uid)      return { ok: false, message: 'uid is required' };
   if (!Array.isArray(opts.queue) || !opts.queue.length) {
@@ -560,12 +562,22 @@ function startSession(opts) {
   }
 
   const validTracks = opts.queue.filter(t => t.url);
+  logger.info(`[CLOUD RADIO] startSession — ${validTracks.length}/${opts.queue.length} tracks have a valid URL`);
+
   if (!validTracks.length) {
+    logger.error(`[CLOUD RADIO] startSession aborted — no tracks have a valid audio URL (streamId=${opts.streamId})`);
     return { ok: false, message: 'No tracks have a valid audio URL. Upload music in Creator Studio first.' };
   }
 
+  // Log the first few track URLs (not secrets) for diagnosability
+  validTracks.slice(0, 4).forEach((t, i) => {
+    const safeUrl = t.url ? t.url.replace(/\?.*$/, '?[params]') : '(none)';
+    logger.info(`[CLOUD RADIO] Track ${i + 1}: "${t.title || 'Untitled'}" — URL: ${safeUrl}`);
+  });
+
   // Stop existing session for this stream (idempotent restart)
   if (_sessions.has(opts.streamId)) {
+    logger.info(`[CLOUD RADIO] Stopping existing session for ${opts.streamId} before restart`);
     _sessions.get(opts.streamId).stop();
     _sessions.delete(opts.streamId);
   }
@@ -581,6 +593,9 @@ function startSession(opts) {
 
   _sessions.set(opts.streamId, session);
   session.start();
+
+  const firstTrack = session._currentTrack();
+  logger.info(`[CLOUD RADIO] Session started — streamId=${opts.streamId} firstTrack="${firstTrack?.title || '?'}" trackCount=${validTracks.length} repeat=${!!opts.repeat}`);
 
   return { ok: true, streamId: opts.streamId, trackCount: validTracks.length };
 }

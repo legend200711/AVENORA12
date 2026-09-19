@@ -27,6 +27,18 @@ const { ValidationError, ForbiddenError, NotFoundError } = require('../middlewar
 const engine  = require('../../services/stream/cloudRadioEngine');
 const logger  = require('../../utils/logger');
 
+// ─── Firestore Admin SDK (for writing authoritative stream state) ─────────────
+// Non-fatal: if the Admin SDK is unavailable the engine still runs; clients will
+// see the Now Playing update arrive via the engine's own heartbeat (~10 s).
+function _getDb() {
+  try {
+    const { getDb } = require('../../config/firestore');
+    return getDb();
+  } catch (_) {
+    return null;
+  }
+}
+
 // ─── Rate limiters ────────────────────────────────────────
 const controlLimiter = rateLimit({
   windowMs: 60_000,
@@ -76,9 +88,11 @@ function isOwnerOrAdmin(sessionStatus, user) {
 //   repeat          {boolean}  — optional, default true
 //   durationMinutes {number}   — optional, default 1440
 // ─────────────────────────────────────────────────────────
-router.post('/start', startLimiter, (req, res, next) => {
+router.post('/start', startLimiter, async (req, res, next) => {
   try {
     const { streamId, uid, queue, shuffle, repeat, durationMinutes } = req.body;
+
+    logger.info(`[CLOUD RADIO] START request — streamId=${streamId} uid=${uid} queueLength=${Array.isArray(queue) ? queue.length : 0}`);
 
     if (!streamId || typeof streamId !== 'string' || streamId.length > 200) {
       return next(new ValidationError('streamId is required (string ≤ 200 chars)'));
@@ -101,9 +115,6 @@ router.post('/start', startLimiter, (req, res, next) => {
     const safeQueue = queue.map((t, i) => {
       if (!t || typeof t !== 'object') throw new ValidationError(`queue[${i}] must be an object`);
       const url = typeof t.url === 'string' ? t.url.trim() : '';
-      if (!url.startsWith('https://') && !url.startsWith('http://')) {
-        // Skip tracks with no valid URL — engine handles empty-url tracks gracefully
-      }
       return {
         id:          String(t.id    || '').slice(0, 200),
         title:       String(t.title || 'Untitled').slice(0, 200),
@@ -114,9 +125,21 @@ router.post('/start', startLimiter, (req, res, next) => {
       };
     });
 
+    const validTrackCount = safeQueue.filter(t => t.url).length;
+    logger.info(`[CLOUD RADIO] Queue sanitised — ${safeQueue.length} tracks total, ${validTrackCount} with valid URLs`);
+
+    if (validTrackCount === 0) {
+      logger.error(`[CLOUD RADIO] START aborted — no tracks have a valid audio URL (streamId=${streamId})`);
+      return res.status(400).json({ error: true, message: 'No tracks have a valid audio URL. Upload music in Creator Studio first.' });
+    }
+
+    const ownerUid = req.user.id || req.user.uid;
+
+    logger.info(`[CLOUD RADIO] Creating session — streamId=${streamId} owner=${ownerUid} tracks=${validTrackCount} repeat=${repeat !== false} shuffle=${shuffle === true}`);
+
     const result = engine.startSession({
       streamId,
-      uid: req.user.id || req.user.uid,
+      uid: ownerUid,
       queue:           safeQueue,
       shuffle:         shuffle === true,
       repeat:          repeat !== false,
@@ -124,14 +147,55 @@ router.post('/start', startLimiter, (req, res, next) => {
     });
 
     if (!result.ok) {
+      logger.error(`[CLOUD RADIO] Engine startSession failed — streamId=${streamId} reason=${result.message}`);
       return res.status(400).json({ error: true, message: result.message });
     }
 
-    logger.info(`[CloudRadio] Started session ${streamId} for user ${req.user.id} (${result.trackCount} tracks)`);
     const status = engine.getSessionStatus(streamId);
-    res.status(201).json({ success: true, message: 'Cloud radio started', status });
+    logger.info(`[CLOUD RADIO] Engine started — streamId=${streamId} status=${status?.status} currentTrack="${status?.currentTrack?.title}"`);
+
+    // ── Write authoritative stream state to Firestore ──────────────────────────
+    // The client must not write status:'active' or startedAt on its own —
+    // those fields are owned by the server and only populated here, after the
+    // engine has verifiably started.
+    const serverStartedAt = Date.now();
+    const durationMins    = typeof durationMinutes === 'number' ? Math.min(Math.max(durationMinutes, 1), 1440) : 1440;
+    const expiresAt       = serverStartedAt + durationMins * 60_000;
+
+    const db = _getDb();
+    if (db) {
+      try {
+        let serverTs;
+        try { serverTs = require('../../config/firestore').FieldValue.serverTimestamp(); } catch (_) { serverTs = serverStartedAt; }
+        await db.collection('cloudStreams').doc(streamId).set({
+          status:        'active',
+          workerStatus:  'running',
+          startedAt:     serverTs,
+          expiresAt,
+          lastHeartbeat: serverStartedAt,
+        }, { merge: true });
+        logger.info(`[CLOUD RADIO] Firestore cloudStreams/${streamId} marked active`);
+      } catch (dbErr) {
+        // Non-fatal — engine is running; the client will still see the heartbeat
+        logger.warn(`[CLOUD RADIO] Firestore cloudStreams update failed: ${dbErr.message}`);
+      }
+    } else {
+      logger.warn('[CLOUD RADIO] Firestore Admin SDK not available — client must update cloudStreams doc');
+    }
+
+    logger.info(`[CLOUD RADIO] Startup complete — streamId=${streamId} track="${status?.currentTrack?.title}" expiresAt=${new Date(expiresAt).toISOString()}`);
+
+    res.status(201).json({
+      success:      true,
+      message:      'Cloud radio started',
+      status,
+      startedAt:    serverStartedAt,
+      expiresAt,
+      workerStatus: 'running',
+    });
 
   } catch (err) {
+    logger.error(`[CLOUD RADIO] START unhandled error: ${err.message}`);
     next(err);
   }
 });

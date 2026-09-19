@@ -69,11 +69,27 @@ let _API_BASE = (() => {
 })();
 
 /**
+ * Wait up to `maxMs` for _API_BASE to be populated (by the AVN_CONFIG postMessage).
+ * This handles the race where the parent sends AVN_CONFIG slightly after the iframe
+ * has already called _startApp but before csrStartBroadcast is invoked.
+ */
+async function _waitForApiBase(maxMs = 3000) {
+  if (_API_BASE) return _API_BASE;
+  const step = 100;
+  let waited = 0;
+  while (!_API_BASE && waited < maxMs) {
+    await _sleep(step);
+    waited += step;
+  }
+  return _API_BASE;
+}
+
+/**
  * Make an authenticated request to the AVENORA backend.
  * Attaches the Firebase ID token from the current user.
  */
 async function _apiRequest(method, path, body) {
-  if (!_API_BASE) throw new Error('Backend URL not configured — expected in Firebase+Supabase-only mode. The backend engine is not available.');
+  if (!_API_BASE) throw new Error('Backend URL not configured. The Avenora backend engine is not reachable from this context.');
   const token = _user ? await _user.getIdToken().catch(() => null) : null;
   if (!token) throw new Error('Authentication required — Firebase ID token unavailable');
   const opts = {
@@ -744,43 +760,47 @@ window.csrStartBroadcast = async function() {
     }));
 
     // 8. Start the real server-side cloud radio engine via the AVENORA backend.
-    let engineStarted = false;
-    let engineError   = null;
-    if (_API_BASE) {
-      try {
-        _renderHandoffStep(2, 'Starting cloud radio engine…');
-        await _apiRequest('POST', '/cloud-radio/start', {
-          streamId,
-          uid:             _user.uid,
-          queue:           musicQueue,
-          shuffle,
-          repeat,
-          durationMinutes,
-        });
-        engineStarted = true;
-        _engineRunning = true;
-        _renderHandoffStep(3, 'Engine running…');
-      } catch (apiErr) {
-        engineError = apiErr.message;
-        console.error('[CSR] Backend engine start failed:', apiErr.message);
-        _renderHandoffStep(3, 'Engine offline — using local playback…');
-      }
-    } else {
-      // No backend configured — expected in Firebase+Supabase-only architecture.
-      engineError = null;
-      console.info('[CSR] No backend API configured — running in client-side (Firestore) playback mode.');
-      _renderHandoffStep(3, 'Starting broadcast (Firestore-synced playback)…');
+    //    This call is MANDATORY — if it fails the broadcast is aborted and the
+    //    user sees a real error.  We never report LIVE without a running engine.
+    _renderHandoffStep(2, 'Starting cloud radio engine…');
+
+    // Wait briefly for _API_BASE in case the AVN_CONFIG postMessage hasn't arrived yet.
+    const apiBase = await _waitForApiBase(3000);
+    if (!apiBase) {
+      // Clean up the Firestore record we already wrote
+      updateDoc(doc(_db, 'cloudStreams', streamId), { status: 'failed', workerStatus: 'unavailable' }).catch(() => {});
+      throw new Error('Cannot reach the Avenora backend. Make sure you are signed in and have a network connection, then try again.');
     }
 
-    // 9. Mark active + publish to liveRooms feed
-    const expiresAt = Date.now() + durationMinutes * 60 * 1000;
-    await updateDoc(doc(_db, 'cloudStreams', streamId), {
-      status:       'active',
-      startedAt:    serverTimestamp(),
-      expiresAt:    expiresAt,
-      workerStatus: engineStarted ? 'running' : 'local',
-      engineError:  engineError || null,
-    });
+    console.info('[CSR] Sending /cloud-radio/start — streamId=' + streamId + ' tracks=' + musicQueue.length + ' apiBase=' + apiBase);
+
+    let engineResponse;
+    try {
+      engineResponse = await _apiRequest('POST', '/cloud-radio/start', {
+        streamId,
+        uid:             _user.uid,
+        queue:           musicQueue,
+        shuffle,
+        repeat,
+        durationMinutes,
+      });
+    } catch (apiErr) {
+      console.error('[CSR] Backend engine start failed:', apiErr.message);
+      // Clean up — mark the stream record as failed so it doesn't show as LIVE
+      updateDoc(doc(_db, 'cloudStreams', streamId), { status: 'failed', workerStatus: 'error', engineError: apiErr.message }).catch(() => {});
+      throw new Error('Cloud Radio engine failed to start: ' + apiErr.message);
+    }
+
+    _engineRunning = true;
+    _renderHandoffStep(3, 'Engine running…');
+    console.info('[CSR] Engine started — response:', engineResponse.message, 'status:', engineResponse.status?.status, 'track:', engineResponse.status?.currentTrack?.title);
+
+    // 9. Use the server's authoritative timestamps.
+    //    The backend already wrote status:'active', startedAt, and workerStatus:'running'
+    //    to Firestore after engine.startSession() succeeded.
+    //    We only need to publish to liveRooms (discovery feed) and update our local state.
+    const serverStartedAt = engineResponse.startedAt || Date.now();
+    const expiresAt       = engineResponse.expiresAt  || (serverStartedAt + durationMinutes * 60 * 1000);
 
     // Publish to liveRooms so the discovery feed picks it up
     await setDoc(doc(_db, 'liveRooms', _user.uid), {
@@ -809,51 +829,18 @@ window.csrStartBroadcast = async function() {
 
     _streamData = {
       uid: _user.uid, streamName: title, status: 'active', durationMinutes,
-      expiresAt, category: cat,
+      startedAt: serverStartedAt, expiresAt, category: cat,
       displayName: _userData?.displayName || ''
     };
 
-    // 10. If server engine is NOT running, seed initial Now Playing in Firestore.
-    if (!engineStarted && musicQueue.length) {
-      const first = musicQueue[0];
-      await setDoc(doc(_db, 'studioCloudStreamMusic', streamId), {
-        cloudStreamId:   streamId,
-        uid:             _user.uid,
-        playlistId:      _creator.selectedPl.id,
-        queue:           musicQueue,
-        shuffle,
-        repeat,          // persist so _autoAdvanceQueue can read it
-        currentTrackId:  first.id,
-        currentTitle:    first.title,
-        currentArtist:   first.artist,
-        currentTrackUrl: first.url,
-        currentDuration: first.duration || 0,
-        trackStartedAt:  Date.now(),
-        currentElapsed:  0,
-        nextTrackId:     musicQueue[1]?.id    || '',
-        nextTitle:       musicQueue[1]?.title || '',
-        nextArtist:      musicQueue[1]?.artist || '',
-        queueIndex:      0,
-        status:          'playing',
-        updatedAt:       serverTimestamp()
-      }, { merge: true });
-    }
-
-    _renderHandoffStep(4, engineStarted ? 'Broadcast is LIVE! Engine running 24/7.' : 'Broadcast is LIVE! (local playback mode)');
+    _renderHandoffStep(4, 'Broadcast is LIVE! Engine running 24/7.');
     await _sleep(800);
 
     _show('csrStartingProgress', false);
     _show('csrCreatePanel', false);
     _showActiveStream();
 
-    if (engineStarted) {
-      _toast('&#9925; Cloud Radio is LIVE! The server will keep playing even when you close this tab.', 'success');
-    } else if (engineError) {
-      _toast('&#9888; Cloud Radio started in local mode. Engine error: ' + engineError, 'warn');
-      console.error('[CSR] Engine start error (full):', engineError);
-    } else {
-      _toast('&#9925; Cloud Radio is LIVE!', 'success');
-    }
+    _toast('&#9925; Cloud Radio is LIVE! The server will keep playing even when you close this tab.', 'success');
 
   } catch (e) {
     console.error('[CSR] startBroadcast error:', e);
