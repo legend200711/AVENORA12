@@ -2,8 +2,8 @@
   "name": "AVENORA",
   "short_name": "Avenora",
   "description": "AVENORA — A place where everyone belongs. Connection, creativity, positivity, and new beginnings.",
-  "start_url": "/AVENORA1/index.html",
-  "scope": "/AVENORA1/",
+  "start_url": "/AVENORA12/index.html",
+  "scope": "/AVENORA12/",
   "display": "standalone",
   "background_color": "#090807",
   "theme_color": "#090807",
@@ -63,19 +63,19 @@
     {
       "name": "Avenora Feed",
       "short_name": "Feed",
-      "url": "/AVENORA1/index.html#social",
+      "url": "/AVENORA12/index.html#social",
       "icons": [{ "src": "icons/icon-96.svg", "sizes": "96x96", "type": "image/svg+xml" }]
     },
     {
       "name": "Avenora Arcade",
       "short_name": "Arcade",
-      "url": "/AVENORA1/index.html#arcade",
+      "url": "/AVENORA12/index.html#arcade",
       "icons": [{ "src": "icons/icon-96.svg", "sizes": "96x96", "type": "image/svg+xml" }]
     },
     {
       "name": "Avenora DJ System",
       "short_name": "DJ",
-      "url": "/AVENORA1/index.html#dj",
+      "url": "/AVENORA12/index.html#dj",
       "icons": [{ "src": "icons/icon-96.svg", "sizes": "96x96", "type": "image/svg+xml" }]
     }
   ]

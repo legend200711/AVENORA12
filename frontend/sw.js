@@ -1,8 +1,8 @@
 /**
  * AVENORA — Service Worker v5
  *
- * Deployment base: /AVENORA1/
- * GitHub Pages URL: https://legend200711.github.io/AVENORA1/
+ * Deployment base: /AVENORA12/
+ * GitHub Pages URL: https://legend200711.github.io/AVENORA12/
  *
  * Rules:
  *   • NEVER cache: API responses, Firebase data, auth responses,
@@ -33,9 +33,9 @@ _messaging.onBackgroundMessage((payload) => {
   const title = payload.notification?.title || 'AVENORA';
   const options = {
     body:     payload.notification?.body || 'You have a new notification',
-    icon:     '/AVENORA1/icons/icon-192.svg',
-    badge:    '/AVENORA1/icons/icon-72.svg',
-    data:     { url: payload.data?.url || '/AVENORA1/index.html' },
+    icon:     '/AVENORA12/icons/icon-192.svg',
+    badge:    '/AVENORA12/icons/icon-72.svg',
+    data:     { url: payload.data?.url || '/AVENORA12/index.html' },
     tag:      payload.data?.tag || 'avenora-notification',
     renotify: false,
   };
@@ -44,8 +44,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v18';
-const CACHE_NAME  = 'avenora-cache-v18';
+const SW_VERSION  = 'v19';
+const CACHE_NAME  = 'avenora-cache-v19';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -55,7 +55,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v1', // exact names below v9
   'avenora-cache-v2',
   'avenora-cache-v3', // v3 had wrong BASE path — evict
-  'avenora-cache-v4', // v4 had wrong /AVENORA1/ base path — evict
+  'avenora-cache-v4', // v4 had wrong /AVENORA1/ or /AVENORA12/ base path — evict
   'avenora-cache-v5', // v5 — evict to pick up cloud-stream/ assets
   'avenora-cache-v6', // v6 — evict: CSS diag removed, video upload fixed
   'avenora-cache-v7', // v7 — evict: supabase.js was missing from cache list
@@ -69,6 +69,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v15', // v15 — evict: add dj-cosmic.css to cache, cosmic UI upgrade
   'avenora-cache-v16', // v16 — evict: global cosmic design system, avenora-cosmic.css
   'avenora-cache-v17', // v17 — evict: Cloud Stream auth gate, queue advance, network retry fixes
+  'avenora-cache-v18', // v18 — evict: 24-Hour Channel full implementation
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
@@ -76,9 +77,9 @@ const OLD_CACHE_PREFIXES = [
 ];
 
 // ── Static assets to pre-cache ────────────────────────────────────────────────
-// All paths are relative to the SW scope (/AVENORA1/).
+// All paths are relative to the SW scope (/AVENORA12/).
 // Do NOT list API URLs, Firebase URLs, or any runtime-fetched data here.
-const BASE = '/AVENORA1';
+const BASE = '/AVENORA12';
 const STATIC_ASSETS = [
   `${BASE}/index.html`,
   `${BASE}/offline.html`,
@@ -363,9 +364,9 @@ self.addEventListener('push', (event) => {
   const title = data.title || 'AVENORA';
   const options = {
     body:     data.body || 'You have a new notification',
-    icon:     '/AVENORA1/icons/icon-192.svg',
-    badge:    '/AVENORA1/icons/icon-72.svg',
-    data:     { url: data.url || '/AVENORA1/index.html' },
+    icon:     '/AVENORA12/icons/icon-192.svg',
+    badge:    '/AVENORA12/icons/icon-72.svg',
+    data:     { url: data.url || '/AVENORA12/index.html' },
     tag:      data.tag || 'avenora-notification',
     renotify: false,
   };
@@ -374,7 +375,7 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const url = event.notification.data?.url || '/AVENORA1/index.html';
+  const url = event.notification.data?.url || '/AVENORA12/index.html';
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
       for (const client of clientList) {

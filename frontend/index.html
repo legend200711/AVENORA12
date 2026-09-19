@@ -292,7 +292,7 @@
   <!--
     AVENORA PRODUCTION CONFIGURATION
     ────────────────────────────────────────────────────────────────
-    Deployment: GitHub Pages  →  https://legend200711.github.io/AVENORA1/
+    Deployment: GitHub Pages  →  https://legend200711.github.io/AVENORA12/
     Firebase project:            avenora-6e147
     ────────────────────────────────────────────────────────────────
     Architecture: Firebase (Auth, Firestore, Realtime DB, Storage)
@@ -302,12 +302,12 @@
   <script>
     // ── Build / version metadata ──────────────────────────────
     window.AVENORA_BUILD = {
-      version:         '3.6.0',
-      buildTimestamp:  '2026-09-21T00:00:00Z',
-      swVersion:       'v18',
-      swCacheName:     'avenora-cache-v18',
+      version:         '3.6.1',
+      buildTimestamp:  '2026-09-21T12:00:00Z',
+      swVersion:       'v19',
+      swCacheName:     'avenora-cache-v19',
       firebaseProject: 'avenora-6e147',
-      basePath:        '/AVENORA1/',
+      basePath:        '/AVENORA12/',
     };
 
     // ── Runtime API config ────────────────────────────────────
@@ -433,8 +433,8 @@
     if ('serviceWorker' in navigator) {
       window.addEventListener('load', () => {
         // Path is relative to this HTML file's location — resolves to
-        // /AVENORA1/sw.js which is within the /AVENORA1/ scope.
-        navigator.serviceWorker.register('sw.js', { scope: '/AVENORA1/' })
+        // /AVENORA12/sw.js which is within the /AVENORA12/ scope.
+        navigator.serviceWorker.register('sw.js', { scope: '/AVENORA12/' })
           .then((reg) => {
             console.log('[AVN] Service worker registered — scope:', reg.scope);
           })
