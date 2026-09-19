@@ -303,10 +303,10 @@
   <script>
     // ── Build / version metadata ──────────────────────────────
     window.AVENORA_BUILD = {
-      version:         '3.7.3',
-      buildTimestamp:  '2025-10-22T00:00:00Z',
-      swVersion:       'v25',
-      swCacheName:     'avenora-cache-v25',
+      version:         '3.7.4',
+      buildTimestamp:  '2025-10-23T00:00:00Z',
+      swVersion:       'v26',
+      swCacheName:     'avenora-cache-v26',
       firebaseProject: 'avenora-6e147',
       basePath:        '/AVENORA12/',
     };
@@ -543,16 +543,11 @@
             console.warn('[AVN] Service worker registration failed:', err);
           });
 
-        // Single SW message listener — handles both SW_UPDATED reloads and
-        // GET_API_URL requests from the background sync handler.
+        // SW message listener — handles GET_API_URL requests from background sync.
+        // SW_UPDATED auto-reload is intentionally removed: the new SW (v26+) uses
+        // clients.claim() without broadcasting SW_UPDATED, so pages get fresh assets
+        // on their next resource fetch without a forced full-page reload loop.
         navigator.serviceWorker.addEventListener('message', (event) => {
-          if (event.data?.type === 'SW_UPDATED') {
-            console.log('[AVN] New service worker active (' + event.data.cache + '). Reloading…');
-            // Only auto-reload if the page is visible and no critical input in progress
-            if (!document.hidden) {
-              window.location.reload();
-            }
-          }
           if (event.data?.type === 'GET_API_URL' && event.ports?.[0]) {
             event.ports[0].postMessage({ apiUrl: window.LU_CONFIG?.apiUrl || null });
           }

@@ -1,5 +1,5 @@
 /**
- * AVENORA — Service Worker v25
+ * AVENORA — Service Worker v26
  *
  * Deployment-aware: detects GitHub Pages vs Firebase Hosting automatically.
  *   GitHub Pages:      https://legend200711.github.io/AVENORA12/  → BASE = /AVENORA12
@@ -47,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v25';
-const CACHE_NAME  = 'avenora-cache-v25';
+const SW_VERSION  = 'v26';
+const CACHE_NAME  = 'avenora-cache-v26';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -79,6 +79,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v22', // v22 — evict: firebase.json public path was wrong (all assets 404'd)
   'avenora-cache-v23', // v23 — evict: radio LU_CONFIG crash, cloud-stream engine stall fallback
   'avenora-cache-v24', // v24 — evict: cloudRadioEngine require path fix, 404.html redirect
+  'avenora-cache-v25', // v25 — evict: SW_UPDATED reload loop fix; bump to force fresh install
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
@@ -98,6 +99,7 @@ const BASE = self.location.pathname.startsWith('/AVENORA12/') ? '/AVENORA12' : '
 // All paths are relative to BASE (auto-detected above).
 // Do NOT list API URLs, Firebase URLs, or any runtime-fetched data here.
 const STATIC_ASSETS = [
+  `${BASE}/`,
   `${BASE}/index.html`,
   `${BASE}/offline.html`,
   `${BASE}/404.html`,
@@ -236,15 +238,10 @@ self.addEventListener('activate', (event) => {
       return Promise.all(deletions);
     }).then(() => {
       console.log(`[SW ${SW_VERSION}] Activated — controlling all clients`);
-      // Immediately control all open pages — they will reload with the new SW.
+      // Immediately control all open pages — no reload needed; clients will get
+      // fresh assets on their next fetch. The SW_UPDATED message is intentionally
+      // NOT sent here to avoid a reload loop when the page is mid-load.
       return self.clients.claim();
-    }).then(() => {
-      // Tell every controlled client to reload so they pick up the new build.
-      return self.clients.matchAll({ type: 'window' }).then((clients) => {
-        clients.forEach((client) => {
-          client.postMessage({ type: 'SW_UPDATED', version: SW_VERSION, cache: CACHE_NAME });
-        });
-      });
     })
   );
 });

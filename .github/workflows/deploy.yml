@@ -38,24 +38,55 @@ jobs:
         with:
           enablement: true
 
-      # ── 3. Ensure .nojekyll is present ─────────────────────────────────────
-      # Prevents GitHub's Jekyll processor from transforming files or
-      # ignoring any path that starts with an underscore.
-      - name: Add .nojekyll and verify deployment
+      # ── 3. Ensure .nojekyll is present and verify artifact integrity ─────────
+      # Prevents GitHub's Jekyll processor from ignoring files that start with
+      # underscores or transforming HTML/JS/CSS.
+      # Also verifies every CSS and JS file referenced by index.html is present
+      # so a missing file is caught before deployment, not after.
+      - name: Add .nojekyll and verify deployment artifact
         run: |
           touch frontend/.nojekyll
-          echo "--- frontend/ contents ---"
+
+          echo "=== ARTIFACT ROOT: frontend/ ==="
           ls -la frontend/
-          echo "--- frontend/src/styles/ contents ---"
+
+          echo "=== CSS FILES ==="
           ls -la frontend/src/styles/
-          echo "--- Key file checks ---"
-          echo "index.html present: $(test -f frontend/index.html && echo YES || echo NO)"
-          echo "sw.js present:      $(test -f frontend/sw.js && echo YES || echo NO)"
-          echo "404.html present:   $(test -f frontend/404.html && echo YES || echo NO)"
-          echo "manifest.json:      $(test -f frontend/manifest.json && echo YES || echo NO)"
-          echo "--- SW version check ---"
-          grep "const SW_VERSION" frontend/sw.js || echo "SW_VERSION not found"
-          grep "const CACHE_NAME" frontend/sw.js || echo "CACHE_NAME not found"
+
+          echo "=== JS SERVICES ==="
+          ls frontend/src/services/
+
+          echo "=== JS PAGES ==="
+          ls frontend/src/pages/
+
+          echo "=== KEY FILE PRESENCE ==="
+          for f in \
+            frontend/index.html \
+            frontend/sw.js \
+            frontend/404.html \
+            frontend/offline.html \
+            frontend/manifest.json \
+            frontend/src/styles/theme.css \
+            frontend/src/styles/avenora-cosmic.css \
+            frontend/src/styles/responsive.css \
+            frontend/src/app.js \
+            frontend/src/services/firebase.js \
+            frontend/src/services/api.js \
+            frontend/src/pages/hub.js \
+            frontend/src/pages/music.js \
+            frontend/src/pages/social.js \
+            frontend/icons/icon-192.png \
+            frontend/icons/icon-512.png; do
+            if [ -f "$f" ]; then
+              echo "  OK  $f"
+            else
+              echo "  MISSING  $f"
+              exit 1
+            fi
+          done
+
+          echo "=== SW VERSION ==="
+          grep "const SW_VERSION\|const CACHE_NAME" frontend/sw.js
 
       # ── 4. Upload artifact ─────────────────────────────────────────────────
       # Packages frontend/ (the real AVENORA app) as the Pages artifact.
