@@ -453,45 +453,156 @@ function renderAdminLogs(container) {
 }
 
 /* ─── Avenora Video Admin Section ────────────────────────── */
-async function renderAdminVideos(container) {
-  let videos = [], channels = [], reports = [], error = null;
+
+/**
+ * Load all videos from the Supabase music_library table (admin view).
+ * Unlike the public list(), this fetches ALL video rows — not just public/published ones —
+ * so the founder can see and delete every uploaded video.
+ * Falls back to backend GET /api/videos and then Firestore if Supabase is unavailable.
+ */
+async function _adminLoadAllVideos() {
+  // Primary: Supabase music_library — no status filter, all rows visible to admin
   try {
-    const [vRes, cRes] = await Promise.all([
-      LegendAPI.videos.list({ limit: 24, sort: 'new' }),
-      LegendAPI.videos.channels({ limit: 24 }),
+    const SUPABASE_URL  = 'https://licuiqxkkfboqezzmsqu.supabase.co';
+    const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpY3VpcXhra2Zib3Flenptc3F1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNTYxMDQsImV4cCI6MjEwNDkzMjEwNH0.tsYOyCI7skF6Otz2W0oNYhxM63-0551lrqIDCO8NoJo';
+    const r = await fetch(
+      `${SUPABASE_URL}/rest/v1/music_library?mime_type=like.video/*&order=uploaded_at.desc&limit=50`,
+      { headers: { apikey: SUPABASE_ANON, Authorization: `Bearer ${SUPABASE_ANON}` } }
+    );
+    if (r.ok) {
+      const rows = await r.json();
+      if (Array.isArray(rows) && rows.length > 0) {
+        return rows.map(row => ({
+          _id: row.id, id: row.id,
+          title:    row.title || 'Untitled',
+          category: row.genre || 'other',
+          views:    0,
+          isFlagged: false,
+          createdAt: row.uploaded_at,
+          uploader: { username: row.artist_name || row.uid || '—', _id: row.uid },
+        }));
+      }
+    }
+  } catch (e) {
+    console.warn('[AVN] Admin video list — Supabase failed:', e.message);
+  }
+
+  // Fallback: backend endpoint (returns all videos including non-public ones to authenticated admins)
+  try {
+    const res = await LegendAPI.videos.list({ limit: 50, sort: 'new' });
+    if (res.videos && res.videos.length > 0) return res.videos;
+  } catch (e) {
+    console.warn('[AVN] Admin video list — backend failed:', e.message);
+  }
+
+  // Last resort: Firestore (only returns public/published videos, but better than nothing)
+  try {
+    const db = await window.AvenoraFirebase.getFirestore();
+    const { collection, query, orderBy, limit, getDocs } = await import(
+      `https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js`
+    );
+    const q = query(collection(db, 'videos'), orderBy('createdAt', 'desc'), limit(50));
+    const snap = await getDocs(q);
+    return snap.docs.map(d => {
+      const data = d.data();
+      return { _id: d.id, id: d.id, title: data.title || 'Untitled',
+        category: data.category || 'other', views: data.views || 0,
+        isFlagged: data.isFlagged || false, createdAt: data.createdAt,
+        uploader: data.uploaderInfo ? { username: data.uploaderInfo.username || '—', _id: data.uploaderInfo.uid } : { username: '—' },
+      };
+    });
+  } catch (e) {
+    console.warn('[AVN] Admin video list — Firestore failed:', e.message);
+  }
+
+  return [];
+}
+
+async function renderAdminVideos(container) {
+  showLoading(container, 'Loading video library…');
+
+  let videos = [], channels = [], videoError = null, backendStatus = null;
+
+  // Check backend health first (helps surface Render sleep state)
+  if (window.LU_CONFIG && window.LU_CONFIG.apiUrl) {
+    try {
+      const healthRes = await fetch(
+        `${window.LU_CONFIG.apiUrl}/health`,
+        { signal: AbortSignal.timeout ? AbortSignal.timeout(8000) : new AbortController().signal }
+      ).catch(() => null);
+      if (healthRes) {
+        backendStatus = healthRes.ok ? 'ok' : 'error';
+      } else {
+        backendStatus = 'unreachable';
+      }
+    } catch { backendStatus = 'unreachable'; }
+  }
+
+  try {
+    const [vList, cRes] = await Promise.all([
+      _adminLoadAllVideos(),
+      LegendAPI.videos.channels({ limit: 24 }).catch(() => ({ channels: [] })),
     ]);
-    videos   = vRes.videos   || [];
+    videos   = vList || [];
     channels = cRes.channels || [];
-  } catch (err) { error = err.message; }
+  } catch (err) {
+    videoError = err;
+  }
+
+  const backendBanner = backendStatus === 'unreachable' ? `
+    <div style="background:rgba(255,165,0,0.08);border:1px solid rgba(255,165,0,0.25);border-radius:10px;padding:14px 16px;margin-bottom:var(--space-lg);display:flex;align-items:center;gap:10px">
+      <span style="font-size:1.2rem">⚠️</span>
+      <span>
+        <strong style="color:var(--neon-orange)">AVENORA backend is temporarily unavailable.</strong>
+        The Render service may be starting up (cold start takes ~30 s on the free plan).
+        Video data is loaded from Supabase directly. Delete operations require the backend — please retry in a moment.
+        <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="adminSection('videos')">🔄 Retry</button>
+      </span>
+    </div>
+  ` : '';
+
+  const errorBanner = videoError ? `
+    <div style="background:rgba(255,51,68,0.08);border:1px solid rgba(255,51,68,0.2);border-radius:10px;padding:16px;margin-bottom:var(--space-lg)">
+      <strong style="color:var(--neon-red)">Video data unavailable.</strong>
+      <span style="color:var(--text-secondary);font-size:0.875rem;margin-left:6px">${escapeHtml(videoError.message || 'Unknown error')}</span>
+      <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="adminSection('videos')">🔄 Retry</button>
+    </div>
+  ` : '';
 
   container.innerHTML = `
     <h2 style="font-family:var(--font-display);letter-spacing:0.1em;margin-bottom:var(--space-xl);color:var(--neon-blue)">
       🎬 AVENORA VIDEO — Video Management
     </h2>
 
-    ${error ? `
-      <div style="background:rgba(255,51,68,0.08);border:1px solid rgba(255,51,68,0.2);border-radius:10px;padding:16px;margin-bottom:var(--space-lg)">
-        <strong style="color:var(--neon-red)">Video data unavailable.</strong> Check your connection or server status.
-      </div>
-    ` : ''}
+    ${backendBanner}
+    ${errorBanner}
 
     <!-- Stats -->
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:var(--space-md);margin-bottom:var(--space-xl)">
       <div class="card" style="text-align:center">
-        <div style="font-family:var(--font-display);font-size:1.8rem;font-weight:700;color:var(--neon-blue)">${formatCount(videos.length)}</div>
+        <div style="font-family:var(--font-display);font-size:1.8rem;font-weight:700;color:var(--neon-blue)" id="admin-vid-count">${formatCount(videos.length)}</div>
         <div style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted)">Videos</div>
       </div>
       <div class="card" style="text-align:center">
         <div style="font-family:var(--font-display);font-size:1.8rem;font-weight:700;color:var(--neon-green)">${formatCount(channels.length)}</div>
         <div style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted)">Channels</div>
       </div>
+      <div class="card" style="text-align:center">
+        <div style="display:flex;align-items:center;justify-content:center;gap:6px">
+          <span style="width:8px;height:8px;border-radius:50%;background:${backendStatus === 'ok' ? 'var(--neon-green)' : backendStatus === 'unreachable' ? 'var(--neon-orange)' : 'var(--text-muted)'}"></span>
+          <span style="font-size:0.82rem;color:var(--text-secondary)">
+            ${backendStatus === 'ok' ? 'Backend online' : backendStatus === 'unreachable' ? 'Backend offline' : 'Backend status unknown'}
+          </span>
+        </div>
+        <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px">avenora-backend.onrender.com</div>
+      </div>
     </div>
 
     <!-- Videos Table -->
     <div style="margin-bottom:var(--space-xl)">
-      <h3 style="font-family:var(--font-display);font-size:1rem;letter-spacing:0.08em;margin-bottom:var(--space-md)">RECENT UPLOADS</h3>
+      <h3 style="font-family:var(--font-display);font-size:1rem;letter-spacing:0.08em;margin-bottom:var(--space-md)">VIDEO LIBRARY</h3>
       ${videos.length === 0 ? `
-        <p style="color:var(--text-muted);text-align:center;padding:var(--space-xl)">No videos uploaded yet.</p>
+        <p style="color:var(--text-muted);text-align:center;padding:var(--space-xl)">No videos found.</p>
       ` : `
         <div style="overflow-x:auto">
           <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
@@ -505,7 +616,7 @@ async function renderAdminVideos(container) {
                 <th style="text-align:left;padding:10px;color:var(--text-muted);font-size:0.73rem;text-transform:uppercase;letter-spacing:0.06em">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody id="admin-videos-tbody">
               ${videos.map(v => {
                 const id = v._id || v.id;
                 return `
@@ -524,8 +635,7 @@ async function renderAdminVideos(container) {
                     </td>
                     <td style="padding:10px">
                       <div style="display:flex;gap:4px;flex-wrap:wrap">
-                        <button class="btn btn-ghost btn-sm" onclick="adminFeatureVideo('${id}')">★ Feature</button>
-                        <button class="btn btn-ghost btn-sm" style="color:var(--neon-red)" onclick="adminDeleteVideo('${id}')">Delete</button>
+                        <button class="btn btn-ghost btn-sm" id="admin-del-btn-${id}" onclick="adminDeleteVideo('${id}')">🗑 Delete</button>
                       </div>
                     </td>
                   </tr>
@@ -589,10 +699,16 @@ async function renderAdminVideos(container) {
 
 window.adminDeleteVideo = async function(videoId) {
   if (!confirm('Delete this video? This cannot be easily undone.')) return;
+
+  // Disable the delete button while the request is in-flight so the founder
+  // cannot double-click and cannot mistake silence for success.
+  const btn = document.getElementById(`admin-del-btn-${videoId}`);
+  if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+
+  let success = false;
   try {
     await LegendAPI.videos.deleteVideo(videoId);
-    Toast.success('Video deleted.');
-    document.getElementById(`admin-vid-row-${videoId}`)?.remove();
+    success = true;
   } catch (err) {
     // Log the real technical reason so it can be diagnosed in DevTools
     console.error('[AVN] Admin delete video error:', {
@@ -601,13 +717,47 @@ window.adminDeleteVideo = async function(videoId) {
       code:    err.code,
       message: err.message,
     });
-    // Surface a useful message to the UI
-    const userMsg = err.status === 401 ? 'Session expired — please sign in again.' :
-                    err.status === 403 ? 'Permission denied — only the founder can delete videos.' :
-                    err.status === 404 ? 'Video not found (already deleted?).' :
-                    err.status === 503 ? 'Storage service not configured. Check backend .env.' :
-                    err.message || 'Video could not be deleted. Please try again.';
-    Toast.error(userMsg);
+
+    // Classify the error into a user-readable message with actionable hints
+    let userMsg;
+    if (err.code === 'BACKEND_UNREACHABLE' || err.code === 'SERVICE_UNREACHABLE' || err.code === 'SERVICE_NOT_RUNNING') {
+      userMsg = 'AVENORA backend is temporarily unavailable (Render may be starting up). Please wait ~30 s and retry.';
+    } else if (err.status === 401) {
+      userMsg = 'Session expired — please sign in again (HTTP 401).';
+    } else if (err.status === 403) {
+      userMsg = 'Permission denied — only the founder can delete videos (HTTP 403).';
+    } else if (err.status === 404) {
+      userMsg = 'Video not found on the server (already deleted?) — HTTP 404.';
+    } else if (err.status === 500) {
+      userMsg = `Server error while deleting — HTTP 500. ${err.message || ''}`;
+    } else if (err.status === 503) {
+      userMsg = 'Storage service not configured on the backend — HTTP 503. Check backend .env (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY).';
+    } else {
+      userMsg = err.message || 'Video could not be deleted. Please try again.';
+    }
+
+    // Keep the video row visible; restore the button with a Retry option
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = '🗑 Delete';
+    }
+
+    // Show persistent toast with error details
+    Toast.error(`Delete failed: ${userMsg}`);
+    return; // do NOT remove the row
+  }
+
+  // Only reach here on confirmed server success — now update the UI
+  if (success) {
+    Toast.success('Video deleted successfully.');
+    const row = document.getElementById(`admin-vid-row-${videoId}`);
+    if (row) row.remove();
+    // Update visible count
+    const countEl = document.getElementById('admin-vid-count');
+    if (countEl) {
+      const current = parseInt(countEl.textContent.replace(/[^0-9]/g, ''), 10);
+      if (!isNaN(current) && current > 0) countEl.textContent = formatCount(current - 1);
+    }
   }
 };
 

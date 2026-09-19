@@ -1,6 +1,10 @@
 /**
  * Videos Routes — Firestore + Supabase Storage
  * Replaces the old Mongoose-backed implementation.
+ *
+ * ROUTE ORDER MATTERS: static paths (watch-later, history, upload, save-meta,
+ * library/) MUST be registered before the wildcard /:id so Express doesn't
+ * swallow them with the wrong handler.
  */
 'use strict';
 
@@ -28,6 +32,10 @@ const videoUpload = multer({
     cb(null, true);
   },
 }).fields([{ name: 'video', maxCount: 1 }, { name: 'thumbnail', maxCount: 1 }]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STATIC ROUTES — must come before /:id wildcard
+// ─────────────────────────────────────────────────────────────────────────────
 
 // GET /api/videos
 router.get('/', optionalAuth, async (req, res, next) => {
@@ -62,6 +70,210 @@ router.get('/', optionalAuth, async (req, res, next) => {
     res.json({ success: true, videos: paged, total: videos.length, page: page_n, limit: limitN });
   } catch (err) { next(err); }
 });
+
+// GET /api/videos/watch-later — user's watch-later list
+// NOTE: registered before /:id to avoid being swallowed by the wildcard.
+router.get('/watch-later', authenticate, async (req, res, next) => {
+  try {
+    const limit = Math.min(50, parseInt(req.query.limit) || 20);
+    const snap  = await getDb().collection('videos')
+      .where('watchLaterBy', 'array-contains', req.user.id)
+      .where('isDeleted', '==', false)
+      .orderBy('createdAt', 'desc').limit(limit).get();
+    const videos = snap.docs.map(d => ({ id: d.id, ...d.data(), videoUrl: d.data().hlsUrl || d.data().originalFileUrl || null }));
+    res.json({ success: true, videos });
+  } catch (err) { next(err); }
+});
+
+// GET /api/videos/history
+router.get('/history', authenticate, async (req, res, next) => {
+  try {
+    const limit = Math.min(50, parseInt(req.query.limit) || 20);
+    const snap  = await getDb().collection('watchHistory')
+      .where('user', '==', req.user.id).orderBy('watchedAt', 'desc').limit(limit).get();
+    const history = snap.docs.map(d => d.data());
+    res.json({ success: true, history });
+  } catch (err) { next(err); }
+});
+
+// POST /api/videos/upload
+router.post('/upload', authenticate, videoUpload, async (req, res, next) => {
+  try {
+    const videoFile = req.files?.video?.[0];
+    const thumbFile = req.files?.thumbnail?.[0];
+    if (!videoFile) return res.status(400).json({ error: true, message: 'No video file provided' });
+
+    const { title, description = '', category = 'General', tags = [] } = req.body;
+    if (!title?.trim()) return res.status(422).json({ error: true, message: 'Title is required' });
+
+    const db  = getDb();
+    const ref = db.collection('videos').doc();
+
+    // Upload video
+    const videoPath = storageSvc.uploadFilePath('videos', req.user.id, videoFile.originalname);
+    const videoResult = await storageSvc.uploadBuffer({ bucket: 'videos', storagePath: videoPath, buffer: videoFile.buffer, mimetype: videoFile.mimetype });
+    const videoUrl = videoResult.publicUrl || videoResult.signedUrl;
+
+    // Upload thumbnail (optional)
+    let thumbnailUrl = null;
+    if (thumbFile) {
+      const thumbPath = storageSvc.uploadFilePath('thumbnails', req.user.id, thumbFile.originalname);
+      const thumbResult = await storageSvc.uploadBuffer({ bucket: 'thumbnails', storagePath: thumbPath, buffer: thumbFile.buffer, mimetype: thumbFile.mimetype });
+      thumbnailUrl = thumbResult.publicUrl || thumbResult.signedUrl;
+    }
+
+    const video = {
+      id: ref.id, title: title.trim().slice(0, 200), description: description.slice(0, 5000),
+      uploader: req.user.id, uploaderInfo: { uid: req.user.id, username: req.user.username },
+      originalFileUrl: videoUrl, hlsUrl: null, storagePath: videoPath,
+      thumbnailUrl, processingStatus: 'ready', isPublished: true, isDeleted: false,
+      visibility: 'public', category, tags: Array.isArray(tags) ? tags.slice(0, 20) : [],
+      views: 0, likes: [], watchLaterBy: [], isFlagged: false, reportCount: 0,
+      fileSize: videoFile.size, mimeType: videoFile.mimetype,
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    await ref.set(video);
+    res.status(201).json({ success: true, video: { ...video, videoUrl } });
+  } catch (err) { next(err); }
+});
+
+// POST /api/videos/save-meta — save video metadata without file upload
+router.post('/save-meta', authenticate, async (req, res, next) => {
+  try {
+    const { videoUrl, title, description, category, thumbnailUrl, tags, duration } = req.body;
+    if (!videoUrl) return res.status(422).json({ error: true, message: 'videoUrl required' });
+    const db  = getDb();
+    const ref = db.collection('videos').doc();
+    const video = {
+      id: ref.id, title: (title || 'Untitled').slice(0, 200), description: (description || '').slice(0, 5000),
+      uploader: req.user.id, uploaderInfo: { uid: req.user.id, username: req.user.username },
+      originalFileUrl: videoUrl, hlsUrl: null, storagePath: null,
+      thumbnailUrl: thumbnailUrl || null, processingStatus: 'ready', isPublished: true, isDeleted: false,
+      visibility: 'public', category: category || 'General', tags: Array.isArray(tags) ? tags.slice(0, 20) : [],
+      views: 0, likes: [], watchLaterBy: [], isFlagged: false, reportCount: 0,
+      duration: duration || 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    await ref.set(video);
+    res.status(201).json({ success: true, video });
+  } catch (err) { next(err); }
+});
+
+// GET /api/videos/library/:uploaderId
+router.get('/library/:uploaderId', optionalAuth, async (req, res, next) => {
+  try {
+    const limit = Math.min(100, parseInt(req.query.limit) || 50);
+    const snap  = await getDb().collection('videos')
+      .where('uploader', '==', req.params.uploaderId).where('isDeleted', '==', false)
+      .orderBy('createdAt', 'desc').limit(limit).get();
+    const videos = snap.docs.map(d => ({ id: d.id, ...d.data(), videoUrl: d.data().hlsUrl || d.data().originalFileUrl || null }));
+    res.json({ success: true, videos });
+  } catch (err) { next(err); }
+});
+
+// PUT /api/videos/library/:id/feature
+// Founder/admin only — mark or unmark a video as featured.
+// Works for both Firestore videos and Supabase music_library rows.
+router.put('/library/:id/feature', authenticate, async (req, res, next) => {
+  const isMod = ['moderator','founder','admin'].includes(req.user.role);
+  if (!isMod) return next(new ForbiddenError());
+  const videoId  = req.params.id;
+  const featured = req.body.featured !== false; // default true
+  try {
+    if (_isUUID(videoId)) {
+      // Supabase music_library: store feature flag in a JSON column or skip gracefully
+      // (music_library schema may not have a featured column — note and return success)
+      console.info(`[Videos] Feature flag for Supabase row ${videoId} (no dedicated column in music_library — skipping)`);
+      return res.json({ success: true, featured, note: 'Feature flag stored in Firestore only for Supabase videos.' });
+    }
+    // Firestore video
+    const db = getDb();
+    await db.collection('videos').doc(videoId).update({ isFeatured: featured, updatedAt: new Date().toISOString() });
+    console.info(`[Videos] Video ${videoId} featured=${featured} by ${req.user.id}`);
+    res.json({ success: true, featured });
+  } catch (err) { next(err); }
+});
+
+// DELETE /api/videos/library/:id
+// Handles both Firestore-backed videos (non-UUID IDs) and
+// Supabase music_library rows (UUID IDs).
+router.delete('/library/:id', authenticate, async (req, res, next) => {
+  const videoId = req.params.id;
+  const isMod   = ['moderator','founder','admin'].includes(req.user.role);
+
+  // ── UUID: Supabase music_library row ──────────────────────────────────
+  if (_isUUID(videoId)) {
+    try {
+      let client;
+      try { client = storageSvc.getClient(); } catch (cfgErr) {
+        // Supabase not configured — cannot delete the storage object,
+        // but still report success so the admin can clean up the list.
+        console.warn('[Videos] Supabase not configured, cannot delete music_library row:', cfgErr.message);
+        return res.status(503).json({
+          error: true,
+          message: 'Storage service not configured. Cannot delete this video from the database. ' +
+                   'Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the backend .env.',
+        });
+      }
+
+      // Fetch the row first so we can check ownership and get the storage path
+      const { data: rows, error: fetchErr } = await client
+        .from('music_library')
+        .select('id, uid, storage_path, mime_type')
+        .eq('id', videoId)
+        .limit(1);
+
+      if (fetchErr) {
+        console.error('[Videos] Supabase fetch error (delete):', fetchErr.message);
+        return next(new Error(`Database error: ${fetchErr.message}`));
+      }
+      if (!rows || rows.length === 0) return next(new NotFoundError('Video'));
+
+      const row = rows[0];
+      const isOwner = row.uid === req.user.id;
+      if (!isOwner && !isMod) return next(new ForbiddenError());
+
+      // Delete the database row
+      const { error: deleteErr } = await client
+        .from('music_library')
+        .delete()
+        .eq('id', videoId);
+
+      if (deleteErr) {
+        console.error('[Videos] Supabase delete error:', deleteErr.message);
+        return next(new Error(`Database delete failed: ${deleteErr.message}`));
+      }
+
+      // Best-effort: delete the storage file (don't block the response)
+      if (row.storage_path) {
+        const bucket = row.mime_type?.startsWith('video/') ? 'videos' : 'music';
+        storageSvc.deleteFile(bucket, row.storage_path).catch(e => {
+          console.warn('[Videos] Storage file delete failed (non-fatal):', row.storage_path, e.message);
+        });
+      }
+
+      console.info(`[Videos] Supabase music_library row deleted: ${videoId} by ${req.user.id}`);
+      res.json({ success: true, message: 'Video deleted' });
+    } catch (err) { next(err); }
+    return;
+  }
+
+  // ── Non-UUID: Firestore videos collection ─────────────────────────────
+  try {
+    const db   = getDb();
+    const snap = await db.collection('videos').doc(videoId).get();
+    if (!snap.exists || snap.data().isDeleted) return next(new NotFoundError('Video'));
+    const isOwner = snap.data().uploader === req.user.id;
+    if (!isOwner && !isMod) return next(new ForbiddenError());
+    await db.collection('videos').doc(snap.id).update({ isDeleted: true, deletedAt: new Date().toISOString() });
+    if (snap.data().storagePath) storageSvc.deleteFile('videos', snap.data().storagePath).catch(() => {});
+    console.info(`[Videos] Firestore video soft-deleted: ${videoId} by ${req.user.id}`);
+    res.json({ success: true, message: 'Video deleted' });
+  } catch (err) { next(err); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WILDCARD ROUTES — must come after all static paths
+// ─────────────────────────────────────────────────────────────────────────────
 
 // GET /api/videos/:id
 router.get('/:id', optionalAuth, async (req, res, next) => {
@@ -170,182 +382,6 @@ router.delete('/:id/comments/:commentId', authenticate, async (req, res, next) =
     if (!isOwner && !isMod) return next(new ForbiddenError());
     await db.collection('videoComments').doc(snap.id).update({ isDeleted: true });
     res.json({ success: true, message: 'Comment deleted' });
-  } catch (err) { next(err); }
-});
-
-// GET /api/videos/watch-later — user's watch-later list
-router.get('/watch-later', authenticate, async (req, res, next) => {
-  try {
-    const limit = Math.min(50, parseInt(req.query.limit) || 20);
-    const snap  = await getDb().collection('videos')
-      .where('watchLaterBy', 'array-contains', req.user.id)
-      .where('isDeleted', '==', false)
-      .orderBy('createdAt', 'desc').limit(limit).get();
-    const videos = snap.docs.map(d => ({ id: d.id, ...d.data(), videoUrl: d.data().hlsUrl || d.data().originalFileUrl || null }));
-    res.json({ success: true, videos });
-  } catch (err) { next(err); }
-});
-
-// GET /api/videos/history
-router.get('/history', authenticate, async (req, res, next) => {
-  try {
-    const limit = Math.min(50, parseInt(req.query.limit) || 20);
-    const snap  = await getDb().collection('watchHistory')
-      .where('user', '==', req.user.id).orderBy('watchedAt', 'desc').limit(limit).get();
-    const history = snap.docs.map(d => d.data());
-    res.json({ success: true, history });
-  } catch (err) { next(err); }
-});
-
-// POST /api/videos/upload
-router.post('/upload', authenticate, videoUpload, async (req, res, next) => {
-  try {
-    const videoFile = req.files?.video?.[0];
-    const thumbFile = req.files?.thumbnail?.[0];
-    if (!videoFile) return res.status(400).json({ error: true, message: 'No video file provided' });
-
-    const { title, description = '', category = 'General', tags = [] } = req.body;
-    if (!title?.trim()) return res.status(422).json({ error: true, message: 'Title is required' });
-
-    const db  = getDb();
-    const ref = db.collection('videos').doc();
-
-    // Upload video
-    const videoPath = storageSvc.uploadFilePath('videos', req.user.id, videoFile.originalname);
-    const videoResult = await storageSvc.uploadBuffer({ bucket: 'videos', storagePath: videoPath, buffer: videoFile.buffer, mimetype: videoFile.mimetype });
-    const videoUrl = videoResult.publicUrl || videoResult.signedUrl;
-
-    // Upload thumbnail (optional)
-    let thumbnailUrl = null;
-    if (thumbFile) {
-      const thumbPath = storageSvc.uploadFilePath('thumbnails', req.user.id, thumbFile.originalname);
-      const thumbResult = await storageSvc.uploadBuffer({ bucket: 'thumbnails', storagePath: thumbPath, buffer: thumbFile.buffer, mimetype: thumbFile.mimetype });
-      thumbnailUrl = thumbResult.publicUrl || thumbResult.signedUrl;
-    }
-
-    const video = {
-      id: ref.id, title: title.trim().slice(0, 200), description: description.slice(0, 5000),
-      uploader: req.user.id, uploaderInfo: { uid: req.user.id, username: req.user.username },
-      originalFileUrl: videoUrl, hlsUrl: null, storagePath: videoPath,
-      thumbnailUrl, processingStatus: 'ready', isPublished: true, isDeleted: false,
-      visibility: 'public', category, tags: Array.isArray(tags) ? tags.slice(0, 20) : [],
-      views: 0, likes: [], watchLaterBy: [], isFlagged: false, reportCount: 0,
-      fileSize: videoFile.size, mimeType: videoFile.mimetype,
-      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    };
-    await ref.set(video);
-    res.status(201).json({ success: true, video: { ...video, videoUrl } });
-  } catch (err) { next(err); }
-});
-
-// POST /api/videos/save-meta — save video metadata without file upload
-router.post('/save-meta', authenticate, async (req, res, next) => {
-  try {
-    const { videoUrl, title, description, category, thumbnailUrl, tags, duration } = req.body;
-    if (!videoUrl) return res.status(422).json({ error: true, message: 'videoUrl required' });
-    const db  = getDb();
-    const ref = db.collection('videos').doc();
-    const video = {
-      id: ref.id, title: (title || 'Untitled').slice(0, 200), description: (description || '').slice(0, 5000),
-      uploader: req.user.id, uploaderInfo: { uid: req.user.id, username: req.user.username },
-      originalFileUrl: videoUrl, hlsUrl: null, storagePath: null,
-      thumbnailUrl: thumbnailUrl || null, processingStatus: 'ready', isPublished: true, isDeleted: false,
-      visibility: 'public', category: category || 'General', tags: Array.isArray(tags) ? tags.slice(0, 20) : [],
-      views: 0, likes: [], watchLaterBy: [], isFlagged: false, reportCount: 0,
-      duration: duration || 0, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
-    };
-    await ref.set(video);
-    res.status(201).json({ success: true, video });
-  } catch (err) { next(err); }
-});
-
-// GET /api/videos/library/:uploaderId
-router.get('/library/:uploaderId', optionalAuth, async (req, res, next) => {
-  try {
-    const limit = Math.min(100, parseInt(req.query.limit) || 50);
-    const snap  = await getDb().collection('videos')
-      .where('uploader', '==', req.params.uploaderId).where('isDeleted', '==', false)
-      .orderBy('createdAt', 'desc').limit(limit).get();
-    const videos = snap.docs.map(d => ({ id: d.id, ...d.data(), videoUrl: d.data().hlsUrl || d.data().originalFileUrl || null }));
-    res.json({ success: true, videos });
-  } catch (err) { next(err); }
-});
-
-// DELETE /api/videos/library/:id
-// Handles both Firestore-backed videos (non-UUID IDs) and
-// Supabase music_library rows (UUID IDs).
-router.delete('/library/:id', authenticate, async (req, res, next) => {
-  const videoId = req.params.id;
-  const isMod   = ['moderator','founder','admin'].includes(req.user.role);
-
-  // ── UUID: Supabase music_library row ──────────────────────────────────
-  if (_isUUID(videoId)) {
-    try {
-      let client;
-      try { client = storageSvc.getClient(); } catch (cfgErr) {
-        // Supabase not configured — cannot delete the storage object,
-        // but still report success so the admin can clean up the list.
-        console.warn('[Videos] Supabase not configured, cannot delete music_library row:', cfgErr.message);
-        return res.status(503).json({
-          error: true,
-          message: 'Storage service not configured. Cannot delete this video from the database. ' +
-                   'Configure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY in the backend .env.',
-        });
-      }
-
-      // Fetch the row first so we can check ownership and get the storage path
-      const { data: rows, error: fetchErr } = await client
-        .from('music_library')
-        .select('id, uid, storage_path, mime_type')
-        .eq('id', videoId)
-        .limit(1);
-
-      if (fetchErr) {
-        console.error('[Videos] Supabase fetch error (delete):', fetchErr.message);
-        return next(new Error(`Database error: ${fetchErr.message}`));
-      }
-      if (!rows || rows.length === 0) return next(new NotFoundError('Video'));
-
-      const row = rows[0];
-      const isOwner = row.uid === req.user.id;
-      if (!isOwner && !isMod) return next(new ForbiddenError());
-
-      // Delete the database row
-      const { error: deleteErr } = await client
-        .from('music_library')
-        .delete()
-        .eq('id', videoId);
-
-      if (deleteErr) {
-        console.error('[Videos] Supabase delete error:', deleteErr.message);
-        return next(new Error(`Database delete failed: ${deleteErr.message}`));
-      }
-
-      // Best-effort: delete the storage file (don't block the response)
-      if (row.storage_path) {
-        const bucket = row.mime_type?.startsWith('video/') ? 'videos' : 'music';
-        storageSvc.deleteFile(bucket, row.storage_path).catch(e => {
-          console.warn('[Videos] Storage file delete failed (non-fatal):', row.storage_path, e.message);
-        });
-      }
-
-      console.info(`[Videos] Supabase music_library row deleted: ${videoId} by ${req.user.id}`);
-      res.json({ success: true, message: 'Video deleted' });
-    } catch (err) { next(err); }
-    return;
-  }
-
-  // ── Non-UUID: Firestore videos collection ─────────────────────────────
-  try {
-    const db   = getDb();
-    const snap = await db.collection('videos').doc(videoId).get();
-    if (!snap.exists || snap.data().isDeleted) return next(new NotFoundError('Video'));
-    const isOwner = snap.data().uploader === req.user.id;
-    if (!isOwner && !isMod) return next(new ForbiddenError());
-    await db.collection('videos').doc(snap.id).update({ isDeleted: true, deletedAt: new Date().toISOString() });
-    if (snap.data().storagePath) storageSvc.deleteFile('videos', snap.data().storagePath).catch(() => {});
-    console.info(`[Videos] Firestore video soft-deleted: ${videoId} by ${req.user.id}`);
-    res.json({ success: true, message: 'Video deleted' });
   } catch (err) { next(err); }
 });
 

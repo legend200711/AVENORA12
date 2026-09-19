@@ -157,10 +157,12 @@
   //   - service not reachable / wrong URL
   //   - CORS preflight failure (browser suppresses the response body)
   //   - no internet connection
+  //   - Render free-tier backend sleeping / cold-starting
   // We classify the error, log a diagnostic, and return a typed Error
   // so the UI can show a specific message instead of "Failed to fetch".
   function _diagNetworkError(networkErr, method, fullUrl) {
     const isLocalhost = fullUrl.includes('localhost') || fullUrl.includes('127.0.0.1');
+    const isRender    = fullUrl.includes('.onrender.com');
     const serviceHost = (() => {
       try { return new URL(fullUrl).origin; } catch { return fullUrl; }
     })();
@@ -168,6 +170,11 @@
     if (isLocalhost) {
       msg = `Service unavailable (local) — ${method} ${fullUrl}. ` +
             'Make sure the local service is running.';
+    } else if (isRender) {
+      msg = 'AVENORA backend is temporarily unavailable. ' +
+            'The Render service may be starting up (cold start takes ~30 s on the free plan). ' +
+            'Please wait a moment and retry. ' +
+            `(${method} ${serviceHost})`;
     } else {
       msg = `Cannot reach service — ${method} ${fullUrl}. ` +
             'Possible causes: (1) the service is not reachable, ' +
@@ -183,11 +190,14 @@
         requestUrl:    fullUrl,
         method,
         serviceHost,
+        isRender,
         fullMessage: msg,
       }
     );
     const err = new Error(msg);
-    err.code = isLocalhost ? 'SERVICE_NOT_RUNNING' : 'SERVICE_UNREACHABLE';
+    err.code = isLocalhost ? 'SERVICE_NOT_RUNNING'
+             : isRender    ? 'BACKEND_UNREACHABLE'
+             : 'SERVICE_UNREACHABLE';
     err.originalError = networkErr.message;
     return err;
   }
@@ -707,24 +717,77 @@
       const sid = String(id);
 
       // ── Path 1: backend is configured — use DELETE /api/videos/library/:id
-      //   This works for ALL video types (Supabase UUID rows AND Firestore docs)
-      //   because the backend uses its service-role key for Supabase and its
-      //   Firebase Admin-equivalent for Firestore.  This is the correct path for
-      //   founder/admin deletes coming from the admin panel.
+      //   This is the correct and only path for founder/admin deletes.
+      //   The backend uses its service-role key for Supabase and Firebase Admin
+      //   SDK for Firestore, so it can delete ANY video regardless of ownership.
+      //   We do NOT attempt any fallback on non-auth/non-404 errors: if the backend
+      //   is sleeping or unreachable the caller must see the real error and retry.
       if (BASE_URL) {
-        try {
-          const result = await del(`/videos/library/${encodeURIComponent(sid)}`);
-          console.info('[AVN] Video deleted via backend:', sid, result);
-          return { success: true };
-        } catch (backendErr) {
-          console.error('[AVN] Backend video delete error:', {
-            id: sid,
-            status: backendErr.status,
-            message: backendErr.message,
-            code: backendErr.code,
-          });
-          throw backendErr;
+        // Ensure the token is fresh before making the authenticated DELETE request
+        await _waitForAuthReady(5000);
+        let token = null;
+        if (window.AvenoraFirebase?.Auth) {
+          token = await window.AvenoraFirebase.Auth.getIdToken().catch(() => null);
         }
+        if (!token) token = TokenStore.getAccess();
+        if (!token) {
+          const authErr = new Error('Not authenticated — please sign in before deleting a video.');
+          authErr.status = 401;
+          authErr.code   = 'UNAUTHORIZED';
+          throw authErr;
+        }
+
+        const fullUrl  = `${BASE_URL}/videos/library/${encodeURIComponent(sid)}`;
+        const _aborter = new AbortController();
+        const _tid     = setTimeout(() => _aborter.abort(), 20000); // 20 s — backend may be cold-starting
+        let res;
+        try {
+          res = await fetch(fullUrl, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            signal: _aborter.signal,
+          });
+          clearTimeout(_tid);
+        } catch (networkErr) {
+          clearTimeout(_tid);
+          if (networkErr.name === 'AbortError') {
+            const timeoutErr = new Error(
+              'AVENORA backend is temporarily unavailable. The server may be starting up — please retry in ~30 s.'
+            );
+            timeoutErr.code          = 'BACKEND_UNREACHABLE';
+            timeoutErr.originalError = 'DELETE /api/videos/library timed out after 20 s';
+            console.error('[AVENORA] Video delete timeout:', { videoId: sid, url: fullUrl });
+            throw timeoutErr;
+          }
+          // "Failed to fetch" — network error or CORS block
+          const diagErr = _diagNetworkError(networkErr, 'DELETE', fullUrl);
+          console.error('[AVN] Backend video delete — network error:', {
+            id: sid, code: diagErr.code, message: diagErr.message,
+          });
+          throw diagErr;
+        }
+
+        // Parse the response body for rich error details
+        const contentType = res.headers.get('content-type') || '';
+        let data;
+        try {
+          data = contentType.includes('application/json') ? await res.json() : await res.text();
+        } catch { data = null; }
+
+        if (!res.ok) {
+          console.error('[AVN] Backend video delete error:', {
+            id: sid, status: res.status, statusText: res.statusText, body: data,
+          });
+          const serverMsg  = (data && typeof data === 'object' ? data.message : data) || res.statusText;
+          const err        = new Error(serverMsg || `Delete failed: HTTP ${res.status}`);
+          err.status       = res.status;
+          err.code         = (data && data.code) || (res.status === 401 ? 'UNAUTHORIZED' : res.status === 403 ? 'FORBIDDEN' : null);
+          err.serverResponse = data;
+          throw err;
+        }
+
+        console.info('[AVN] Video deleted via backend:', sid, data);
+        return { success: true };
       }
 
       // ── Path 2: no backend configured — direct Supabase DELETE for UUID rows.
@@ -795,7 +858,18 @@
     },
     restoreVideo: (id) => put(`/videos/${id}/restore`, {}),
     featureVideo: (id, featured = true) => {
-      if (_isUUID(String(id))) return Promise.resolve({ success: true });
+      // Supabase UUID IDs: feature flag is not supported via the anon key.
+      // Route through the backend (requires BASE_URL). If the backend is not
+      // configured or unavailable, warn and resolve gracefully rather than silently
+      // pretending it succeeded.
+      if (_isUUID(String(id))) {
+        if (BASE_URL) return put(`/videos/library/${encodeURIComponent(id)}/feature`, { featured }).catch(err => {
+          console.warn('[AVN] featureVideo backend error:', err.message);
+          throw err;
+        });
+        console.warn('[AVN] featureVideo: backend not configured — cannot feature Supabase video', id);
+        return Promise.resolve({ success: false, message: 'Feature flag not supported without backend' });
+      }
       return put(`/videos/${id}/feature`, { featured });
     },
     suspendChannel: (id, reason) => put(`/videos/channel/${id}/suspend`, { reason }),
