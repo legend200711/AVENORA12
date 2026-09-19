@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AVENORA</title>
+  <!--
+    SPA fallback for GitHub Pages.
+    Any request that GitHub Pages cannot resolve (e.g. /AVENORA12/some-deep-path)
+    lands here. We redirect back to the SPA root with the original path encoded
+    as a query parameter so the router can restore it if needed.
+
+    AVENORA uses hash-based routing (#hub, #social, etc.) so most navigation
+    never triggers this page. It is here as a safety net for direct URL access.
+  -->
+  <script>
+    // Encode the current path/search/hash and redirect to the SPA root.
+    // The SPA root (index.html) will pick up from the # fragment if present.
+    var l = window.location;
+    var seg = l.pathname.split('/').slice(0, 2).join('/');
+    // Preserve the hash so hash-based routes survive the redirect
+    var redirect = seg + '/?' + l.search.slice(1) + (l.hash ? '&' + l.hash.slice(1) : '') + '#' + l.pathname.slice(seg.length + 1) + (l.hash ? l.hash : '');
+    l.replace(seg + '/' + (l.hash || ''));
+  </script>
+</head>
+<body>
+  <p>Redirecting to <a href="/AVENORA12/">AVENORA</a>…</p>
+</body>
+</html>

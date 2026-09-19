@@ -15,7 +15,7 @@
 registerPage('cloudstream', {
   async render(container) {
     // Derive the base path so the iframe resolves correctly on any host
-    // (GitHub Pages: /AVENORA1/, local dev: /).
+    // (GitHub Pages: /AVENORA12/, local dev: /).
     const basePath = (window.AVENORA_BUILD && window.AVENORA_BUILD.basePath) || '/';
     // Build the src without escapeHtml — the path only contains safe URL characters.
     const src = basePath.replace(/\/$/, '') + '/cloud-stream/index.html';

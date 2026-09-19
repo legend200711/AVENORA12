@@ -44,8 +44,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v19';
-const CACHE_NAME  = 'avenora-cache-v19';
+const SW_VERSION  = 'v20';
+const CACHE_NAME  = 'avenora-cache-v20';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -70,6 +70,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v16', // v16 — evict: global cosmic design system, avenora-cosmic.css
   'avenora-cache-v17', // v17 — evict: Cloud Stream auth gate, queue advance, network retry fixes
   'avenora-cache-v18', // v18 — evict: 24-Hour Channel full implementation
+  'avenora-cache-v19', // v19 — evict: missing channel/radio pages in cache list
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
@@ -114,6 +115,8 @@ const STATIC_ASSETS = [
   `${BASE}/src/pages/social.js`,
   `${BASE}/src/pages/video.js`,
   `${BASE}/src/pages/live.js`,
+  `${BASE}/src/pages/channel.js`,
+  `${BASE}/src/pages/channelstudio.js`,
   `${BASE}/src/pages/cloudstream.js`,
   `${BASE}/src/pages/cloudstudio.js`,
   `${BASE}/cloud-stream/index.html`,
@@ -121,6 +124,8 @@ const STATIC_ASSETS = [
   `${BASE}/cloud-stream/js/cloud-stream.js`,
   `${BASE}/src/pages/dj.js`,
   `${BASE}/src/pages/music.js`,
+  `${BASE}/src/pages/radio.js`,
+  `${BASE}/src/pages/radioadmin.js`,
   `${BASE}/src/pages/arcade.js`,
   `${BASE}/src/pages/chat.js`,
   `${BASE}/src/pages/gallery.js`,
