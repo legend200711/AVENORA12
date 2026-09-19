@@ -784,15 +784,24 @@ function _chAdvanceTrackQueue() {
   _ch.trackIdx++;
 
   if (_ch.trackIdx >= _ch.trackQueue.length) {
-    // All tracks played — loop back to start
+    // All tracks played — start from the beginning of the same queue
+    // and keep playing. This prevents a permanent standby when the server
+    // hasn't advanced to a new item yet (same music block still active).
     _ch.trackIdx = 0;
-    // Clear the itemId so a fresh server state can replace the queue
-    // if the server advances to a different program
-    _ch._trackItemId = null;
     _ch._audioUrl = null;
-    // Show standby briefly; the Firestore subscription will push the next state
-    _chShowState('standby');
-    _chSetText('ch-np-title', 'Loading next program…');
+    // Poll the server immediately to see if a new item has been queued.
+    // If the server still has the same item, we replay the queue from the top.
+    // If a new item arrived, _chPollNowPlaying / Firestore will push it.
+    clearTimeout(_ch.pollTimer);
+    _ch.pollTimer = setTimeout(_chPollNowPlaying, 500);
+    // Meanwhile, restart the queue from the beginning without entering standby
+    const first = _ch.trackQueue[0];
+    if (first) {
+      _chPlayQueuedTrack(first, 0);
+    } else {
+      _chShowState('standby');
+      _chSetText('ch-np-title', 'Loading next program…');
+    }
     return;
   }
 

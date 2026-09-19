@@ -76,7 +76,12 @@ jobs:
             frontend/src/pages/music.js \
             frontend/src/pages/social.js \
             frontend/icons/icon-192.png \
-            frontend/icons/icon-512.png; do
+            frontend/icons/icon-512.png \
+            frontend/live.html \
+            frontend/live.css \
+            frontend/live.js \
+            frontend/live-hub.html \
+            frontend/live-room.html; do
             if [ -f "$f" ]; then
               echo "  OK  $f"
             else
@@ -87,6 +92,18 @@ jobs:
 
           echo "=== SW VERSION ==="
           grep "const SW_VERSION\|const CACHE_NAME" frontend/sw.js
+
+          echo "=== DEAD REFERENCE CHECK ==="
+          for bad in snx-gifts.css cohost.css cohost.js snx-gifts.js snx-net.js; do
+            if grep -r --include="*.html" --include="*.js" --include="*.css" \
+               "\"${bad}\"\|'${bad}'\|src=${bad}\|href=${bad}\|import.*${bad}" \
+               frontend/ 2>/dev/null | grep -v "\.git"; then
+              echo "  FOUND dead reference to: ${bad}"
+              exit 1
+            else
+              echo "  CLEAN: no reference to ${bad}"
+            fi
+          done
 
       # ── 4. Upload artifact ─────────────────────────────────────────────────
       # Packages frontend/ (the real AVENORA app) as the Pages artifact.

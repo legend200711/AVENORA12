@@ -47,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v27';
-const CACHE_NAME  = 'avenora-cache-v27';
+const SW_VERSION  = 'v28';
+const CACHE_NAME  = 'avenora-cache-v28';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -81,6 +81,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v24', // v24 — evict: cloudRadioEngine require path fix, 404.html redirect
   'avenora-cache-v25', // v25 — evict: SW_UPDATED reload loop fix; bump to force fresh install
   'avenora-cache-v26', // v26 — evict: fix compat SDK calls in app.js + music.js; visibility passthrough
+  'avenora-cache-v27', // v27 — evict: remove snx-gifts/cohost refs, fix channel queue loop, live pages deployed
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
@@ -105,6 +106,12 @@ const STATIC_ASSETS = [
   `${BASE}/offline.html`,
   `${BASE}/404.html`,
   `${BASE}/manifest.json`,
+  // Standalone live pages (deployed inside frontend/)
+  `${BASE}/live.html`,
+  `${BASE}/live.css`,
+  `${BASE}/live.js`,
+  `${BASE}/live-hub.html`,
+  `${BASE}/live-room.html`,
   `${BASE}/src/styles/avenora-cosmic.css`,
   `${BASE}/src/styles/theme.css`,
   `${BASE}/src/styles/visual.css`,
