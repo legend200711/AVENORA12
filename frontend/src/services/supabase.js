@@ -65,8 +65,33 @@
           const publicUrl = _publicUrl(bucket, storagePath);
           resolve({ url: publicUrl, storagePath, bucket });
         } else {
-          let msg = `Upload failed (HTTP ${xhr.status})`;
-          try { msg = JSON.parse(xhr.responseText).message || msg; } catch {}
+          let rawMsg = '';
+          try { rawMsg = JSON.parse(xhr.responseText).message || ''; } catch {}
+          let msg = rawMsg || `Upload failed (HTTP ${xhr.status})`;
+
+          // Supabase Storage returns this message when the bucket's fileSizeLimit
+          // is exceeded. Show an actionable message instead of the raw storage error.
+          if (
+            rawMsg.toLowerCase().includes('exceeded the maximum allowed size') ||
+            rawMsg.toLowerCase().includes('file size limit') ||
+            xhr.status === 413
+          ) {
+            const limitMB = bucket === 'videos' ? 500
+                          : bucket === 'music' || bucket === 'stream-media' ? 100
+                          : 20;
+            msg =
+              'Upload failed because the storage limit rejected this file. ' +
+              'Maximum allowed size for ' + bucket + ' is ' + limitMB + ' MB. ' +
+              'If your file is under ' + limitMB + ' MB, the bucket limit may need ' +
+              'to be updated — run scripts/fix-video-bucket-limit.js.';
+            const err = new Error(msg);
+            err.code = 'FILE_TOO_LARGE_FOR_STORAGE';
+            err.limitMB = limitMB;
+            console.error(`[AvenoraStorage] ${msg}`);
+            reject(err);
+            return;
+          }
+
           if (xhr.status === 400 && msg.toLowerCase().includes('policy')) {
             msg =
               'Upload blocked by storage policy. ' +
@@ -196,7 +221,7 @@
 
     async uploadVideo(file, onProgress) {
       if (!file.type.startsWith('video/')) throw new Error('File must be a video file (MP4, WebM, MOV, AVI).');
-      if (file.size > 2 * 1024 * 1024 * 1024) throw new Error('Video must be under 2 GB');
+      if (file.size > 500 * 1024 * 1024) throw new Error('Video is too large. Maximum video size is 500 MB.');
       return this.upload('video', file, onProgress);
     },
 
@@ -312,7 +337,7 @@
      */
     async uploadVideoWithMeta(videoFile, thumbnailFile, meta = {}, onProgress) {
       if (!videoFile.type.startsWith('video/')) throw new Error('File must be a video file (MP4, WebM, MOV, AVI).');
-      if (videoFile.size > 2 * 1024 * 1024 * 1024) throw new Error('Video must be under 2 GB');
+      if (videoFile.size > 500 * 1024 * 1024) throw new Error('Video is too large. Maximum video size is 500 MB.');
       const uid = _requireUid('upload a video');
 
       // Upload video

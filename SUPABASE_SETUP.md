@@ -235,15 +235,44 @@ For the `avatars` bucket also add `Authorization` to `allowedHeaders`.
 
 ## 8. Large video upload support
 
-The backend uploads videos server-side via the Supabase JS SDK using stream
-piping. Supabase Storage supports files up to **5 GB** by default.
+AVENORA uploads videos **directly from the browser** to Supabase Storage using
+the anon key and XHR. No backend server is involved in the file transfer.
 
-To support videos larger than 50 MB reliably:
-1. In **Storage → Settings**, ensure **"Resumable uploads"** is enabled (it is
-   by default for projects created after 2023).
-2. Set `MAX_FILE_SIZE_MB=500` in `backend/.env` (or higher if needed).
-3. The frontend uses `XMLHttpRequest` with `upload.onprogress` to track progress
-   before handing off to the backend API.
+Supabase Storage enforces file size at the **bucket level** via `fileSizeLimit`.
+If a bucket was created without this setting it inherits the plan default
+(typically **50 MB**), which causes the error:
+
+> "The object exceeded the maximum allowed size"
+
+### One-time fix for existing buckets
+
+Run the fix script once to set the correct limits on all existing buckets:
+
+```bash
+SUPABASE_URL=https://licuiqxkkfboqezzmsqu.supabase.co \
+SUPABASE_SERVICE_ROLE_KEY=<your-service-role-key> \
+node scripts/fix-video-bucket-limit.js
+```
+
+Alternatively, from the **Supabase Dashboard**:
+1. Go to **Storage → Buckets → videos**
+2. Click **Edit bucket**
+3. Set **"File size limit"** to `524288000` (500 MB in bytes)
+4. Save
+
+### Bucket limits (as configured in this project)
+
+| Bucket | Limit |
+|--------|-------|
+| `videos` | **500 MB** |
+| `stream-media` | 500 MB |
+| `music` | 100 MB |
+| `gallery` | 20 MB |
+| `thumbnails` | 20 MB |
+| `avatars` | 10 MB |
+
+These limits are enforced automatically by `ensureBuckets()` in
+`backend/src/services/storage/supabaseStorage.js` on every backend startup.
 
 ---
 

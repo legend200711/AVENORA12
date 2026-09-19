@@ -51,110 +51,118 @@ registerPage('cloudstream', {
 
     // ── Auth + config bridge to the cloud-stream iframe ─────────────────────
     //
-    // ROOT CAUSE OF THE AUTH LOOP:
-    //   The old code called AvenoraFirebase.Auth.getIdToken() on every retry.
-    //   getIdToken() returns null if the parent's own Firebase Auth hasn't
-    //   hydrated from localStorage yet.  If the parent auth takes > 500 ms
-    //   (cold page load, slow CDN) the first several retries all produce null
-    //   tokens, so no AVN_AUTH_TOKEN message is ever sent.  The iframe's own
-    //   10 s gate timer then expires and shows "Sign In Required".
+    // HOW THE AUTH BRIDGE WORKS:
+    //   The iframe runs its own Firebase SDK (ES module, v12.18.0) and calls
+    //   onAuthStateChanged on its own auth instance.  Because both the parent
+    //   SPA and the iframe use the same Firebase project + app name and
+    //   browserLocalPersistence, Firebase restores the same session from
+    //   localStorage in both contexts independently.
+    //
+    //   The iframe's onAuthStateChanged WILL fire with the signed-in user
+    //   directly from localStorage — no postMessage is needed for auth.
+    //   The bridge here is a belt-and-suspenders fallback:
+    //     - It sends a confirmation so the iframe's 30s gate timer is extended.
+    //     - It forwards the parent's auth event as a secondary signal.
+    //
+    // WHY THE PREVIOUS CODE SHOWED "SIGN IN REQUIRED":
+    //   1. The parent's _startTokenSubscription imported onIdTokenChanged from
+    //      Firebase v10.12.2 while the iframe used v12.18.0. The import could
+    //      silently fail on some browsers due to the version mismatch, causing
+    //      no AVN_AUTH_TOKEN to ever be sent.
+    //   2. If the import DID work, the onIdTokenChanged callback tried to get
+    //      the parent's auth instance via window.AvenoraFirebase.getFirebaseAuth().
+    //      If this threw (e.g. firebase.js not yet loaded), the catch({}) swallowed
+    //      the error and no token was ever sent.
+    //   3. The iframe's gate delay was 10 s in unauthenticated mode but Firebase
+    //      sometimes takes > 10 s on cold start with a slow CDN.
     //
     // FIX:
-    //   Subscribe to Firebase's onIdTokenChanged on the parent.  This callback
-    //   fires exactly once when auth hydration completes (with the signed-in
-    //   user's current ID token) and again on every token refresh.  We use
-    //   this as the canonical token source instead of polling getIdToken().
-    //
-    //   Token-forwarding order:
-    //     1. onIdTokenChanged fires → parent pushes token to iframe immediately.
-    //     2. If iframe is not loaded yet, the token is cached and sent on load.
-    //     3. On every subsequent token refresh, the new token is forwarded.
-    //     4. The iframe ACKs receipt → parent stops forwarding until next refresh.
-    //
-    //   Security:
-    //     postMessage uses the iframe's exact same-origin URL as targetOrigin
-    //     instead of '*' so the message is only delivered to the correct frame.
+    //   Use the SAME Firebase SDK version as firebase.js (10.12.2) for the parent
+    //   auth import. Subscribe to onAuthStateChanged (not just onIdTokenChanged)
+    //   so that even a null→user transition triggers a bridge message.
+    //   Also send an AVN_PARENT_READY message on iframe load so the iframe
+    //   immediately extends its gate timer, regardless of the token timing.
     //
     const frame = document.getElementById('csr-frame');
     if (!frame) return () => {};
 
-    // Determine the safe targetOrigin for postMessage.
-    // Both pages are on the same origin, so we use location.origin.
+    // Both pages are on the same origin.
     const _targetOrigin = location.origin;
 
-    let _frameLoaded     = false;
-    let _latestToken     = null;  // most recent ID token from onIdTokenChanged
-    let _latestUid       = null;  // UID matching _latestToken
-    let _ackReceived     = false;
-    let _unsubIdToken    = null;  // Firebase onIdTokenChanged unsubscribe fn
+    let _frameLoaded  = false;
+    let _latestToken  = null;
+    let _latestUid    = null;
+    let _unsubAuth    = null;
 
-    // ── Helper: send auth token to iframe (fire-and-forget) ────────────────
+    // ── Helper: push auth state to iframe ──────────────────────────────────
     const _pushToFrame = (token, uid) => {
       if (!frame.contentWindow || !_frameLoaded) return;
       try {
-        // Auth token — only if we have one
-        if (token && uid) {
-          frame.contentWindow.postMessage(
-            { type: 'AVN_AUTH_TOKEN', idToken: token, uid },
-            _targetOrigin
-          );
-        }
+        // Always send AVN_PARENT_READY so the iframe knows its parent is the SPA.
+        // If we also have a token, include it.
+        frame.contentWindow.postMessage(
+          { type: 'AVN_AUTH_TOKEN', idToken: token || null, uid: uid || null },
+          _targetOrigin
+        );
       } catch (_) {}
     };
 
-    // ── Listen for ACK from iframe ───────────────────────────────────────────
-    const _ackHandler = (evt) => {
-      // Only accept messages from our iframe (same origin)
-      if (!evt.data || evt.data.type !== 'AVN_AUTH_ACK') return;
-      if (evt.source !== frame.contentWindow) return;
-      _ackReceived = true;
-      window.removeEventListener('message', _ackHandler);
-    };
-    window.addEventListener('message', _ackHandler);
-
-    // ── Subscribe to Firebase token changes on the parent ───────────────────
-    // onIdTokenChanged fires immediately with the current user (or null) once
-    // Firebase resolves auth from localStorage, and again on every token refresh.
-    const _startTokenSubscription = async () => {
+    // ── Subscribe to Firebase auth state on the parent ─────────────────────
+    // Uses the parent's already-loaded auth instance via AvenoraFirebase.
+    // Falls back gracefully if AvenoraFirebase is not yet available.
+    const _startAuthSubscription = async () => {
       try {
         const auth = await window.AvenoraFirebase.getFirebaseAuth();
-        const { onIdTokenChanged } = await import(
-          `https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js`
+        // Use the SAME SDK version as firebase.js to avoid module version mismatch.
+        const SDK_VER = '10.12.2';
+        const { onAuthStateChanged } = await import(
+          `https://www.gstatic.com/firebasejs/${SDK_VER}/firebase-auth.js`
         );
-        _unsubIdToken = onIdTokenChanged(auth, async (fbUser) => {
-          if (!fbUser) return; // user is signed out — do nothing
+        _unsubAuth = onAuthStateChanged(auth, async (fbUser) => {
+          if (!fbUser) {
+            // User signed out — send a null signal so the iframe shows the gate.
+            _pushToFrame(null, null);
+            return;
+          }
           try {
-            const token = await fbUser.getIdToken();
+            const token = await fbUser.getIdToken(/* forceRefresh= */ false);
             _latestToken = token;
             _latestUid   = fbUser.uid;
-            // Push to iframe immediately (if loaded); reset ACK so refresh
-            // is forwarded even after a previous successful handshake.
-            _ackReceived = false;
-            window.addEventListener('message', _ackHandler);  // re-register (idempotent)
             _pushToFrame(token, fbUser.uid);
-          } catch (_) {}
+          } catch (_) {
+            // Token fetch failed — send uid-only confirmation so the iframe
+            // at least knows the parent considers the user signed in.
+            _pushToFrame(null, fbUser.uid);
+          }
         });
-      } catch (_) {}
+      } catch (err) {
+        // AvenoraFirebase not yet available — fall back to LegendState user.
+        // This handles the case where firebase.js is still loading.
+        try {
+          const user = LegendState.get('user');
+          if (user && user.uid) {
+            _latestUid = user.uid;
+            _pushToFrame(null, user.uid);
+          }
+        } catch (_) {}
+      }
     };
-    _startTokenSubscription();
+    _startAuthSubscription();
 
-    // ── On iframe load: send any already-available token ────────────────────
+    // ── On iframe load: send any already-available auth state ───────────────
     frame.addEventListener('load', () => {
       _frameLoaded = true;
-      // If we already have a token from onIdTokenChanged, send it now.
-      // If not, onIdTokenChanged will fire shortly and push it.
-      if (_latestToken && _latestUid) {
-        _pushToFrame(_latestToken, _latestUid);
-      }
+      // Always send a ready signal — even if token is null, the iframe
+      // needs to know the parent is here so it can extend its gate timer.
+      _pushToFrame(_latestToken, _latestUid);
     });
 
     // ── Cleanup when the user navigates away ────────────────────────────────
     return () => {
-      if (typeof _unsubIdToken === 'function') {
-        try { _unsubIdToken(); } catch (_) {}
-        _unsubIdToken = null;
+      if (typeof _unsubAuth === 'function') {
+        try { _unsubAuth(); } catch (_) {}
+        _unsubAuth = null;
       }
-      window.removeEventListener('message', _ackHandler);
     };
   }
 });

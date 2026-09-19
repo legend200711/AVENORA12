@@ -18,7 +18,7 @@ const ALLOWED_IMAGE_MIME = new Set(['image/jpeg','image/png','image/webp']);
 
 const videoUpload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 2 * 1024 * 1024 * 1024 },
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500 MB — matches Supabase videos bucket limit
   fileFilter(req, file, cb) {
     if (file.fieldname === 'video'     && !ALLOWED_VIDEO_MIME.has(file.mimetype)) return cb(new ValidationError('Unsupported video format.'));
     if (file.fieldname === 'thumbnail' && !ALLOWED_IMAGE_MIME.has(file.mimetype)) return cb(new ValidationError('Thumbnail must be JPG, PNG, or WebP.'));

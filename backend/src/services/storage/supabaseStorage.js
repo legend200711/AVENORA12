@@ -65,13 +65,23 @@ function getClient() {
 }
 
 // ─── Bucket definitions ────────────────────────────────────────────────────
+// fileSizeLimit is in bytes. Supabase Storage enforces this at the bucket level
+// and returns "The object exceeded the maximum allowed size" if exceeded.
+// The videos bucket must allow at least 500 MB so 75+ MB uploads succeed.
+const VIDEO_MAX_BYTES   = 500 * 1024 * 1024; // 500 MB
+const MUSIC_MAX_BYTES   = 100 * 1024 * 1024; // 100 MB
+const IMAGE_MAX_BYTES   =  20 * 1024 * 1024; //  20 MB
+const AVATAR_MAX_BYTES  =  10 * 1024 * 1024; //  10 MB
+const THUMB_MAX_BYTES   =  20 * 1024 * 1024; //  20 MB
+const STREAM_MAX_BYTES  = 500 * 1024 * 1024; // 500 MB
+
 const BUCKETS = {
-  avatars:       { name: 'avatars',      public: false },
-  gallery:       { name: 'gallery',      public: true  },
-  music:         { name: 'music',        public: true  },
-  videos:        { name: 'videos',       public: true  },
-  thumbnails:    { name: 'thumbnails',   public: true  },
-  'stream-media':{ name: 'stream-media', public: true  },
+  avatars:       { name: 'avatars',      public: false, fileSizeLimit: AVATAR_MAX_BYTES  },
+  gallery:       { name: 'gallery',      public: true,  fileSizeLimit: IMAGE_MAX_BYTES   },
+  music:         { name: 'music',        public: true,  fileSizeLimit: MUSIC_MAX_BYTES   },
+  videos:        { name: 'videos',       public: true,  fileSizeLimit: VIDEO_MAX_BYTES   },
+  thumbnails:    { name: 'thumbnails',   public: true,  fileSizeLimit: THUMB_MAX_BYTES   },
+  'stream-media':{ name: 'stream-media', public: true,  fileSizeLimit: STREAM_MAX_BYTES  },
 };
 
 const SIGNED_URL_EXPIRY_SECS = 60 * 60 * 24 * 7; // 7 days
@@ -201,7 +211,11 @@ async function listFiles(bucket, prefix = '') {
 }
 
 /**
- * Ensure all required buckets exist.
+ * Ensure all required buckets exist with the correct settings.
+ * Sets fileSizeLimit on every bucket so Supabase enforces our limits instead of
+ * the plan default (~50 MB), which was the root cause of the
+ * "object exceeded the maximum allowed size" error on 75+ MB videos.
+ *
  * Call once on startup (safe to call multiple times).
  */
 async function ensureBuckets() {
@@ -211,32 +225,47 @@ async function ensureBuckets() {
   for (const [key, cfg] of Object.entries(BUCKETS)) {
     const { data: existing } = await client.storage.getBucket(cfg.name);
     if (!existing) {
-      // No fileSizeLimit set here — let Supabase use the project/plan default.
-      // File-size validation is enforced at the route level (multer limits).
       const { error } = await client.storage.createBucket(cfg.name, {
         public: cfg.public,
+        fileSizeLimit: cfg.fileSizeLimit,
         allowedMimeTypes: null,
       });
       if (error && error.message !== 'Bucket already exists') {
         logger.warn(`[SupabaseStorage] Could not create bucket "${cfg.name}": ${error.message}`);
       } else {
-        logger.info(`[SupabaseStorage] Bucket ready: ${cfg.name} (public=${cfg.public})`);
+        logger.info(
+          `[SupabaseStorage] Bucket ready: ${cfg.name} ` +
+          `(public=${cfg.public}, limit=${Math.round(cfg.fileSizeLimit / 1024 / 1024)} MB)`
+        );
       }
     } else {
-      // Bucket exists — ensure its public setting matches the current config.
-      // This corrects buckets that were previously created with the wrong setting
-      // (e.g. music/videos that were accidentally created as private).
-      if (existing.public !== cfg.public) {
+      // Bucket exists — always sync public setting AND fileSizeLimit to match config.
+      // This is the fix for existing buckets that were created without a fileSizeLimit
+      // (inheriting the plan default of ~50 MB), which caused the upload failure.
+      const needsUpdate =
+        existing.public !== cfg.public ||
+        existing.file_size_limit !== cfg.fileSizeLimit;
+
+      if (needsUpdate) {
         const { error: updateErr } = await client.storage.updateBucket(cfg.name, {
           public: cfg.public,
+          fileSizeLimit: cfg.fileSizeLimit,
         });
         if (updateErr) {
-          logger.warn(`[SupabaseStorage] Could not update bucket "${cfg.name}" public=${cfg.public}: ${updateErr.message}`);
+          logger.warn(
+            `[SupabaseStorage] Could not update bucket "${cfg.name}": ${updateErr.message}`
+          );
         } else {
-          logger.info(`[SupabaseStorage] Bucket "${cfg.name}" updated to public=${cfg.public}`);
+          logger.info(
+            `[SupabaseStorage] Bucket "${cfg.name}" updated: ` +
+            `public=${cfg.public}, limit=${Math.round(cfg.fileSizeLimit / 1024 / 1024)} MB`
+          );
         }
       } else {
-        logger.info(`[SupabaseStorage] Bucket already exists: ${cfg.name} (public=${cfg.public})`);
+        logger.info(
+          `[SupabaseStorage] Bucket OK: ${cfg.name} ` +
+          `(public=${cfg.public}, limit=${Math.round(cfg.fileSizeLimit / 1024 / 1024)} MB)`
+        );
       }
     }
   }

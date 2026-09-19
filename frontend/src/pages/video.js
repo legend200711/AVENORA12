@@ -1597,8 +1597,10 @@ window.somRetryMetadata = async function () {
 function initUploadForm() {
   const ALLOWED_VIDEO_TYPES = ['video/mp4','video/webm','video/ogg','video/quicktime','video/x-msvideo'];
   const ALLOWED_THUMB_TYPES = ['image/jpeg','image/png','image/webp'];
-  const MAX_VIDEO_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
-  const MAX_THUMB_BYTES = 5 * 1024 * 1024;         // 5 MB
+  // Application-level video size limit. Supabase Storage is configured to 500 MB.
+  // Files above this limit are rejected before any upload attempt begins.
+  const MAX_VIDEO_BYTES = 500 * 1024 * 1024;        // 500 MB
+  const MAX_THUMB_BYTES = 5 * 1024 * 1024;           // 5 MB
 
   let selectedVideoFile = null;
 
@@ -1628,7 +1630,8 @@ function initUploadForm() {
       return `Unsupported format: ${file.type || 'unknown'}. Use MP4, WebM, MOV, or AVI.`;
     }
     if (file.size > MAX_VIDEO_BYTES) {
-      return `File too large: ${(file.size / 1024 / 1024 / 1024).toFixed(2)} GB. Maximum is 2 GB.`;
+      return `Video is too large. Maximum video size is 500 MB. ` +
+             `Your file is ${(file.size / 1024 / 1024).toFixed(1)} MB.`;
     }
     if (file.size === 0) return 'File is empty. Please select a valid video.';
     return null;
@@ -1810,7 +1813,15 @@ function initUploadForm() {
       let errMsg = err.message || 'Your video could not be uploaded. Please try again.';
       let retryHtml = '';
 
-      if (err.code === 'BACKEND_NOT_CONFIGURED' || err.code === 'API_NOT_CONFIGURED') {
+      if (err.code === 'FILE_TOO_LARGE_FOR_STORAGE') {
+        // Storage bucket rejected the file — happens when bucket limit < file size.
+        // Our videos bucket is configured to 500 MB; this path means the bucket
+        // was not yet updated. Show a clear actionable message.
+        errMsg = 'Upload failed because the storage limit rejected this file. ' +
+                 'Maximum video size is 500 MB. ' +
+                 'If this video is under 500 MB, the storage bucket limit needs to be ' +
+                 'updated — run scripts/fix-video-bucket-limit.js.';
+      } else if (err.code === 'BACKEND_NOT_CONFIGURED' || err.code === 'API_NOT_CONFIGURED') {
         errMsg = 'Video upload service is not configured. Please use Supabase Storage for uploads.';
       } else if (err.code === 'SERVICE_NOT_RUNNING' || err.code === 'SERVICE_UNREACHABLE') {
         errMsg = 'Cannot reach the upload service. ' +
@@ -1841,6 +1852,10 @@ function initUploadForm() {
           <p style="font-size:0.82rem;color:var(--text-secondary)">${escapeHtml(errMsg)}</p>
           <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
             ${retryHtml}
+            <button class="btn btn-primary btn-sm"
+                    onclick="document.getElementById('som-upload-result').style.display='none';document.getElementById('som-upload-btn').disabled=false;document.getElementById('som-upload-btn').textContent='UPLOAD VIDEO'">
+              Retry
+            </button>
             <button class="btn btn-outline btn-sm"
                     onclick="document.getElementById('som-upload-result').style.display='none'">Dismiss</button>
           </div>

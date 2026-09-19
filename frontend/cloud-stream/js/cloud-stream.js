@@ -152,6 +152,43 @@ async function _startApp(user) {
 
   _setAuthBadge(_userData ? (_userData.displayName || _userData.username || 'You') : 'You');
 
+  // When embedded inside the SPA iframe, update the back button to use the
+  // parent's navigateTo() instead of a hard-coded URL.
+  const isEmbedded = window.parent && window.parent !== window;
+  if (isEmbedded) {
+    const backBtn = _el('csrBackBtn');
+    if (backBtn) {
+      backBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        try {
+          if (typeof window.parent.navigateTo === 'function') {
+            window.parent.navigateTo('hub');
+          } else {
+            window.parent.location.hash = '#cloudstream';
+          }
+        } catch(_) {
+          // cross-origin fallback (shouldn't happen — same origin)
+          window.location.href = '../index.html#cloudstream';
+        }
+      });
+    }
+    const authGateBackBtn = _el('csrAuthGateBackBtn');
+    if (authGateBackBtn) {
+      authGateBackBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        try {
+          if (typeof window.parent.navigateTo === 'function') {
+            window.parent.navigateTo('hub');
+          } else {
+            window.parent.location.hash = '#hub';
+          }
+        } catch(_) {
+          window.location.href = '../index.html#hub';
+        }
+      });
+    }
+  }
+
   const params = new URLSearchParams(window.location.search);
   const watchId = params.get('id') || params.get('watch') || params.get('stream');
 
@@ -182,30 +219,59 @@ window.addEventListener('message', async (event) => {
     }
 
     if (event.data.type === 'AVN_AUTH_TOKEN') {
-      // Acknowledge so the parent stops retrying.
-      if (event.source) {
-        try { event.source.postMessage({ type: 'AVN_AUTH_ACK' }, '*'); } catch(_) {}
-      }
+      // Parent SPA has confirmed its auth state.
+      // Even if idToken is null, uid being present means the parent sees a signed-in user.
+      // This clears the gate timer so we don't show "Sign In Required" prematurely.
       _parentConfirmedAuth = true;
       if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
       if (!_appInitialised) {
         _show('csrLoading', true);
         _show('csrAuthGate', false);
-        if (_auth.currentUser) await _startApp(_auth.currentUser);
+        // Firebase auth resolves from localStorage independently in the iframe.
+        // If currentUser is already available, start now; otherwise wait for
+        // onAuthStateChanged which will fire shortly.
+        if (_auth.currentUser) {
+          await _startApp(_auth.currentUser);
+        } else if (event.data.uid) {
+          // Parent confirmed a signed-in user but the iframe's Firebase hasn't
+          // resolved yet. Wait up to 8 s for onAuthStateChanged before giving up.
+          let _waitAttempts = 0;
+          const _waitForAuth = setInterval(async () => {
+            _waitAttempts++;
+            if (_auth.currentUser) {
+              clearInterval(_waitForAuth);
+              if (!_appInitialised) await _startApp(_auth.currentUser);
+            } else if (_waitAttempts >= 16) {
+              clearInterval(_waitForAuth);
+              // Still no user after 8 s — show gate so user can tap "Back to Avenora"
+              if (!_appInitialised) {
+                _show('csrLoading', false);
+                _show('csrAuthGate', true);
+              }
+            }
+          }, 500);
+        }
       }
     }
   } catch (_) {}
 });
 
 onAuthStateChanged(_auth, async user => {
+  // Any auth state change cancels the gate timer.
   if (_authGateTimer) { clearTimeout(_authGateTimer); _authGateTimer = null; }
 
   if (user) {
+    // Signed-in user found — start the app regardless of parent signal.
     await _startApp(user);
   } else if (!_appInitialised) {
-    // Standalone page: show loading, then gate after delay.
-    // When embedded in the SPA, _parentConfirmedAuth prevents the gate.
-    const gateDelay = _parentConfirmedAuth ? 30000 : 10000;
+    // No user yet. Firebase may still be resolving from localStorage.
+    // Give Firebase a generous grace period before showing the auth gate:
+    //   - 30 s when embedded in the SPA (parent will have sent AVN_AUTH_TOKEN
+    //     if the user is logged in, which cancels this timer anyway).
+    //   - 15 s when opened as a standalone page.
+    // In practice, Firebase resolves from localStorage in < 2 s, so this timer
+    // only fires when the user is genuinely not signed in.
+    const gateDelay = _parentConfirmedAuth ? 60000 : 15000;
     _authGateTimer = setTimeout(() => {
       _authGateTimer = null;
       if (!_appInitialised && !_parentConfirmedAuth) {
@@ -856,7 +922,7 @@ window.csrSkipTrack = async function() {
       currentTrackId:  nextTrack.id        || '',
       currentTitle:    nextTrack.title     || '',
       currentArtist:   nextTrack.artist    || '',
-      currentTrackUrl: nextTrack.url       || '',
+      currentTrackUrl: nextTrack.url       || nextTrack.downloadURL || '',
       currentDuration: nextTrack.duration  || 0,
       trackStartedAt:  Date.now(),
       currentElapsed:  0,
@@ -880,8 +946,12 @@ window.csrScrollToStream = function() {
   if (el) el.scrollIntoView({ behavior: 'smooth' });
 };
 window.csrScrollToPlaylist = function() {
-  // Navigate back to the 24-Hour Studio page in the Avenora SPA
-  window.location.href = '/frontend/index.html#dj';
+  // Navigate to Creator Studio where playlists are managed.
+  // Use the SPA's navigateTo() if available (embedded mode), otherwise use hash navigation.
+  if (window.parent && window.parent !== window && typeof window.parent.navigateTo === 'function') {
+    try { window.parent.navigateTo('cloudstudio'); return; } catch(_) {}
+  }
+  window.location.href = '../index.html#cloudstudio';
 };
 window.csrOpenExistingStream = function() {
   _show('csrDuplicateWarn', false);
@@ -975,7 +1045,7 @@ async function _initListenerForStream(streamId, streamData) {
 
 function _syncListenerToNowPlaying(d) {
   if (!d) return;
-  const url    = d.currentTrackUrl  || '';
+  const url    = d.currentTrackUrl  || d.currentUrl || '';
   const title  = d.currentTitle     || '—';
   const artist = d.currentArtist    || '';
   const dur    = d.currentDuration  || 0;
@@ -1030,9 +1100,19 @@ function _loadAndPlayTrack(url, dur) {
   audio.addEventListener('timeupdate', _updatePlayerProgress);
   audio.addEventListener('ended', _onTrackEnded);
   audio.addEventListener('error', (e) => {
-    console.warn('[CSR] audio error for track:', url, e.target?.error?.message || '');
-    // Auto-advance to next track after a brief delay so listeners aren't stuck on a broken file
-    setTimeout(() => { if (_player.audio === audio) _autoAdvanceQueue(); }, 2000);
+    const code = e.target?.error?.code;
+    const msg  = e.target?.error?.message || 'unknown';
+    console.warn('[CSR] audio error for track (code=' + code + '):', url, msg);
+    // Skip to next track after a brief delay.
+    // Using _onTrackEnded() triggers the same flow as a natural track end,
+    // so the Firestore queue is advanced and all listeners get the next track.
+    setTimeout(() => {
+      if (_player.audio === audio) {
+        _stopProgressRaf();
+        _setPlayBtn(false);
+        _autoAdvanceQueue();
+      }
+    }, 1500);
   });
 
   // Always attempt autoplay — if blocked, show the play button so the user can start manually
@@ -1064,13 +1144,35 @@ function _onTrackEnded() {
  * When _engineRunning is true the server engine handles all track advancement;
  * the client must not interfere or they will race and cause double-skips.
  */
+/**
+ * Advance the Now Playing queue by one track.
+ *
+ * Architecture:
+ *   - When the server engine IS running (_engineRunning=true): the engine manages
+ *     all queue advancement server-side. Clients must not interfere.
+ *   - When the server engine is NOT running (Firebase-only / local mode):
+ *     The stream OWNER's client advances the Firestore queue when a track ends.
+ *     All other listeners receive the update via the Firestore onSnapshot and
+ *     start the next track automatically — they do NOT call this function.
+ *
+ *   If the owner's browser is closed: listeners' tracks will play to the end
+ *   but the queue won't advance because no client has write authority.
+ *   This is the correct behavior for a Firebase-only architecture — it avoids
+ *   multiple clients racing to write the queue simultaneously.
+ *
+ *   To keep the channel running without the owner's browser: use the backend
+ *   cloud radio engine (requires a backend deployment with /api/cloud-radio).
+ */
 async function _autoAdvanceQueue() {
+  // _streamId is only set for the stream OWNER (creator mode).
+  // Non-owner listeners have _streamId=null and should NOT write to Firestore.
   if (!_streamId || !_user) return;
 
   // If the server engine is running it manages the queue — do not write from client.
   if (_engineRunning) return;
 
-  // Only the stream owner auto-advances.
+  // Only the stream owner advances the queue.
+  // This prevents multiple browser tabs from racing.
   if (_streamData && _streamData.uid && _streamData.uid !== _user.uid) return;
 
   try {
@@ -1085,16 +1187,31 @@ async function _autoAdvanceQueue() {
     if (!queue.length) return;
 
     const currentIndex = typeof ms.queueIndex === 'number' ? ms.queueIndex : 0;
-    const nextIndex    = (currentIndex + 1) % queue.length;
-    const nextTrack    = queue[nextIndex] || {};
-    const afterNext    = queue[(nextIndex + 1) % queue.length] || {};
+
+    // Find the next VALID track (has a playable URL). Skip broken entries.
+    let nextIndex = currentIndex;
+    let tries = 0;
+    do {
+      nextIndex = (nextIndex + 1) % queue.length;
+      tries++;
+    } while (tries < queue.length && !(queue[nextIndex]?.url || queue[nextIndex]?.downloadURL));
+
+    const nextTrack = queue[nextIndex] || {};
+    // Skip if still no valid URL found (all tracks in queue are broken)
+    if (!nextTrack.url && !nextTrack.downloadURL) {
+      console.warn('[CSR] auto-advance: no valid tracks in queue');
+      return;
+    }
+
+    const afterNext  = queue[(nextIndex + 1) % queue.length] || {};
+    const trackUrl   = nextTrack.url || nextTrack.downloadURL || '';
 
     await updateDoc(musicRef, {
       queueIndex:       nextIndex,
       currentTrackId:   nextTrack.id        || '',
       currentTitle:     nextTrack.title     || '',
       currentArtist:    nextTrack.artist    || '',
-      currentTrackUrl:  nextTrack.url       || '',
+      currentTrackUrl:  trackUrl,
       currentDuration:  nextTrack.duration  || 0,
       trackStartedAt:   Date.now(),
       currentElapsed:   0,
