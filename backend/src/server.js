@@ -47,6 +47,7 @@ const radioRoutes       = require('./api/routes/radio');
 const radioEngine       = require('./services/stream/radioEngine');
 const liveRoutes = require('./api/routes/live');
 const pushRoutes = require('./api/routes/push');
+const mediaRoutes = require('./api/routes/media');
 
 // Middleware
 const { globalRateLimiter } = require('./api/middleware/rateLimiter');
@@ -174,6 +175,7 @@ app.use('/api/channel', channelRoutes);
 app.use('/api/radio', radioRoutes);
 app.use('/api/live', liveRoutes);
 app.use('/api/push', pushRoutes);
+app.use('/api/media', mediaRoutes);
 
 // ─── Public: Published Theme Tokens (no auth required) ───────
 // Returns only the CSS token values of the current live theme.
