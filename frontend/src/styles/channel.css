@@ -1061,6 +1061,21 @@
 .chs-empty-desc  { font-size: 0.78rem; line-height: 1.5; max-width: 340px; margin: 0 auto; }
 
 /* Unavailable block (when backend fails) */
+/* ── Stale-data banner (shown above cached data when backend is reconnecting) ── */
+.chs-stale-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  margin-bottom: 10px;
+  background: rgba(201,168,76,0.08);
+  border: 1px solid rgba(201,168,76,0.25);
+  border-radius: 6px;
+  font-size: 0.78rem;
+  color: rgba(201,168,76,0.80);
+  letter-spacing: 0.04em;
+}
+
 .chs-unavail-block {
   text-align: center;
   padding: 28px 20px;

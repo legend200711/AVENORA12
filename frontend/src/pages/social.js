@@ -930,7 +930,7 @@ const SNStories = {
 
     Modal.create({
       id: 'sn-story-viewer',
-      title: `@${escapeHtml(username)}'s Story`,
+      title: `${escapeHtml(username ? '@' + username + "'s Story" : "Story")}`,
       body: `<div id="sn-story-viewer-content" style="text-align:center">
         <div class="loading-state"><div class="spinner"></div></div>
       </div>`,
@@ -938,29 +938,52 @@ const SNStories = {
     });
     Modal.open('sn-story-viewer');
 
-    // Load and display the story media
-    LegendAPI.stories.byUser(LegendAPI.auth.getUser()?.id || '').then(() => {}).catch(() => {});
-    // Use Firestore to get the specific story
-    if (window.AvenoraFirebase?.Firestore) {
-      const db = window.AvenoraFirebase.Firestore;
+    // Load the story with a 10-second timeout — never leave the spinner spinning forever
+    const _storyTimeout = setTimeout(() => {
+      const c = document.getElementById('sn-story-viewer-content');
+      if (c && c.querySelector('.spinner')) {
+        c.innerHTML = `<div style="padding:24px 0">
+          <p style="color:var(--text-muted);margin-bottom:16px">This story is temporarily unavailable.</p>
+          <button class="btn btn-outline btn-sm" onclick="SNStories.view('${escapeHtml(storyId)}','${escapeHtml(username || '')}');Modal.close('sn-story-viewer')">↻ Retry</button>
+        </div>`;
+      }
+    }, 10000);
+
+    const _loadStory = async () => {
       const contentEl = document.getElementById('sn-story-viewer-content');
       if (!contentEl) return;
-      // Fetch all active stories to find this one
-      db.getStories(100).then(stories => {
+      try {
+        // Use Firestore to get the specific story
+        if (!window.AvenoraFirebase?.Firestore) throw new Error('Firestore not ready');
+        const db = window.AvenoraFirebase.Firestore;
+        const stories = await db.getStories(100);
+        clearTimeout(_storyTimeout);
         const story = stories.find(s => s.id === storyId);
-        if (!story || !contentEl) return;
+        const c = document.getElementById('sn-story-viewer-content');
+        if (!c) return;
+        if (!story) {
+          c.innerHTML = `<p style="color:var(--text-muted)">This story is no longer available.</p>`;
+          return;
+        }
         if (story.mediaType === 'image' || !story.mediaType) {
-          contentEl.innerHTML = `<img src="${escapeHtml(story.mediaUrl || '')}" style="max-width:100%;border-radius:8px;display:block;margin:0 auto" alt="Story image">
+          c.innerHTML = `<img src="${escapeHtml(story.mediaUrl || '')}" style="max-width:100%;border-radius:8px;display:block;margin:0 auto" alt="Story image">
             ${story.caption ? `<p style="margin-top:12px;color:var(--text-secondary);font-size:0.9rem">${escapeHtml(story.caption)}</p>` : ''}`;
         } else if (story.mediaType === 'video') {
-          contentEl.innerHTML = `<video src="${escapeHtml(story.mediaUrl || '')}" controls style="max-width:100%;border-radius:8px" playsinline></video>
+          c.innerHTML = `<video src="${escapeHtml(story.mediaUrl || '')}" controls style="max-width:100%;border-radius:8px" playsinline></video>
             ${story.caption ? `<p style="margin-top:12px;color:var(--text-secondary);font-size:0.9rem">${escapeHtml(story.caption)}</p>` : ''}`;
         }
-      }).catch(() => {
+      } catch (err) {
+        clearTimeout(_storyTimeout);
         const c = document.getElementById('sn-story-viewer-content');
-        if (c) c.innerHTML = `<p style="color:var(--text-muted)">This story is temporarily unavailable.</p>`;
-      });
-    }
+        if (c) {
+          c.innerHTML = `<div style="padding:24px 0">
+            <p style="color:var(--text-muted);margin-bottom:16px">This story is temporarily unavailable.</p>
+            <button class="btn btn-outline btn-sm" onclick="SNStories.view('${escapeHtml(storyId)}','${escapeHtml(username || '')}');Modal.close('sn-story-viewer')">↻ Retry</button>
+          </div>`;
+        }
+      }
+    };
+    _loadStory();
   },
 
   openCreate() {

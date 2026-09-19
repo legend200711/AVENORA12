@@ -298,7 +298,9 @@
     ────────────────────────────────────────────────────────────────
     Architecture: Firebase (Auth, Firestore, Realtime DB, Storage)
                 + Supabase (Storage, Edge Functions)
-    No external Render/Express backend is used or required.
+                + Render backend (Express / Node.js — channel API, auth bridge)
+    Render backend: https://avenora-backend.onrender.com
+    Channel Studio, Channel API, and live heartbeat all use the Render backend.
   -->
   <script>
     // ── Build / version metadata ──────────────────────────────
@@ -312,8 +314,8 @@
     };
 
     // ── Runtime API config ────────────────────────────────────
-    // Architecture: Firebase + Supabase only. No Render/Express backend.
-    // apiUrl is null — backend operations use Firebase and Supabase Edge Functions.
+    // Architecture: Firebase + Supabase + Render backend.
+    // The Render backend handles Channel API, auth verification, and channel engine.
     (function () {
       var _isPWA = window.matchMedia('(display-mode: standalone)').matches ||
                    window.navigator.standalone === true;

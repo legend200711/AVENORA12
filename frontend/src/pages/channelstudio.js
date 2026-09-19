@@ -375,10 +375,28 @@ const _chsState = {
   // Connection / retry state
   retryTimer:         null,
   retryCount:         0,
-  maxRetries:         8,
-  retryDelays:        [2000, 5000, 10000, 20000, 30000, 30000, 60000, 60000],
-  connState:          'idle', // idle | connecting | connected | offline
+  maxRetries:         10,
+  retryDelays:        [3000, 6000, 12000, 20000, 30000, 45000, 60000, 60000, 60000, 60000],
+  connState:          'idle', // idle | connecting | connected | reconnecting | offline
+  // Last-known-good cache keys
+  _cacheKeyProg:      'avn_chs_prog_cache',
+  _cacheKeyFallback:  'avn_chs_fallback_cache',
 };
+
+// ── localStorage cache helpers ────────────────────────────────────────────
+function _chsSaveCache(key, data) {
+  try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data })); } catch (_) {}
+}
+function _chsLoadCache(key) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    // Cache is valid for 24 hours
+    if (Date.now() - parsed.ts < 86400000) return parsed.data;
+  } catch (_) {}
+  return null;
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────
 async function _chsInit(user) {
@@ -394,11 +412,43 @@ async function _chsInit(user) {
 
   document.getElementById('chs-app').style.display = '';
 
+  // Show last-known-good data immediately while connecting
+  _chsRestoreFromCache();
+
+  // Proactively wake the Render backend by pinging /health first
+  // (Render free tier can be asleep — this starts the warm-up before the real requests fire)
+  _chsWakeBackend();
+
   _chsSetConnState('connecting');
   await _chsInitialLoad();
 
-  // Auto-refresh status every 10s
-  _chsState.pollTimer = setInterval(chsLoadStatus, 10_000);
+  // Auto-refresh status every 15s (avoids hammering a waking Render instance)
+  _chsState.pollTimer = setInterval(chsLoadStatus, 15_000);
+}
+
+// ── Backend wake-up ping (Render free-tier cold start) ────────────────────
+// Fires a lightweight /health ping immediately when Channel Studio opens.
+// The backend may be asleep — this starts the warm-up in parallel with
+// the initial data load so by the time the real API requests fire the
+// backend has had a few seconds head start.
+function _chsWakeBackend() {
+  const base = _chsState.apiBase || '/api';
+  // Silent fire-and-forget — no error handling needed
+  fetch(base + '/health', { method: 'GET', cache: 'no-store' }).catch(() => {});
+}
+
+// ── Restore cached data immediately (prevents blank cards on cold start) ──
+function _chsRestoreFromCache() {
+  const cachedProg = _chsLoadCache(_chsState._cacheKeyProg);
+  if (cachedProg && Array.isArray(cachedProg)) {
+    _chsState.programming = cachedProg;
+    _chsRenderProgramming();
+  }
+  const cachedFallback = _chsLoadCache(_chsState._cacheKeyFallback);
+  if (cachedFallback && Array.isArray(cachedFallback)) {
+    _chsState.fallback = cachedFallback;
+    _chsRenderFallback();
+  }
 }
 
 // ── Initial data load with connection management ──────────────────────────
@@ -409,16 +459,27 @@ async function _chsInitialLoad() {
 
 async function _chsTryLoad() {
   _chsSetConnState('connecting');
+  // Always update backend status card independently — run in background
+  _chsCheckBackend().catch(() => {});
   try {
-    await Promise.all([
+    // Use allSettled so a single failing endpoint doesn't abort the rest
+    const results = await Promise.allSettled([
       chsLoadStatus(),
       chsLoadProgramming(),
       chsLoadFallback(),
       chsLoadHistory(),
     ]);
-    _chsCheckBackend();
-    _chsSetConnState('connected');
-    _chsState.retryCount = 0;
+    // Consider connected if at least status OR programming loaded successfully
+    const anySuccess = results.some(r => r.status === 'fulfilled');
+    if (anySuccess) {
+      _chsSetConnState('connected');
+      _chsState.retryCount = 0;
+    } else {
+      // All failed — enter reconnect cycle
+      const firstErr = results.find(r => r.status === 'rejected');
+      console.warn('[ChannelStudio] All loads failed:', firstErr?.reason?.message);
+      _chsHandleConnFailure();
+    }
   } catch (e) {
     console.warn('[ChannelStudio] Load failed:', e.message);
     _chsHandleConnFailure();
@@ -463,14 +524,20 @@ function _chsSetConnState(state, retryIn) {
     banner.style.display = '';
     banner.classList.add('chs-conn-reconnecting');
     const sec = retryIn ? Math.round(retryIn / 1000) : '…';
-    if (bannerTxt) bannerTxt.textContent = `CONNECTION LOST — Retrying in ${sec}s…`;
+    // Give a helpful message — the Render free tier can take 30-90s to wake
+    const wakingMsg = _chsState.retryCount <= 2
+      ? `BACKEND STARTING UP — Retry in ${sec}s (may take up to 60s on free hosting)`
+      : `CONNECTION LOST — Retrying in ${sec}s…`;
+    if (bannerTxt) bannerTxt.textContent = wakingMsg;
     if (retryBtn) retryBtn.style.display = '';
-    if (backendEl) backendEl.innerHTML = '<span class="chs-conn-lost">● CONNECTION LOST</span>';
+    if (backendEl) backendEl.innerHTML = _chsState.retryCount <= 2
+      ? '<span class="chs-conn-connecting-text">● STARTING UP…</span>'
+      : '<span class="chs-conn-lost">● RECONNECTING…</span>';
     if (reconnBtn) reconnBtn.style.display = '';
   } else if (state === 'offline') {
     banner.style.display = '';
     banner.classList.add('chs-conn-offline');
-    if (bannerTxt) bannerTxt.textContent = 'CHANNEL SYSTEM OFFLINE — Check backend configuration';
+    if (bannerTxt) bannerTxt.textContent = 'CHANNEL SYSTEM OFFLINE — Press RECONNECT to try again';
     if (retryBtn) retryBtn.style.display = '';
     if (backendEl) backendEl.innerHTML = '<span class="chs-conn-lost">● OFFLINE</span>';
     if (reconnBtn) reconnBtn.style.display = '';
@@ -480,6 +547,8 @@ function _chsSetConnState(state, retryIn) {
 window.chsManualRetry = function() {
   clearTimeout(_chsState.retryTimer);
   _chsState.retryCount = 0;
+  // Allow retrying even after permanent offline
+  _chsState.connState = 'idle';
   _chsTryLoad();
 };
 
@@ -506,7 +575,8 @@ function _chsClearAll() {
 }
 
 // ── API helper ────────────────────────────────────────────────────────────
-async function _chsApi(method, path, body) {
+// Includes a 15-second request timeout so no request can hang forever.
+async function _chsApi(method, path, body, timeoutMs = 15000) {
   const base = _chsState.apiBase || '/api';
   let token = null;
   try {
@@ -515,15 +585,27 @@ async function _chsApi(method, path, body) {
   } catch (_) {}
   if (!token) throw new Error('Not authenticated');
 
+  const controller = new AbortController();
+  const tid = setTimeout(() => controller.abort(), timeoutMs);
+
   const opts = {
     method,
     headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+    signal: controller.signal,
   };
   if (body !== undefined) opts.body = JSON.stringify(body);
-  const res  = await fetch(base + path, opts);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
-  return data;
+
+  try {
+    const res  = await fetch(base + path, opts);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+    return data;
+  } catch (e) {
+    if (e.name === 'AbortError') throw new Error('Request timed out — backend may be starting up');
+    throw e;
+  } finally {
+    clearTimeout(tid);
+  }
 }
 
 // ── Backend health check ──────────────────────────────────────────────────
@@ -533,9 +615,16 @@ async function _chsCheckBackend() {
   if (!el) return;
   try {
     const base = _chsState.apiBase || '/api';
-    const res  = await fetch(base + '/health');
-    const d    = await res.json();
-    if (d.ok) {
+    const controller = new AbortController();
+    const tid = setTimeout(() => controller.abort(), 10000);
+    let res, d;
+    try {
+      res = await fetch(base + '/health', { signal: controller.signal });
+      d   = await res.json();
+    } finally {
+      clearTimeout(tid);
+    }
+    if (d && d.ok) {
       const extra = d.config?.mediaMTXConfigured === false
         ? '<br><span style="color:#c9a84c;font-size:0.75rem">MediaMTX not configured — live camera unavailable</span>'
         : '';
@@ -547,9 +636,14 @@ async function _chsCheckBackend() {
       el.innerHTML = '<span class="chs-conn-warn">⚠ BACKEND ERROR</span>';
       if (hint) hint.textContent = 'Backend returned an error — check server logs';
     }
-  } catch {
-    el.innerHTML = '<span class="chs-conn-lost">● OFFLINE</span>';
-    if (hint) hint.textContent = 'Cannot reach backend server';
+  } catch (e) {
+    const isTimeout = e.name === 'AbortError';
+    el.innerHTML = isTimeout
+      ? '<span class="chs-conn-connecting-text">● WAKING UP…</span>'
+      : '<span class="chs-conn-lost">● OFFLINE</span>';
+    if (hint) hint.textContent = isTimeout
+      ? 'Backend is starting up — this takes up to 60 seconds on free hosting'
+      : 'Cannot reach backend server';
     const reconnBtn = document.getElementById('chs-backend-reconnect');
     if (reconnBtn) reconnBtn.style.display = '';
   }
@@ -561,7 +655,10 @@ window.chsLoadStatus = async function() {
     const data = await _chsApi('GET', '/channel/status');
     if (data.success) {
       _chsRenderStatus(data.status);
-      if (_chsState.connState !== 'connected') _chsSetConnState('connected');
+      if (_chsState.connState !== 'connected') {
+        _chsSetConnState('connected');
+        _chsCheckBackend().catch(() => {});
+      }
     }
   } catch (e) {
     console.warn('[ChannelStudio] Status load failed:', e.message);
@@ -728,10 +825,28 @@ window.chsLoadProgramming = async function() {
     const data = await _chsApi('GET', '/channel/programming/full');
     if (data.success) {
       _chsState.programming = data.programming || [];
+      _chsSaveCache(_chsState._cacheKeyProg, _chsState.programming);
+      // Clear any stale banners
+      const stale = el?.parentNode?.querySelector('.chs-stale-banner');
+      if (stale) stale.remove();
       _chsRenderProgramming();
     }
   } catch (e) {
-    if (el) el.innerHTML = _chsUnavailableBlock('PROGRAMMING TEMPORARILY UNAVAILABLE', e.message, 'chsLoadProgramming()');
+    // Try last-known-good before showing error
+    const cached = _chsLoadCache(_chsState._cacheKeyProg);
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      _chsState.programming = cached;
+      _chsRenderProgramming();
+      // Show a subtle stale-data banner above the list if not already there
+      if (el && !el.parentNode.querySelector('.chs-stale-banner')) {
+        const stale = document.createElement('div');
+        stale.className = 'chs-stale-banner';
+        stale.textContent = '⚡ Showing last cached data — reconnecting…';
+        el.parentNode.insertBefore(stale, el);
+      }
+    } else if (el) {
+      el.innerHTML = _chsUnavailableBlock('PROGRAMMING TEMPORARILY UNAVAILABLE', e.message, 'chsLoadProgramming()');
+    }
   }
 };
 
@@ -799,11 +914,28 @@ window.chsLoadFallback = async function() {
   try {
     const data = await _chsApi('GET', '/channel/fallback');
     if (data.success) {
+      // Clear any stale banners
+      const stale = el?.parentNode?.querySelector('.chs-stale-banner');
+      if (stale) stale.remove();
       _chsState.fallback = data.fallback || [];
+      _chsSaveCache(_chsState._cacheKeyFallback, _chsState.fallback);
       _chsRenderFallback();
     }
   } catch (e) {
-    if (el) el.innerHTML = _chsUnavailableBlock('FALLBACK DATA TEMPORARILY UNAVAILABLE', e.message, 'chsLoadFallback()');
+    // Try last-known-good before showing error
+    const cached = _chsLoadCache(_chsState._cacheKeyFallback);
+    if (cached && Array.isArray(cached) && cached.length > 0) {
+      _chsState.fallback = cached;
+      _chsRenderFallback();
+      if (el && !el.parentNode.querySelector('.chs-stale-banner')) {
+        const stale = document.createElement('div');
+        stale.className = 'chs-stale-banner';
+        stale.textContent = '⚡ Showing last cached fallback data — reconnecting…';
+        el.parentNode.insertBefore(stale, el);
+      }
+    } else if (el) {
+      el.innerHTML = _chsUnavailableBlock('FALLBACK DATA TEMPORARILY UNAVAILABLE', e.message, 'chsLoadFallback()');
+    }
   }
 };
 
