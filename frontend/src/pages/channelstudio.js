@@ -1,5 +1,5 @@
 /**
- * AVENORA — Channel Studio (Admin Control Center)
+ * AVENORA — Channel Studio (Cinematic Broadcast Control Center)
  *
  * Provides the channel admin/founder with:
  *   - Real-time channel status (current program, next, elapsed, viewers)
@@ -8,6 +8,7 @@
  *   - Live camera control (redirects to AVENORA Live)
  *   - Broadcast history (last 20 items)
  *   - Channel start/stop/skip
+ *   - Connection status system with exponential backoff retry
  *
  * Authentication: reuses existing AVENORA Firebase session.
  * Access: founder/admin role only (checked server-side on all mutations).
@@ -18,186 +19,243 @@ registerPage('channelstudio', {
     container.innerHTML = `
       <div class="chs-page">
 
-        <!-- ── Page header ─────────────────────────────────── -->
-        <div class="chs-header">
-          <h1 class="chs-title">
-            <span style="color:var(--neon-blue,#00ccff)">AVENORA</span> CHANNEL STUDIO
-          </h1>
-          <p class="chs-tagline">24-HOUR ALWAYS-ON CHANNEL CONTROL CENTER</p>
+        <!-- ── Cinematic Hero Header ─────────────────────────── -->
+        <div class="chs-hero">
+          <div class="chs-hero-bg-grid" aria-hidden="true"></div>
+          <div class="chs-hero-orbit chs-hero-orbit-1" aria-hidden="true"></div>
+          <div class="chs-hero-orbit chs-hero-orbit-2" aria-hidden="true"></div>
+          <div class="chs-hero-inner">
+            <div class="chs-hero-badge">
+              <span class="chs-hero-badge-dot"></span>
+              <span>24/7 BROADCAST CONTROL</span>
+            </div>
+            <div class="chs-hero-logo">
+              <span class="chs-hero-logo-avenora">AVENORA</span>
+              <span class="chs-hero-logo-studio">CHANNEL STUDIO</span>
+            </div>
+            <p class="chs-hero-tagline">24-HOUR ALWAYS-ON CHANNEL CONTROL CENTER</p>
+            <div id="chs-hero-status" class="chs-hero-status">
+              <span class="chs-hero-status-dot chs-dot-offline"></span>
+              <span id="chs-hero-status-text">CHANNEL OFFLINE</span>
+            </div>
+          </div>
         </div>
 
-        <!-- ── Auth gate ──────────────────────────────────── -->
+        <!-- ── Connection Status Banner ──────────────────────── -->
+        <div id="chs-conn-banner" class="chs-conn-banner chs-conn-connecting" style="display:none">
+          <div class="chs-conn-banner-inner">
+            <span class="chs-conn-banner-dot"></span>
+            <span id="chs-conn-banner-text">CONNECTING TO CHANNEL SYSTEM…</span>
+            <button id="chs-conn-retry-btn" class="chs-conn-retry-btn" onclick="chsManualRetry()" style="display:none">RECONNECT</button>
+          </div>
+        </div>
+
+        <!-- ── Auth gate ──────────────────────────────────────── -->
         <div id="chs-auth-gate" style="display:none">
-          <div class="card" style="text-align:center;padding:var(--space-2xl)">
-            <p style="font-size:2rem;margin-bottom:var(--space-md)">🔒</p>
-            <h3 style="font-family:var(--font-display);margin-bottom:var(--space-sm)">SIGN IN REQUIRED</h3>
-            <p style="color:var(--text-secondary);margin-bottom:var(--space-lg)">
-              Channel Studio is restricted to channel admins and founders.
-            </p>
-            <button class="btn btn-primary" onclick="Modal.open('auth-modal')">Sign In</button>
+          <div class="chs-gate-card">
+            <div class="chs-gate-icon">🔒</div>
+            <h3 class="chs-gate-title">SIGN IN REQUIRED</h3>
+            <p class="chs-gate-desc">Channel Studio is restricted to channel admins and founders.</p>
+            <button class="chs-btn chs-btn-primary" onclick="Modal.open('auth-modal')">Sign In</button>
           </div>
         </div>
 
-        <!-- ── Not admin gate ─────────────────────────────── -->
+        <!-- ── Not admin gate ─────────────────────────────────── -->
         <div id="chs-noaccess" style="display:none">
-          <div class="card" style="text-align:center;padding:var(--space-2xl)">
-            <p style="font-size:2rem;margin-bottom:var(--space-md)">🛡</p>
-            <h3 style="font-family:var(--font-display);margin-bottom:var(--space-sm)">ACCESS RESTRICTED</h3>
-            <p style="color:var(--text-secondary)">Channel Studio is for channel admins only.</p>
+          <div class="chs-gate-card">
+            <div class="chs-gate-icon">🛡</div>
+            <h3 class="chs-gate-title">ACCESS RESTRICTED</h3>
+            <p class="chs-gate-desc">Channel Studio is for channel admins and founders only.</p>
           </div>
         </div>
 
-        <!-- ── Loading ─────────────────────────────────────── -->
-        <div id="chs-loading" style="display:flex;flex-direction:column;align-items:center;padding:var(--space-3xl);gap:var(--space-md)">
-          <div class="spinner spinner-lg"></div>
-          <span style="color:var(--text-muted)">Loading Channel Studio…</span>
+        <!-- ── Loading ──────────────────────────────────────────── -->
+        <div id="chs-loading" class="chs-loading-screen">
+          <div class="chs-spinner"></div>
+          <span class="chs-loading-text">Initialising Channel Studio…</span>
         </div>
 
-        <!-- ── Main app ────────────────────────────────────── -->
+        <!-- ── Main app ─────────────────────────────────────────── -->
         <div id="chs-app" style="display:none">
 
-          <!-- ── CHANNEL STATUS BAR ─────────────────────── -->
-          <div class="chs-status-bar card" id="chs-status-bar">
-            <div class="chs-status-left">
+          <!-- ═══ CHANNEL STATUS CARD ═══════════════════════════ -->
+          <div class="chs-status-card card" id="chs-status-bar">
+            <div class="chs-status-card-hdr">
+              <div class="chs-status-card-dot-row">
+                <span class="chs-status-card-blink" aria-hidden="true"></span>
+                <span class="chs-status-card-hdr-label">CHANNEL STATUS</span>
+              </div>
+              <div class="chs-status-controls">
+                <button id="chs-btn-start-ch" class="chs-btn chs-btn-green chs-btn-sm" onclick="chsStartChannel()" style="display:none">▶ START</button>
+                <button id="chs-btn-stop-ch" class="chs-btn chs-btn-danger chs-btn-sm" onclick="chsStopChannel()" style="display:none">⏹ STOP</button>
+                <button class="chs-btn chs-btn-outline chs-btn-sm" onclick="chsSkip()" title="Skip to next program">⏭</button>
+                <button class="chs-btn chs-btn-outline chs-btn-sm" onclick="chsRefreshStatus()">↻ Refresh</button>
+                <a class="chs-btn chs-btn-outline chs-btn-sm" href="#channel" onclick="navigateTo('channel');return false;">📺 View Channel</a>
+              </div>
+            </div>
+
+            <!-- Status indicator row -->
+            <div class="chs-status-indicator-row">
               <span id="chs-status-dot" class="chs-dot chs-dot-offline"></span>
-              <span id="chs-status-text" class="chs-status-text">OFFLINE</span>
+              <span id="chs-status-text" class="chs-status-text-large">OFFLINE</span>
             </div>
-            <div class="chs-status-mid">
-              <div class="chs-status-item">
-                <span class="chs-status-label">NOW</span>
-                <span id="chs-now-type" class="chs-status-val">—</span>
-                <span id="chs-now-title" class="chs-status-title">—</span>
+
+            <!-- NOW / NEXT block -->
+            <div class="chs-now-next-grid">
+              <div class="chs-now-block">
+                <div class="chs-now-next-label">NOW</div>
+                <div class="chs-now-next-type" id="chs-now-type">—</div>
+                <div class="chs-now-next-title" id="chs-now-title">—</div>
+                <div class="chs-progress-wrap" id="chs-progress-wrap">
+                  <div class="chs-progress-bar"><div class="chs-progress-fill" id="chs-progress-fill" style="width:0%"></div></div>
+                  <div class="chs-progress-pct" id="chs-progress-pct">0%</div>
+                </div>
+                <div class="chs-time-row">
+                  <span class="chs-time-label">ELAPSED</span>
+                  <span class="chs-time-val" id="chs-elapsed">—</span>
+                  <span class="chs-time-sep">·</span>
+                  <span class="chs-time-label">REMAINING</span>
+                  <span class="chs-time-val" id="chs-remaining">—</span>
+                </div>
               </div>
-              <div class="chs-status-item">
-                <span class="chs-status-label">NEXT</span>
-                <span id="chs-next-type" class="chs-status-val">—</span>
-                <span id="chs-next-title" class="chs-status-title">—</span>
+              <div class="chs-next-block">
+                <div class="chs-now-next-label">NEXT</div>
+                <div class="chs-now-next-type" id="chs-next-type">—</div>
+                <div class="chs-now-next-title" id="chs-next-title">—</div>
+                <div class="chs-queue-info" id="chs-queue-info"></div>
               </div>
-              <div class="chs-status-item">
-                <span class="chs-status-label">ELAPSED</span>
-                <span id="chs-elapsed" class="chs-status-val">—</span>
-              </div>
-              <div class="chs-status-item">
-                <span class="chs-status-label">REMAINING</span>
-                <span id="chs-remaining" class="chs-status-val">—</span>
-              </div>
-            </div>
-            <div class="chs-status-right">
-              <button id="chs-btn-start-ch" class="btn btn-green btn-sm" onclick="chsStartChannel()" style="display:none">▶ START CHANNEL</button>
-              <button id="chs-btn-stop-ch" class="btn btn-danger btn-sm" onclick="chsStopChannel()" style="display:none">⏹ STOP CHANNEL</button>
-              <button class="btn btn-outline btn-sm" onclick="chsRefreshStatus()">↻ Refresh</button>
-              <button class="btn btn-outline btn-sm" onclick="navigateTo('channel')">📺 View Channel</button>
             </div>
           </div>
 
-          <!-- ── CHANNEL CONTROLS ────────────────────────── -->
-          <div class="chs-controls card">
-            <button class="btn btn-outline btn-sm" onclick="chsSkip()" title="Skip current program">⏭ Skip Program</button>
-            <button class="btn btn-outline btn-sm" onclick="chsLoadStatus()">↻ Refresh Status</button>
-            <span id="chs-queue-info" style="font-size:0.78rem;color:var(--text-muted);align-self:center;padding:0 8px"></span>
-          </div>
-
-          <!-- ── LIVE CAMERA ─────────────────────────────── -->
-          <div class="card chs-section" id="chs-live-section">
+          <!-- ═══ LIVE CAMERA ════════════════════════════════════ -->
+          <div class="chs-section card" id="chs-live-section">
             <div class="chs-section-hdr">
-              <h2 class="section-title">🔴 LIVE CAMERA</h2>
-              <div id="chs-live-status-badge" class="chs-badge" style="display:none">OFFLINE</div>
+              <div class="chs-section-hdr-left">
+                <span class="chs-section-icon">📡</span>
+                <h2 class="chs-section-title">LIVE CAMERA</h2>
+              </div>
+              <div id="chs-live-status-badge" class="chs-live-badge" style="display:none">
+                <span class="chs-live-badge-dot"></span>OFFLINE
+              </div>
             </div>
             <p class="chs-section-desc">
-              Go live directly on the AVENORA 24-Hour Channel. While your camera connection is active,
-              the channel switches to your live feed. When you stop (or the connection drops),
-              the channel automatically transitions to the next scheduled program.
+              Broadcast directly to the AVENORA 24-Hour Channel. Your live feed instantly replaces
+              the scheduled program for all viewers. When you stop, the channel seamlessly continues
+              with the next scheduled item.
             </p>
-            <div class="chs-live-controls" style="flex-wrap:wrap;gap:12px">
-              <button class="btn btn-danger" onclick="chsGoLive()">🎥 GO LIVE NOW</button>
-              <button class="btn btn-outline btn-sm" onclick="chsStopLive()" id="chs-stop-live-btn" style="display:none">⏹ Stop Live</button>
-              <span class="chs-hint" style="align-self:center">Live camera requires an active AVENORA Live session. Your stream will be broadcast to all channel viewers.</span>
-            </div>
-            <div id="chs-live-info" style="display:none;margin-top:var(--space-md);padding:var(--space-md);background:rgba(255,92,110,0.06);border:1px solid rgba(255,92,110,0.25);border-radius:8px">
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-                <span style="width:9px;height:9px;border-radius:50%;background:#ff5c6e;animation:chPulse 1s infinite;display:inline-block"></span>
-                <strong>LIVE NOW</strong>
+            <div class="chs-live-camera-area">
+              <div class="chs-live-camera-icon" aria-hidden="true">🎥</div>
+              <div class="chs-live-camera-actions">
+                <button class="chs-btn chs-btn-live" onclick="chsGoLive()">🎥 GO LIVE NOW</button>
+                <button class="chs-btn chs-btn-outline chs-btn-sm" onclick="chsStopLive()" id="chs-stop-live-btn" style="display:none">⏹ Stop Live</button>
               </div>
-              <div id="chs-live-detail" style="font-size:0.82rem;color:var(--text-secondary)">—</div>
+              <div id="chs-live-session-status" class="chs-live-session-status chs-live-session-ready">
+                LIVE SESSION READY
+              </div>
+            </div>
+            <div id="chs-live-info" class="chs-live-now-box" style="display:none">
+              <div class="chs-live-now-hdr">
+                <span class="chs-live-now-dot"></span>
+                <strong>ON AIR — LIVE NOW</strong>
+              </div>
+              <div id="chs-live-detail" class="chs-live-now-detail">—</div>
             </div>
           </div>
 
-          <!-- ── PROGRAMMING QUEUE ───────────────────────── -->
-          <div class="card chs-section">
+          <!-- ═══ CHANNEL PROGRAMMING ═══════════════════════════ -->
+          <div class="chs-section card">
             <div class="chs-section-hdr">
-              <h2 class="section-title">📋 CHANNEL PROGRAMMING</h2>
-              <button class="btn btn-primary btn-sm" onclick="chsOpenAddProgram()">+ Add Program</button>
+              <div class="chs-section-hdr-left">
+                <span class="chs-section-icon">📋</span>
+                <h2 class="chs-section-title">CHANNEL PROGRAMMING</h2>
+              </div>
+              <button class="chs-btn chs-btn-primary chs-btn-sm" onclick="chsOpenAddProgram()">+ Add Program</button>
             </div>
-            <p class="chs-section-desc">Programs play in order. When all have played, the channel loops from the beginning.</p>
+            <p class="chs-section-desc">
+              Programs broadcast in order. When all have aired, the channel loops back to the beginning.
+            </p>
             <div id="chs-program-list" class="chs-program-list">
-              <div style="color:var(--text-muted);padding:var(--space-lg);text-align:center">Loading…</div>
+              <div class="chs-list-loading"><div class="chs-spinner chs-spinner-sm"></div><span>Loading schedule…</span></div>
             </div>
           </div>
 
-          <!-- ── FALLBACK QUEUE ──────────────────────────── -->
-          <div class="card chs-section">
+          <!-- ═══ FALLBACK BROADCAST ════════════════════════════ -->
+          <div class="chs-section card">
             <div class="chs-section-hdr">
-              <h2 class="section-title">🔄 FALLBACK PROGRAMMING</h2>
-              <button class="btn btn-outline btn-sm" onclick="chsOpenAddFallback()">+ Add Fallback</button>
+              <div class="chs-section-hdr-left">
+                <span class="chs-section-icon">🔄</span>
+                <h2 class="chs-section-title">FALLBACK BROADCAST</h2>
+              </div>
+              <button class="chs-btn chs-btn-outline chs-btn-sm" onclick="chsOpenAddFallback()">+ Add Fallback</button>
             </div>
             <p class="chs-section-desc">
-              Fallback plays when no scheduled program is available — loops continuously to keep the channel alive.
-              Add at least one fallback item to prevent the channel going dark.
+              Fallback programming keeps the AVENORA channel alive when no scheduled program is available.
+              This content loops continuously to prevent dead air.
             </p>
+            <div id="chs-fallback-status-row" class="chs-fallback-status-row" style="display:none"></div>
             <div id="chs-fallback-list" class="chs-program-list">
-              <div style="color:var(--text-muted);padding:var(--space-lg);text-align:center">Loading…</div>
+              <div class="chs-list-loading"><div class="chs-spinner chs-spinner-sm"></div><span>Loading fallback…</span></div>
             </div>
           </div>
 
-          <!-- ── BROADCAST HISTORY ────────────────────────── -->
-          <div class="card chs-section">
+          <!-- ═══ BROADCAST HISTORY ══════════════════════════════ -->
+          <div class="chs-section card">
             <div class="chs-section-hdr">
-              <h2 class="section-title">📜 BROADCAST HISTORY</h2>
-              <button class="btn btn-ghost btn-sm" onclick="chsLoadHistory()">↻ Refresh</button>
+              <div class="chs-section-hdr-left">
+                <span class="chs-section-icon">📜</span>
+                <h2 class="chs-section-title">BROADCAST HISTORY</h2>
+              </div>
+              <button class="chs-btn chs-btn-ghost chs-btn-sm" onclick="chsLoadHistory()">↻ Refresh</button>
             </div>
             <p class="chs-section-desc">Recently played programs on this channel.</p>
             <div id="chs-history-list" class="chs-program-list">
-              <div style="color:var(--text-muted);padding:var(--space-lg);text-align:center">Loading…</div>
+              <div class="chs-list-loading"><div class="chs-spinner chs-spinner-sm"></div><span>Loading history…</span></div>
             </div>
           </div>
 
-          <!-- ── CHANNEL SETTINGS ─────────────────────────── -->
-          <div class="card chs-section">
+          <!-- ═══ CHANNEL SETTINGS ══════════════════════════════ -->
+          <div class="chs-section card">
             <div class="chs-section-hdr">
-              <h2 class="section-title">⚙️ CHANNEL SETTINGS</h2>
+              <div class="chs-section-hdr-left">
+                <span class="chs-section-icon">⚙️</span>
+                <h2 class="chs-section-title">CHANNEL SETTINGS</h2>
+              </div>
             </div>
             <div class="chs-settings-grid">
-              <div class="chs-field">
-                <label class="chs-label">Channel Name</label>
-                <div style="font-size:0.88rem;color:var(--text-primary)">AVENORA 24-HOUR CHANNEL</div>
-                <div class="chs-hint">Managed by founder/admin</div>
+              <div class="chs-setting-card">
+                <div class="chs-setting-label">CHANNEL IDENTITY</div>
+                <div class="chs-setting-value">AVENORA 24-HOUR CHANNEL</div>
+                <div class="chs-setting-hint">Managed by founder/admin</div>
               </div>
-              <div class="chs-field">
-                <label class="chs-label">Live Heartbeat Timeout</label>
-                <div style="font-size:0.88rem;color:var(--text-primary)">30 seconds</div>
-                <div class="chs-hint">If the live camera connection is lost for 30s, the channel automatically transitions to the next program</div>
+              <div class="chs-setting-card">
+                <div class="chs-setting-label">LIVE HEARTBEAT</div>
+                <div class="chs-setting-value">30 SECONDS</div>
+                <div class="chs-setting-hint">Auto-transitions after 30s of heartbeat silence</div>
               </div>
-              <div class="chs-field">
-                <label class="chs-label">Programming Mode</label>
-                <div style="font-size:0.88rem;color:var(--text-primary)">Loop (all items repeat)</div>
-                <div class="chs-hint">When all scheduled programs have played, the channel loops back to the beginning</div>
+              <div class="chs-setting-card">
+                <div class="chs-setting-label">PROGRAMMING</div>
+                <div class="chs-setting-value">LOOP ALL CONTENT</div>
+                <div class="chs-setting-hint">Channel loops back to start when queue ends</div>
               </div>
-              <div class="chs-field">
-                <label class="chs-label">Streaming Backend</label>
-                <div id="chs-backend-status" style="font-size:0.88rem;color:var(--text-primary)">Checking…</div>
+              <div class="chs-setting-card" id="chs-backend-card">
+                <div class="chs-setting-label">BACKEND STATUS</div>
+                <div id="chs-backend-status" class="chs-setting-value">Checking…</div>
+                <div class="chs-setting-hint" id="chs-backend-hint">Verifying connection to channel engine</div>
+                <button id="chs-backend-reconnect" class="chs-btn chs-btn-outline chs-btn-sm" style="display:none;margin-top:8px" onclick="chsManualRetry()">RECONNECT</button>
               </div>
             </div>
           </div>
 
         </div><!-- /#chs-app -->
 
-        <!-- ── ADD PROGRAM PANEL ───────────────────────────── -->
+        <!-- ── ADD PROGRAM / FALLBACK PANEL ───────────────────── -->
         <div id="chs-add-panel" class="chs-add-panel card" style="display:none">
           <div class="chs-section-hdr">
-            <h2 class="section-title" id="chs-add-panel-title">Add Program</h2>
-            <button class="btn btn-ghost btn-sm" onclick="chsCloseAddPanel()">✕</button>
+            <div class="chs-section-hdr-left">
+              <h2 class="chs-section-title" id="chs-add-panel-title">Add Program</h2>
+            </div>
+            <button class="chs-btn chs-btn-ghost chs-btn-sm" onclick="chsCloseAddPanel()">✕ Close</button>
           </div>
-
           <div class="chs-form">
             <div class="chs-field">
               <label class="chs-label">Program Type</label>
@@ -221,7 +279,7 @@ registerPage('channelstudio', {
             <div class="chs-field" id="chs-media-url-field">
               <label class="chs-label">Media URL</label>
               <input class="form-input" id="chs-add-url" placeholder="https://…" maxlength="2000">
-              <div class="chs-hint">Direct link to the audio or video file (Supabase, Firebase Storage, S3, CDN, etc.)</div>
+              <div class="chs-hint">Direct link to audio or video file (Supabase, Firebase Storage, S3, CDN, etc.)</div>
             </div>
             <div class="chs-field">
               <label class="chs-label">Duration <span class="chs-opt">seconds — leave 0 to auto-detect</span></label>
@@ -231,9 +289,8 @@ registerPage('channelstudio', {
               <label class="chs-label">Cover Art URL <span class="chs-opt">optional</span></label>
               <input class="form-input" id="chs-add-art" placeholder="https://…" maxlength="500">
             </div>
-
             <!-- Slideshow fields -->
-            <div id="chs-slideshow-fields" style="display:none">
+            <div id="chs-slideshow-fields" style="display:none;flex-direction:column;gap:16px">
               <div class="chs-field">
                 <label class="chs-label">Seconds Per Image</label>
                 <select class="form-input" id="chs-add-per-image">
@@ -250,15 +307,13 @@ registerPage('channelstudio', {
                   placeholder="https://example.com/image1.jpg&#10;https://example.com/image2.jpg"></textarea>
               </div>
             </div>
-
             <div id="chs-add-error" class="chs-error" style="display:none"></div>
-
             <div class="chs-form-actions">
-              <button class="btn btn-primary" onclick="chsSubmitAdd()">Add to Queue</button>
-              <button class="btn btn-ghost" onclick="chsCloseAddPanel()">Cancel</button>
+              <button class="chs-btn chs-btn-primary" onclick="chsSubmitAdd()">Add to Queue</button>
+              <button class="chs-btn chs-btn-ghost" onclick="chsCloseAddPanel()">Cancel</button>
             </div>
           </div>
-        </div><!-- /#chs-add-panel -->
+        </div>
 
       </div><!-- /.chs-page -->
     `;
@@ -302,20 +357,26 @@ registerPage('channelstudio', {
     }
 
     await _chsInit(user);
-    return () => { _chsClearPoll(); };
+    return () => { _chsClearAll(); };
   }
 });
 
 // ── Module state ──────────────────────────────────────────────────────────
 const _chsState = {
-  user:        null,
-  apiBase:     null,
-  programming: [],
-  fallback:    [],
-  addingTo:    'program',   // 'program' | 'fallback'
-  pollTimer:   null,
-  liveStreamId: null,       // current live stream ID (if live via channel)
+  user:               null,
+  apiBase:            null,
+  programming:        [],
+  fallback:           [],
+  addingTo:           'program',  // 'program' | 'fallback'
+  pollTimer:          null,
+  liveStreamId:       null,
   liveHeartbeatTimer: null,
+  // Connection / retry state
+  retryTimer:         null,
+  retryCount:         0,
+  maxRetries:         8,
+  retryDelays:        [2000, 5000, 10000, 20000, 30000, 30000, 60000, 60000],
+  connState:          'idle', // idle | connecting | connected | offline
 };
 
 // ── Init ──────────────────────────────────────────────────────────────────
@@ -323,7 +384,7 @@ async function _chsInit(user) {
   _chsState.user    = user;
   _chsState.apiBase = (window.LU_CONFIG && window.LU_CONFIG.apiUrl) || '/api';
 
-  // Check role — server will also enforce, but we can give a nice early gate
+  // Check role — server will also enforce, but give a nice early gate
   const role = user.role || (await _chsGetRole(user));
   if (role !== 'founder' && role !== 'admin') {
     document.getElementById('chs-noaccess').style.display = '';
@@ -332,19 +393,94 @@ async function _chsInit(user) {
 
   document.getElementById('chs-app').style.display = '';
 
-  await Promise.all([
-    chsLoadStatus(),
-    chsLoadProgramming(),
-    chsLoadFallback(),
-    chsLoadHistory(),
-  ]);
-
-  // Check backend streaming config
-  _chsCheckBackend();
+  _chsSetConnState('connecting');
+  await _chsInitialLoad();
 
   // Auto-refresh status every 10s
   _chsState.pollTimer = setInterval(chsLoadStatus, 10_000);
 }
+
+// ── Initial data load with connection management ──────────────────────────
+async function _chsInitialLoad() {
+  _chsState.retryCount = 0;
+  await _chsTryLoad();
+}
+
+async function _chsTryLoad() {
+  _chsSetConnState('connecting');
+  try {
+    await Promise.all([
+      chsLoadStatus(),
+      chsLoadProgramming(),
+      chsLoadFallback(),
+      chsLoadHistory(),
+    ]);
+    _chsCheckBackend();
+    _chsSetConnState('connected');
+    _chsState.retryCount = 0;
+  } catch (e) {
+    console.warn('[ChannelStudio] Load failed:', e.message);
+    _chsHandleConnFailure();
+  }
+}
+
+function _chsHandleConnFailure() {
+  _chsState.retryCount++;
+  if (_chsState.retryCount > _chsState.maxRetries) {
+    _chsSetConnState('offline');
+    return;
+  }
+  const delay = _chsState.retryDelays[Math.min(_chsState.retryCount - 1, _chsState.retryDelays.length - 1)];
+  _chsSetConnState('reconnecting', delay);
+  clearTimeout(_chsState.retryTimer);
+  _chsState.retryTimer = setTimeout(_chsTryLoad, delay);
+}
+
+function _chsSetConnState(state, retryIn) {
+  _chsState.connState = state;
+  const banner    = document.getElementById('chs-conn-banner');
+  const bannerTxt = document.getElementById('chs-conn-banner-text');
+  const retryBtn  = document.getElementById('chs-conn-retry-btn');
+  const backendEl = document.getElementById('chs-backend-status');
+  const reconnBtn = document.getElementById('chs-backend-reconnect');
+
+  if (!banner) return;
+
+  banner.className = 'chs-conn-banner';
+  if (retryBtn) retryBtn.style.display = 'none';
+
+  if (state === 'connected') {
+    banner.style.display = 'none';
+    if (backendEl) backendEl.innerHTML = '<span class="chs-conn-ok">● CONNECTED</span>';
+    if (reconnBtn) reconnBtn.style.display = 'none';
+  } else if (state === 'connecting') {
+    banner.style.display = '';
+    banner.classList.add('chs-conn-connecting');
+    if (bannerTxt) bannerTxt.textContent = 'CONNECTING TO CHANNEL SYSTEM…';
+    if (backendEl) backendEl.innerHTML = '<span class="chs-conn-connecting-text">● CONNECTING…</span>';
+  } else if (state === 'reconnecting') {
+    banner.style.display = '';
+    banner.classList.add('chs-conn-reconnecting');
+    const sec = retryIn ? Math.round(retryIn / 1000) : '…';
+    if (bannerTxt) bannerTxt.textContent = `CONNECTION LOST — Retrying in ${sec}s…`;
+    if (retryBtn) retryBtn.style.display = '';
+    if (backendEl) backendEl.innerHTML = '<span class="chs-conn-lost">● CONNECTION LOST</span>';
+    if (reconnBtn) reconnBtn.style.display = '';
+  } else if (state === 'offline') {
+    banner.style.display = '';
+    banner.classList.add('chs-conn-offline');
+    if (bannerTxt) bannerTxt.textContent = 'CHANNEL SYSTEM OFFLINE — Check backend configuration';
+    if (retryBtn) retryBtn.style.display = '';
+    if (backendEl) backendEl.innerHTML = '<span class="chs-conn-lost">● OFFLINE</span>';
+    if (reconnBtn) reconnBtn.style.display = '';
+  }
+}
+
+window.chsManualRetry = function() {
+  clearTimeout(_chsState.retryTimer);
+  _chsState.retryCount = 0;
+  _chsTryLoad();
+};
 
 async function _chsGetRole(user) {
   try {
@@ -359,11 +495,13 @@ async function _chsGetRole(user) {
   return user.role || 'user';
 }
 
-function _chsClearPoll() {
+function _chsClearAll() {
   clearInterval(_chsState.pollTimer);
   _chsState.pollTimer = null;
   clearInterval(_chsState.liveHeartbeatTimer);
   _chsState.liveHeartbeatTimer = null;
+  clearTimeout(_chsState.retryTimer);
+  _chsState.retryTimer = null;
 }
 
 // ── API helper ────────────────────────────────────────────────────────────
@@ -389,22 +527,30 @@ async function _chsApi(method, path, body) {
 
 // ── Backend health check ──────────────────────────────────────────────────
 async function _chsCheckBackend() {
-  const el = document.getElementById('chs-backend-status');
+  const el   = document.getElementById('chs-backend-status');
+  const hint = document.getElementById('chs-backend-hint');
   if (!el) return;
   try {
     const base = _chsState.apiBase || '/api';
-    const res = await fetch(base + '/health');
-    const d   = await res.json();
+    const res  = await fetch(base + '/health');
+    const d    = await res.json();
     if (d.ok) {
-      const mediamtx = d.config?.mediaMTXConfigured === false
-        ? ' · <span style="color:#c9a84c">MediaMTX not configured (live camera unavailable)</span>'
-        : ' · MediaMTX configured';
-      el.innerHTML = '<span style="color:#4a9e72">✅ Backend online</span>' + (mediamtx || '');
+      const extra = d.config?.mediaMTXConfigured === false
+        ? '<br><span style="color:#c9a84c;font-size:0.75rem">MediaMTX not configured — live camera unavailable</span>'
+        : '';
+      el.innerHTML = '<span class="chs-conn-ok">● CONNECTED</span>' + extra;
+      if (hint) hint.textContent = 'Channel engine is online and responding';
+      const reconnBtn = document.getElementById('chs-backend-reconnect');
+      if (reconnBtn) reconnBtn.style.display = 'none';
     } else {
-      el.innerHTML = '<span style="color:#c0394a">⚠ Backend returned error</span>';
+      el.innerHTML = '<span class="chs-conn-warn">⚠ BACKEND ERROR</span>';
+      if (hint) hint.textContent = 'Backend returned an error — check server logs';
     }
   } catch {
-    el.innerHTML = '<span style="color:#c0394a">⚠ Cannot reach backend</span>';
+    el.innerHTML = '<span class="chs-conn-lost">● OFFLINE</span>';
+    if (hint) hint.textContent = 'Cannot reach backend server';
+    const reconnBtn = document.getElementById('chs-backend-reconnect');
+    if (reconnBtn) reconnBtn.style.display = '';
   }
 }
 
@@ -412,9 +558,13 @@ async function _chsCheckBackend() {
 window.chsLoadStatus = async function() {
   try {
     const data = await _chsApi('GET', '/channel/status');
-    if (data.success) _chsRenderStatus(data.status);
+    if (data.success) {
+      _chsRenderStatus(data.status);
+      if (_chsState.connState !== 'connected') _chsSetConnState('connected');
+    }
   } catch (e) {
     console.warn('[ChannelStudio] Status load failed:', e.message);
+    if (_chsState.connState === 'connected') _chsHandleConnFailure();
   }
 };
 
@@ -434,9 +584,11 @@ function _chsFmtTime(secs) {
 function _chsRenderStatus(st) {
   if (!st) return;
 
-  const running = st.running && st.status !== 'OFFLINE';
-  const dot     = document.getElementById('chs-status-dot');
-  const txt     = document.getElementById('chs-status-text');
+  const running  = st.running && st.status !== 'OFFLINE';
+  const dot      = document.getElementById('chs-status-dot');
+  const txt      = document.getElementById('chs-status-text');
+  const heroDot  = document.querySelector('#chs-hero-status .chs-hero-status-dot');
+  const heroTxt  = document.getElementById('chs-hero-status-text');
   const startBtn = document.getElementById('chs-btn-start-ch');
   const stopBtn  = document.getElementById('chs-btn-stop-ch');
 
@@ -450,46 +602,66 @@ function _chsRenderStatus(st) {
     );
   }
   if (txt) txt.textContent = st.status || 'OFFLINE';
+  if (heroDot) {
+    heroDot.className = 'chs-hero-status-dot ' + (
+      st.status === 'LIVE' || st.status === 'PLAYING' ? 'chs-hero-dot-live' : 'chs-hero-dot-offline'
+    );
+  }
+  if (heroTxt) {
+    heroTxt.textContent = (st.status === 'LIVE' || st.status === 'PLAYING') ? '● CHANNEL ONLINE' : '● CHANNEL OFFLINE';
+  }
 
   if (startBtn) startBtn.style.display = !running ? '' : 'none';
-  if (stopBtn)  stopBtn.style.display  = running ? '' : 'none';
+  if (stopBtn)  stopBtn.style.display  = running  ? '' : 'none';
 
-  // Now / Next / elapsed / remaining
-  const nowType  = document.getElementById('chs-now-type');
-  const nowTitle = document.getElementById('chs-now-title');
-  const nxtType  = document.getElementById('chs-next-type');
-  const nxtTitle = document.getElementById('chs-next-title');
-  const elapsed  = document.getElementById('chs-elapsed');
+  const nowType   = document.getElementById('chs-now-type');
+  const nowTitle  = document.getElementById('chs-now-title');
+  const nxtType   = document.getElementById('chs-next-type');
+  const nxtTitle  = document.getElementById('chs-next-title');
+  const elapsed   = document.getElementById('chs-elapsed');
   const remaining = document.getElementById('chs-remaining');
   const queueInfo = document.getElementById('chs-queue-info');
+  const progFill  = document.getElementById('chs-progress-fill');
+  const progPct   = document.getElementById('chs-progress-pct');
 
-  if (nowType)  nowType.textContent  = st.currentItem ? _chsTypeEmoji(st.currentItem.type) : '—';
+  if (nowType)  nowType.textContent  = st.currentItem ? _chsTypeLabel(st.currentItem.type) : '—';
   if (nowTitle) nowTitle.textContent = st.currentItem?.title || '—';
-  if (nxtType)  nxtType.textContent  = st.nextItem ? _chsTypeEmoji(st.nextItem.type) : '—';
+  if (nxtType)  nxtType.textContent  = st.nextItem ? _chsTypeLabel(st.nextItem.type) : '—';
   if (nxtTitle) nxtTitle.textContent = st.nextItem?.title || '—';
   if (elapsed)  elapsed.textContent  = st.currentItem?.elapsed != null ? _chsFmtTime(st.currentItem.elapsed) : '—';
   if (remaining) remaining.textContent = st.currentItem?.remaining != null && st.currentItem.remaining > 0
     ? _chsFmtTime(st.currentItem.remaining) : '—';
-  if (queueInfo) queueInfo.textContent = `Queue: ${st.queueLength || 0} | Fallback: ${st.fallbackLength || 0}`;
+  if (queueInfo) queueInfo.textContent = `Queue: ${st.queueLength || 0} · Fallback: ${st.fallbackLength || 0}`;
 
-  // Live badge update
-  const liveBadge = document.getElementById('chs-live-status-badge');
-  const liveInfo  = document.getElementById('chs-live-info');
-  const liveDetail = document.getElementById('chs-live-detail');
-  const stopLiveBtn = document.getElementById('chs-stop-live-btn');
+  // Progress bar
+  if (st.currentItem?.elapsed != null && st.currentItem?.duration) {
+    const pct = Math.min(100, Math.round((st.currentItem.elapsed / st.currentItem.duration) * 100));
+    if (progFill) progFill.style.width = pct + '%';
+    if (progPct)  progPct.textContent  = pct + '%';
+  }
+
+  // Live badge
+  const liveBadge      = document.getElementById('chs-live-status-badge');
+  const liveInfo       = document.getElementById('chs-live-info');
+  const liveDetail     = document.getElementById('chs-live-detail');
+  const stopLiveBtn    = document.getElementById('chs-stop-live-btn');
+  const liveSessionSt  = document.getElementById('chs-live-session-status');
+
   if (st.status === 'LIVE' && st.liveSession?.active) {
-    if (liveBadge) { liveBadge.style.display = ''; liveBadge.textContent = '🔴 LIVE'; liveBadge.style.color = '#ff5c6e'; }
-    if (liveInfo)  liveInfo.style.display = '';
+    if (liveBadge)  { liveBadge.style.display = ''; liveBadge.innerHTML = '<span class="chs-live-badge-dot"></span>🔴 LIVE'; }
+    if (liveInfo)   liveInfo.style.display = '';
     if (liveDetail && st.currentItem) {
-      liveDetail.textContent = `Title: ${st.currentItem.title || 'Live Camera'} — started: ${
+      liveDetail.textContent = `"${st.currentItem.title || 'Live Camera'}" — started: ${
         st.liveSession.startedAt ? new Date(st.liveSession.startedAt).toLocaleTimeString() : '—'
       }`;
     }
     if (stopLiveBtn) stopLiveBtn.style.display = '';
+    if (liveSessionSt) { liveSessionSt.className = 'chs-live-session-status chs-live-session-active'; liveSessionSt.textContent = '🔴 LIVE SESSION ACTIVE'; }
   } else {
-    if (liveBadge) { liveBadge.style.display = 'none'; }
-    if (liveInfo)  liveInfo.style.display = 'none';
+    if (liveBadge)  liveBadge.style.display = 'none';
+    if (liveInfo)   liveInfo.style.display = 'none';
     if (stopLiveBtn) stopLiveBtn.style.display = 'none';
+    if (liveSessionSt) { liveSessionSt.className = 'chs-live-session-status chs-live-session-ready'; liveSessionSt.textContent = 'LIVE SESSION READY'; }
   }
 }
 
@@ -519,15 +691,11 @@ window.chsSkip = async function() {
 
 // ── Live camera ────────────────────────────────────────────────────────
 window.chsGoLive = async function() {
-  // Navigate to the AVENORA Live page so the creator can set up their camera
-  // and get a proper WHIP session. The Live page will trigger /api/live/:id/start-publishing
-  // and then call /api/channel/live/start with the streamId and hlsUrl.
   navigateTo('live');
 };
 
 window.chsStopLive = async function() {
   if (!_chsState.liveStreamId) {
-    // Try to find active live session from status
     try {
       const data = await _chsApi('GET', '/channel/status');
       if (data.status?.liveSession?.streamId) {
@@ -548,8 +716,9 @@ window.chsStopLive = async function() {
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
 };
 
-// ── Programming load/render ────────────────────────────────────────────
+// ── Programming ────────────────────────────────────────────────────────
 window.chsLoadProgramming = async function() {
+  const el = document.getElementById('chs-program-list');
   try {
     const data = await _chsApi('GET', '/channel/programming/full');
     if (data.success) {
@@ -557,8 +726,7 @@ window.chsLoadProgramming = async function() {
       _chsRenderProgramming();
     }
   } catch (e) {
-    const el = document.getElementById('chs-program-list');
-    if (el) el.innerHTML = `<div style="color:var(--text-muted);padding:var(--space-md)">Could not load programming: ${_esc(e.message)}</div>`;
+    if (el) el.innerHTML = _chsUnavailableBlock('PROGRAMMING TEMPORARILY UNAVAILABLE', e.message, 'chsLoadProgramming()');
   }
 };
 
@@ -567,26 +735,37 @@ function _chsRenderProgramming() {
   if (!el) return;
   const items = _chsState.programming;
   if (!items.length) {
-    el.innerHTML = `<div style="color:var(--text-muted);padding:var(--space-lg);text-align:center">
-      No programming scheduled. Add programs to get started.
+    el.innerHTML = `<div class="chs-empty-state">
+      <div class="chs-empty-icon">📋</div>
+      <div class="chs-empty-title">No programming scheduled</div>
+      <div class="chs-empty-desc">Add programs to get started. The channel will use fallback content until programs are scheduled.</div>
     </div>`;
     return;
   }
-  el.innerHTML = items.map((item, i) => `
-    <div class="chs-prog-item" id="chs-prog-${_esc(item.id)}">
-      <div class="chs-prog-icon">${_chsTypeEmoji(item.type)}</div>
-      <div class="chs-prog-info">
-        <div class="chs-prog-title">${_esc(item.title)}</div>
-        <div class="chs-prog-meta">${_esc(item.type)}${item.artist ? ' · ' + _esc(item.artist) : ''}${item.duration ? ' · ' + _chsFmtDuration(item.duration) : ''}</div>
-        ${item.mediaUrl ? `<div class="chs-prog-meta" style="color:var(--text-muted);font-size:0.7rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px" title="${_esc(item.mediaUrl)}">${_esc(item.mediaUrl)}</div>` : ''}
-      </div>
-      <div class="chs-prog-actions" style="display:flex;gap:4px;flex-shrink:0">
-        ${i > 0 ? `<button class="btn btn-ghost btn-xs" title="Move up" onclick="chsMoveProgram('${_esc(item.id)}','up')">↑</button>` : '<div style="width:28px"></div>'}
-        ${i < items.length - 1 ? `<button class="btn btn-ghost btn-xs" title="Move down" onclick="chsMoveProgram('${_esc(item.id)}','down')">↓</button>` : '<div style="width:28px"></div>'}
-        <button class="btn btn-danger btn-xs" title="Remove" onclick="chsRemoveProgram('${_esc(item.id)}')">✕</button>
-      </div>
-    </div>
-  `).join('');
+  el.innerHTML = `
+    <div class="chs-timeline">
+      ${items.map((item, i) => `
+        <div class="chs-timeline-item" id="chs-prog-${_esc(item.id)}">
+          <div class="chs-timeline-dot"></div>
+          <div class="chs-timeline-line" ${i === items.length - 1 ? 'style="opacity:0"' : ''}></div>
+          <div class="chs-timeline-content">
+            <div class="chs-prog-header">
+              <span class="chs-prog-num">${String(i + 1).padStart(2, '0')}</span>
+              <span class="chs-prog-type-badge">${_chsTypeLabel(item.type)}</span>
+              ${item.duration ? `<span class="chs-prog-dur">${_chsFmtDuration(item.duration)}</span>` : ''}
+            </div>
+            <div class="chs-prog-title">${_esc(item.title)}</div>
+            ${item.artist ? `<div class="chs-prog-artist">${_esc(item.artist)}</div>` : ''}
+            ${item.mediaUrl ? `<div class="chs-prog-url" title="${_esc(item.mediaUrl)}">${_esc(item.mediaUrl)}</div>` : ''}
+            <div class="chs-prog-actions">
+              ${i > 0 ? `<button class="chs-btn chs-btn-ghost chs-btn-xs" title="Move up" onclick="chsMoveProgram('${_esc(item.id)}','up')">↑ Up</button>` : ''}
+              ${i < items.length - 1 ? `<button class="chs-btn chs-btn-ghost chs-btn-xs" title="Move down" onclick="chsMoveProgram('${_esc(item.id)}','down')">↓ Down</button>` : ''}
+              <button class="chs-btn chs-btn-danger chs-btn-xs" title="Remove" onclick="chsRemoveProgram('${_esc(item.id)}')">✕ Remove</button>
+            </div>
+          </div>
+        </div>
+      `).join('')}
+    </div>`;
 }
 
 window.chsMoveProgram = async function(id, direction) {
@@ -597,7 +776,7 @@ window.chsMoveProgram = async function(id, direction) {
 };
 
 window.chsRemoveProgram = async function(id) {
-  if (!confirm('Remove this program?')) return;
+  if (!confirm('Remove this program from the schedule?')) return;
   try {
     await _chsApi('DELETE', '/channel/programming/' + id);
     _chsToast('Program removed');
@@ -605,8 +784,9 @@ window.chsRemoveProgram = async function(id) {
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
 };
 
-// ── Fallback load/render ────────────────────────────────────────────────
+// ── Fallback ───────────────────────────────────────────────────────────
 window.chsLoadFallback = async function() {
+  const el = document.getElementById('chs-fallback-list');
   try {
     const data = await _chsApi('GET', '/channel/fallback');
     if (data.success) {
@@ -614,31 +794,40 @@ window.chsLoadFallback = async function() {
       _chsRenderFallback();
     }
   } catch (e) {
-    const el = document.getElementById('chs-fallback-list');
-    if (el) el.innerHTML = `<div style="color:var(--text-muted);padding:var(--space-md)">Could not load fallback: ${_esc(e.message)}</div>`;
+    if (el) el.innerHTML = _chsUnavailableBlock('FALLBACK DATA TEMPORARILY UNAVAILABLE', e.message, 'chsLoadFallback()');
   }
 };
 
 function _chsRenderFallback() {
-  const el = document.getElementById('chs-fallback-list');
+  const el        = document.getElementById('chs-fallback-list');
+  const statusRow = document.getElementById('chs-fallback-status-row');
   if (!el) return;
   const items = _chsState.fallback;
+
+  if (statusRow) {
+    statusRow.style.display = '';
+    statusRow.innerHTML = items.length > 0
+      ? `<span class="chs-fallback-ready">✅ FALLBACK READY — ${items.length} item${items.length !== 1 ? 's' : ''} configured</span>`
+      : `<span class="chs-fallback-warn">⚠ NO FALLBACK CONTENT — Channel may go dark without fallback</span>`;
+  }
+
   if (!items.length) {
-    el.innerHTML = `<div style="color:var(--text-muted);padding:var(--space-lg);text-align:center">
-      No fallback configured. Add fallback content to prevent the channel going dark.
+    el.innerHTML = `<div class="chs-empty-state">
+      <div class="chs-empty-icon">🔄</div>
+      <div class="chs-empty-title">No fallback content configured</div>
+      <div class="chs-empty-desc">Add at least one fallback item to keep the channel alive during scheduling gaps.</div>
     </div>`;
     return;
   }
   el.innerHTML = items.map((item, i) => `
     <div class="chs-prog-item">
-      <div class="chs-prog-icon">${_chsTypeEmoji(item.type)}</div>
-      <div class="chs-prog-info">
+      <div class="chs-prog-item-num">${String(i + 1).padStart(2, '0')}</div>
+      <div class="chs-prog-item-icon">${_chsTypeEmoji(item.type)}</div>
+      <div class="chs-prog-item-info">
         <div class="chs-prog-title">${_esc(item.title)}</div>
-        <div class="chs-prog-meta">${_esc(item.type)}${item.artist ? ' · ' + _esc(item.artist) : ''}${item.duration ? ' · ' + _chsFmtDuration(item.duration) : ''}</div>
+        <div class="chs-prog-meta">${_chsTypeLabel(item.type)}${item.artist ? ' · ' + _esc(item.artist) : ''}${item.duration ? ' · ' + _chsFmtDuration(item.duration) : ''}</div>
       </div>
-      <div class="chs-prog-actions">
-        <button class="btn btn-danger btn-xs" onclick="chsRemoveFallback('${_esc(item.id)}')">✕</button>
-      </div>
+      <button class="chs-btn chs-btn-danger chs-btn-xs" onclick="chsRemoveFallback('${_esc(item.id)}')">✕</button>
     </div>
   `).join('');
 }
@@ -661,29 +850,38 @@ window.chsLoadHistory = async function() {
     const data = await _chsApi('GET', '/channel/history');
     const history = data.history || [];
     if (!history.length) {
-      el.innerHTML = `<div style="color:var(--text-muted);padding:var(--space-lg);text-align:center">No broadcast history yet.</div>`;
+      el.innerHTML = `<div class="chs-empty-state">
+        <div class="chs-empty-icon">📜</div>
+        <div class="chs-empty-title">No broadcast history yet</div>
+        <div class="chs-empty-desc">History will appear here once the channel starts broadcasting.</div>
+      </div>`;
       return;
     }
-    el.innerHTML = history.slice().reverse().map(item => `
-      <div class="chs-prog-item">
-        <div class="chs-prog-icon">${_chsTypeEmoji(item.type)}</div>
-        <div class="chs-prog-info">
-          <div class="chs-prog-title">${_esc(item.title || '—')}</div>
-          <div class="chs-prog-meta">${_esc(item.type || '')}${item.artist ? ' · ' + _esc(item.artist) : ''}${item.duration ? ' · ' + _chsFmtDuration(item.duration) : ''}${item.playedAt ? ' · ' + new Date(item.playedAt).toLocaleTimeString() : ''}</div>
-        </div>
-      </div>
-    `).join('');
+    el.innerHTML = `
+      <div class="chs-history-timeline">
+        ${history.slice().reverse().map((item, i) => `
+          <div class="chs-history-item">
+            <div class="chs-history-dot ${i === 0 ? 'chs-history-dot-latest' : ''}"></div>
+            <div class="chs-history-time">${item.playedAt ? new Date(item.playedAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '—'}</div>
+            <div class="chs-history-info">
+              <div class="chs-history-title">${_esc(item.title || '—')}</div>
+              <div class="chs-history-meta">${_chsTypeLabel(item.type)}${item.artist ? ' · ' + _esc(item.artist) : ''}${item.duration ? ' · ' + _chsFmtDuration(item.duration) : ''}</div>
+            </div>
+            <div class="chs-history-badge">Completed</div>
+          </div>
+        `).join('')}
+      </div>`;
   } catch (e) {
-    el.innerHTML = `<div style="color:var(--text-muted);padding:var(--space-md)">Could not load history: ${_esc(e.message)}</div>`;
+    el.innerHTML = _chsUnavailableBlock('BROADCAST HISTORY TEMPORARILY UNAVAILABLE', e.message, 'chsLoadHistory()');
   }
 };
 
 // ── Add program panel ──────────────────────────────────────────────────
 window.chsOpenAddProgram = function() {
   _chsState.addingTo = 'program';
-  _chsEl('chs-add-panel-title').textContent = 'Add Program';
+  _chsEl('chs-add-panel-title').textContent = 'Add Program to Schedule';
   _chsEl('chs-add-panel').style.display = '';
-  _chsEl('chs-add-panel').scrollIntoView({ behavior: 'smooth' });
+  _chsEl('chs-add-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   chsOnTypeChange();
 };
 
@@ -691,7 +889,7 @@ window.chsOpenAddFallback = function() {
   _chsState.addingTo = 'fallback';
   _chsEl('chs-add-panel-title').textContent = 'Add Fallback Item';
   _chsEl('chs-add-panel').style.display = '';
-  _chsEl('chs-add-panel').scrollIntoView({ behavior: 'smooth' });
+  _chsEl('chs-add-panel').scrollIntoView({ behavior: 'smooth', block: 'start' });
   chsOnTypeChange();
 };
 
@@ -701,20 +899,23 @@ window.chsCloseAddPanel = function() {
 
 window.chsOnTypeChange = function() {
   const type = (_chsEl('chs-add-type')?.value || '').toUpperCase();
-  _chsEl('chs-slideshow-fields').style.display = (type === 'SLIDESHOW' || type === 'IMAGE') ? '' : 'none';
-  _chsEl('chs-media-url-field').style.display  = (type === 'SLIDESHOW') ? 'none' : '';
-  _chsEl('chs-artwork-field').style.display    = (type === 'VIDEO' || type === 'PRE_RECORDED_SHOW') ? 'none' : '';
+  const ssFields = _chsEl('chs-slideshow-fields');
+  if (ssFields) ssFields.style.display = (type === 'SLIDESHOW' || type === 'IMAGE') ? 'flex' : 'none';
+  const urlField = _chsEl('chs-media-url-field');
+  if (urlField) urlField.style.display = (type === 'SLIDESHOW') ? 'none' : '';
+  const artField = _chsEl('chs-artwork-field');
+  if (artField) artField.style.display = (type === 'VIDEO' || type === 'PRE_RECORDED_SHOW') ? 'none' : '';
 };
 
 window.chsSubmitAdd = async function() {
-  const type      = (_chsEl('chs-add-type')?.value || '').toUpperCase();
-  const title     = (_chsEl('chs-add-title')?.value || '').trim();
-  const artist    = (_chsEl('chs-add-artist')?.value || '').trim();
-  const mediaUrl  = (_chsEl('chs-add-url')?.value || '').trim();
-  const duration  = parseInt(_chsEl('chs-add-duration')?.value || '0', 10) || 0;
-  const coverArt  = (_chsEl('chs-add-art')?.value || '').trim();
-  const perImage  = parseInt(_chsEl('chs-add-per-image')?.value || '10', 10);
-  const errEl     = _chsEl('chs-add-error');
+  const type     = (_chsEl('chs-add-type')?.value || '').toUpperCase();
+  const title    = (_chsEl('chs-add-title')?.value || '').trim();
+  const artist   = (_chsEl('chs-add-artist')?.value || '').trim();
+  const mediaUrl = (_chsEl('chs-add-url')?.value || '').trim();
+  const duration = parseInt(_chsEl('chs-add-duration')?.value || '0', 10) || 0;
+  const coverArt = (_chsEl('chs-add-art')?.value || '').trim();
+  const perImage = parseInt(_chsEl('chs-add-per-image')?.value || '10', 10);
+  const errEl    = _chsEl('chs-add-error');
 
   if (errEl) errEl.style.display = 'none';
   if (!title) { _chsShowError('Title is required'); return; }
@@ -744,10 +945,8 @@ window.chsSubmitAdd = async function() {
       await chsLoadProgramming();
     }
     chsCloseAddPanel();
-    // Clear form
     ['chs-add-title','chs-add-artist','chs-add-url','chs-add-duration','chs-add-art','chs-add-images'].forEach(id => {
-      const el = _chsEl(id);
-      if (el) el.value = '';
+      const el = _chsEl(id); if (el) el.value = '';
     });
     const dur = _chsEl('chs-add-duration');
     if (dur) dur.value = '0';
@@ -755,6 +954,17 @@ window.chsSubmitAdd = async function() {
     _chsShowError(e.message);
   }
 };
+
+// ── Unavailable block helper ───────────────────────────────────────────
+function _chsUnavailableBlock(title, technicalMsg, retryFn) {
+  console.warn('[ChannelStudio]', title, '|', technicalMsg);
+  return `<div class="chs-unavail-block">
+    <div class="chs-unavail-icon">⚠</div>
+    <div class="chs-unavail-title">${_esc(title)}</div>
+    <div class="chs-unavail-desc">The channel system is reconnecting. Please wait or retry.</div>
+    <button class="chs-btn chs-btn-outline chs-btn-sm" onclick="${retryFn}">↻ Retry</button>
+  </div>`;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────
 function _chsShowError(msg) {
@@ -774,7 +984,20 @@ function _chsTypeEmoji(type) {
     SLIDESHOW:         '🖼',
     PRE_RECORDED_SHOW: '📺',
   };
-  return (MAP[type] || '▶') + ' ' + (type || '');
+  return MAP[type] || '▶';
+}
+
+function _chsTypeLabel(type) {
+  const MAP = {
+    LIVE_CAMERA:       '🔴 LIVE',
+    MUSIC:             '🎵 MUSIC',
+    AUDIO:             '🎙 AUDIO',
+    VIDEO:             '🎬 VIDEO',
+    IMAGE:             '🖼 IMAGE',
+    SLIDESHOW:         '🖼 SLIDESHOW',
+    PRE_RECORDED_SHOW: '📺 SHOW',
+  };
+  return MAP[type] || (type || '—');
 }
 
 function _chsFmtDuration(secs) {

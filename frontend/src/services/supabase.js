@@ -29,29 +29,55 @@
   const STORAGE_BASE  = `${SUPABASE_URL}/storage/v1`;
 
   // ─── Unique path generator ────────────────────────────────
+  // Sanitises the file extension to only safe alphanumeric chars so that
+  // the resulting storage path never contains spaces, parens, or other
+  // characters that would break the public CDN URL.
   function _storagePath(bucket, uid, filename) {
-    const ext   = filename.includes('.') ? '.' + filename.split('.').pop().toLowerCase() : '';
-    const rand  = Math.random().toString(36).slice(2, 10);
-    const ts    = Date.now();
+    const rawExt = filename.includes('.') ? filename.split('.').pop().toLowerCase() : '';
+    // Keep only a-z 0-9 — strip any unsafe chars from the extension
+    const ext    = rawExt ? '.' + rawExt.replace(/[^a-z0-9]/g, '') : '';
+    const rand   = Math.random().toString(36).slice(2, 10);
+    const ts     = Date.now();
     return `${uid}/${ts}-${rand}${ext}`;
   }
 
   // ─── Public URL for public buckets ───────────────────────
+  // Each path segment is percent-encoded so that filenames with spaces,
+  // parentheses, or other special characters resolve correctly on Android
+  // Chrome (which rejects unencoded URLs with MediaError code 4).
   function _publicUrl(bucket, path) {
-    return `${STORAGE_BASE}/object/public/${bucket}/${path}`;
+    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    return `${STORAGE_BASE}/object/public/${bucket}/${encoded}`;
   }
 
-  // ─── XHR upload directly to Supabase Storage REST API ────
-  // Uses the anon key. Bucket must have RLS policy allowing INSERT for anon role.
-  function _upload(bucket, storagePath, file, onProgress) {
+  // ─── Detect MIME type for video files ────────────────────
+  // Android Chrome rejects application/octet-stream for video playback
+  // (MediaError code 4).  Always use the correct video MIME type.
+  function _detectMime(file) {
+    if (file.type && file.type !== 'application/octet-stream') return file.type;
+    const ext = (file.name.split('.').pop() || '').toLowerCase();
+    const map = {
+      mp4: 'video/mp4', m4v: 'video/mp4', mov: 'video/mp4',
+      webm: 'video/webm', ogv: 'video/ogg', ogg: 'video/ogg',
+      avi: 'video/x-msvideo', mkv: 'video/x-matroska',
+      mp3: 'audio/mpeg', m4a: 'audio/mp4', aac: 'audio/aac',
+      ogg: 'audio/ogg', wav: 'audio/wav', flac: 'audio/flac', opus: 'audio/ogg',
+      jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png',
+      webp: 'image/webp', gif: 'image/gif',
+    };
+    return map[ext] || 'application/octet-stream';
+  }
+
+  // ─── XHR upload (≤ 6 MB) ─────────────────────────────────
+  // Sends the file as raw body via XHR POST to Supabase Storage REST API.
+  function _xhrUpload(bucket, storagePath, file, mimeType, onProgress) {
     return new Promise((resolve, reject) => {
       const url = `${STORAGE_BASE}/object/${bucket}/${storagePath}`;
       const xhr = new XMLHttpRequest();
       xhr.open('POST', url);
       xhr.setRequestHeader('apikey', SUPABASE_ANON);
       xhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_ANON}`);
-      xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
-      // x-upsert: true allows overwriting (important for avatar re-uploads)
+      xhr.setRequestHeader('Content-Type', mimeType);
       xhr.setRequestHeader('x-upsert', 'true');
 
       if (onProgress && xhr.upload) {
@@ -62,57 +88,174 @@
 
       xhr.onload = () => {
         if (xhr.status >= 200 && xhr.status < 300) {
-          const publicUrl = _publicUrl(bucket, storagePath);
-          resolve({ url: publicUrl, storagePath, bucket });
+          resolve({ url: _publicUrl(bucket, storagePath), storagePath, bucket });
         } else {
           let rawMsg = '';
           try { rawMsg = JSON.parse(xhr.responseText).message || ''; } catch {}
-          let msg = rawMsg || `Upload failed (HTTP ${xhr.status})`;
-
-          // Supabase Storage returns this message when the bucket's fileSizeLimit
-          // is exceeded. Show an actionable message instead of the raw storage error.
-          if (
-            rawMsg.toLowerCase().includes('exceeded the maximum allowed size') ||
-            rawMsg.toLowerCase().includes('file size limit') ||
-            xhr.status === 413
-          ) {
-            const limitMB = bucket === 'videos' ? 500
-                          : bucket === 'music' || bucket === 'stream-media' ? 100
-                          : 20;
-            msg =
-              'Upload failed because the storage limit rejected this file. ' +
-              'Maximum allowed size for ' + bucket + ' is ' + limitMB + ' MB. ' +
-              'If your file is under ' + limitMB + ' MB, the bucket limit may need ' +
-              'to be updated — run scripts/fix-video-bucket-limit.js.';
-            const err = new Error(msg);
-            err.code = 'FILE_TOO_LARGE_FOR_STORAGE';
-            err.limitMB = limitMB;
-            console.error(`[AvenoraStorage] ${msg}`);
-            reject(err);
-            return;
-          }
-
-          if (xhr.status === 400 && msg.toLowerCase().includes('policy')) {
-            msg =
-              'Upload blocked by storage policy. ' +
-              'Open Supabase dashboard → Storage → ' + bucket +
-              ' → Policies and add an INSERT policy for the anon role. ' +
-              'See SUPABASE_SETUP.md for the exact SQL.';
-          }
-          if (xhr.status === 401 || xhr.status === 403) {
-            msg =
-              'Upload rejected (permission denied). ' +
-              'Check that the "' + bucket + '" bucket has an INSERT policy for the anon role. ' +
-              'See SUPABASE_SETUP.md for the required SQL policies.';
-          }
-          console.error(`[AvenoraStorage] ${msg}`);
-          reject(new Error(msg));
+          reject(_storageError(rawMsg, xhr.status, bucket));
         }
       };
-      xhr.onerror  = () => reject(new Error('Upload failed: network error. Check your internet connection.'));
-      xhr.onabort  = () => reject(new Error('Upload cancelled'));
+      xhr.onerror = () => reject(new Error('Upload failed: network error. Check your internet connection.'));
+      xhr.onabort = () => reject(new Error('Upload cancelled'));
       xhr.send(file);
     });
+  }
+
+  // ─── TUS resumable upload (> 6 MB) ───────────────────────
+  // Implements a minimal TUS 1.0.0 client against the Supabase Storage
+  // resumable endpoint. Uses chunked PATCH requests so large files survive
+  // Android Chrome's 50 MB default XHR body limit and the Supabase plan
+  // free-tier single-request size cap.
+  const TUS_CHUNK = 6 * 1024 * 1024; // 6 MB
+
+  function _tusUpload(bucket, storagePath, file, mimeType, onProgress) {
+    return new Promise((resolve, reject) => {
+      const endpoint = `${SUPABASE_URL}/storage/v1/upload/resumable`;
+
+      // base64url helper (no external dep)
+      function b64(str) { return btoa(unescape(encodeURIComponent(str))); }
+
+      // 1 — Create upload (POST)
+      const createXhr = new XMLHttpRequest();
+      createXhr.open('POST', endpoint);
+      createXhr.setRequestHeader('apikey', SUPABASE_ANON);
+      createXhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_ANON}`);
+      createXhr.setRequestHeader('x-upsert', 'true');
+      createXhr.setRequestHeader('Tus-Resumable', '1.0.0');
+      createXhr.setRequestHeader('Upload-Length', String(file.size));
+      createXhr.setRequestHeader(
+        'Upload-Metadata',
+        [
+          `bucketName ${b64(bucket)}`,
+          `objectName ${b64(storagePath)}`,
+          `contentType ${b64(mimeType)}`,
+          `cacheControl ${b64('3600')}`,
+        ].join(',')
+      );
+
+      createXhr.onload = () => {
+        if (createXhr.status !== 201) {
+          let rawMsg = '';
+          try { rawMsg = JSON.parse(createXhr.responseText).message || ''; } catch {}
+          return reject(_storageError(rawMsg, createXhr.status, bucket));
+        }
+
+        let uploadUrl = createXhr.getResponseHeader('Location');
+        if (!uploadUrl) {
+          return reject(new Error('TUS creation failed: no Location header returned by Supabase.'));
+        }
+        // Supabase may return a relative path — resolve it against the base
+        if (uploadUrl.startsWith('/')) {
+          uploadUrl = `${SUPABASE_URL}${uploadUrl}`;
+        }
+
+        // 2 — PATCH chunks sequentially
+        let offset = 0;
+
+        function patchChunk() {
+          const chunk = file.slice(offset, offset + TUS_CHUNK);
+          const chunkSize = chunk.size;
+
+          const patchXhr = new XMLHttpRequest();
+          patchXhr.open('PATCH', uploadUrl);
+          patchXhr.setRequestHeader('Content-Type', 'application/offset+octet-stream');
+          patchXhr.setRequestHeader('Content-Length', String(chunkSize));
+          patchXhr.setRequestHeader('Upload-Offset', String(offset));
+          patchXhr.setRequestHeader('Tus-Resumable', '1.0.0');
+          patchXhr.setRequestHeader('apikey', SUPABASE_ANON);
+          patchXhr.setRequestHeader('Authorization', `Bearer ${SUPABASE_ANON}`);
+
+          if (onProgress && patchXhr.upload) {
+            patchXhr.upload.addEventListener('progress', e => {
+              if (e.lengthComputable) {
+                const totalDone = offset + e.loaded;
+                onProgress(Math.min(99, Math.round((totalDone / file.size) * 100)));
+              }
+            });
+          }
+
+          patchXhr.onload = () => {
+            if (patchXhr.status !== 204) {
+              let rawMsg = '';
+              try { rawMsg = JSON.parse(patchXhr.responseText).message || ''; } catch {}
+              return reject(_storageError(rawMsg, patchXhr.status, bucket));
+            }
+
+            const newOffset = parseInt(patchXhr.getResponseHeader('Upload-Offset') || String(offset + chunkSize), 10);
+            offset = newOffset;
+
+            if (offset >= file.size) {
+              // Upload complete
+              if (onProgress) onProgress(100);
+              resolve({ url: _publicUrl(bucket, storagePath), storagePath, bucket });
+            } else {
+              patchChunk();
+            }
+          };
+
+          patchXhr.onerror = () => reject(new Error('TUS chunk upload failed: network error.'));
+          patchXhr.onabort = () => reject(new Error('Upload cancelled'));
+          patchXhr.send(chunk);
+        }
+
+        patchChunk();
+      };
+
+      createXhr.onerror = () => reject(new Error('TUS upload init failed: network error.'));
+      createXhr.send();
+    });
+  }
+
+  // ─── Shared error builder ─────────────────────────────────
+  function _storageError(rawMsg, status, bucket) {
+    let msg = rawMsg || `Upload failed (HTTP ${status})`;
+
+    if (
+      rawMsg.toLowerCase().includes('exceeded the maximum allowed size') ||
+      rawMsg.toLowerCase().includes('file size limit') ||
+      status === 413
+    ) {
+      const limitMB = bucket === 'videos' ? 500
+                    : bucket === 'music' || bucket === 'stream-media' ? 100
+                    : 20;
+      msg =
+        'Upload failed because the storage limit rejected this file. ' +
+        'Maximum allowed size for ' + bucket + ' is ' + limitMB + ' MB. ' +
+        'If your file is under ' + limitMB + ' MB, the bucket limit may need ' +
+        'to be updated — run scripts/fix-video-bucket-limit.js.';
+      const err = new Error(msg);
+      err.code = 'FILE_TOO_LARGE_FOR_STORAGE';
+      err.limitMB = limitMB;
+      console.error(`[AvenoraStorage] ${msg}`);
+      return err;
+    }
+
+    if (status === 400 && rawMsg.toLowerCase().includes('policy')) {
+      msg =
+        'Upload blocked by storage policy. ' +
+        'Open Supabase dashboard → Storage → ' + bucket +
+        ' → Policies and add an INSERT policy for the anon role. ' +
+        'See SUPABASE_SETUP.md for the exact SQL.';
+    }
+    if (status === 401 || status === 403) {
+      msg =
+        'Upload rejected (permission denied). ' +
+        'Check that the "' + bucket + '" bucket has an INSERT policy for the anon role. ' +
+        'See SUPABASE_SETUP.md for the required SQL policies.';
+    }
+    console.error(`[AvenoraStorage] ${msg}`);
+    return new Error(msg);
+  }
+
+  // ─── Upload dispatcher ────────────────────────────────────
+  // Uses TUS for files > 6 MB (avoids Supabase plan single-request limits),
+  // plain XHR POST for smaller files (faster, simpler).
+  function _upload(bucket, storagePath, file, onProgress) {
+    const mimeType = _detectMime(file);
+    if (file.size > TUS_CHUNK) {
+      return _tusUpload(bucket, storagePath, file, mimeType, onProgress);
+    }
+    return _xhrUpload(bucket, storagePath, file, mimeType, onProgress);
   }
 
   // ─── Get current user UID ─────────────────────────────────

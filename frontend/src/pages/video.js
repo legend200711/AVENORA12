@@ -615,53 +615,80 @@ function loadUploadTab(container) {
     return;
   }
 
+  const MAX_VIDEO_BYTES = 500 * 1024 * 1024;
+  const maxMB = Math.round(MAX_VIDEO_BYTES / (1024 * 1024));
+
   container.innerHTML = `
-    <div style="max-width:680px;margin:0 auto;padding:var(--space-lg)">
-      <div class="midnight-section-header" style="padding:0;margin-bottom:var(--space-lg)">
-        <span class="midnight-section-title">UPLOAD VIDEO</span>
+    <div class="av-upload-page">
+
+      <!-- Hero -->
+      <div class="av-upload-hero">
+        <div class="av-upload-hero-title">AVENORA UPLOAD STUDIO</div>
+        <div class="av-upload-hero-sub">Upload &amp; share your content with the AVENORA community</div>
       </div>
 
-
       <form id="som-upload-form" novalidate>
-        <!-- Video File Drop Zone -->
-        <div class="midnight-upload-zone" id="som-drop-zone" role="button" tabindex="0" aria-label="Drop video file here or click to browse">
+
+        <!-- Drop Zone -->
+        <div class="av-drop-zone" id="som-drop-zone" role="button" tabindex="0" aria-label="Drop video file here or click to browse">
           <input type="file" id="som-video-file" accept="video/mp4,video/webm,video/ogg,video/quicktime,video/x-msvideo" aria-label="Select video file">
           <div id="som-drop-label">
-            <div class="midnight-upload-icon">🎬</div>
-            <div class="midnight-upload-label">Drop video here or click to browse</div>
-            <div class="midnight-upload-hint">MP4, WebM, MOV, AVI · Max 2 GB</div>
+            <div class="av-drop-icon">🎬</div>
+            <div class="av-drop-label">Drop your video here or click to browse</div>
+            <div class="av-drop-hint">Drag &amp; drop or tap to select</div>
+            <div class="av-format-chips">
+              <span class="av-format-chip">MP4</span>
+              <span class="av-format-chip">WebM</span>
+              <span class="av-format-chip">MOV</span>
+              <span class="av-format-chip">AVI</span>
+            </div>
+            <div class="av-size-limit">Max ${maxMB} MB</div>
           </div>
         </div>
-        <div id="som-file-info" style="display:none;margin-top:8px;font-size:0.82rem;color:var(--text-secondary)"></div>
-        <div id="som-file-error" style="display:none;color:var(--neon-red);font-size:0.82rem;margin-top:6px"></div>
+
+        <!-- File selected state -->
+        <div id="som-file-info" style="display:none"></div>
+        <div id="som-file-error" style="display:none;color:#ff5c6e;font-size:0.82rem;margin-bottom:8px"></div>
+
+        <!-- Validation row -->
+        <div class="av-validation-row" id="som-validation-row" style="display:none">
+          <span class="av-val-item" id="av-val-type">◌ File type</span>
+          <span class="av-val-item" id="av-val-size">◌ File size</span>
+          <span class="av-val-item" id="av-val-ready">◌ Ready to upload</span>
+        </div>
 
         <!-- Thumbnail -->
-        <div class="form-group" style="margin-top:var(--space-md)">
-          <label class="form-label" for="som-thumbnail">Thumbnail <span style="color:var(--text-muted);font-weight:400">(optional — JPG/PNG, max 5 MB)</span></label>
-          <input type="file" id="som-thumbnail" accept="image/jpeg,image/png,image/webp" class="form-input">
-          <div id="som-thumb-preview" style="margin-top:8px;display:none">
-            <img id="som-thumb-img" src="" alt="Thumbnail preview" style="max-width:240px;border-radius:var(--radius-sm);border:1px solid rgba(0,168,255,0.2)">
+        <div class="som-field" style="margin-bottom:var(--space-md)">
+          <label class="som-label" for="som-thumbnail" style="font-size:0.75rem;letter-spacing:0.1em;color:var(--text-muted)">
+            THUMBNAIL
+            <span style="font-weight:400;text-transform:none;letter-spacing:0;margin-left:6px;color:var(--text-muted)">optional · JPG/PNG/WebP · max 5 MB</span>
+          </label>
+          <input type="file" id="som-thumbnail" accept="image/jpeg,image/png,image/webp" class="som-file-input">
+          <div id="som-thumb-preview" style="margin-top:10px;display:none">
+            <img id="som-thumb-img" src="" alt="Thumbnail preview" class="som-thumb-preview-img">
           </div>
         </div>
 
         <!-- Title -->
-        <div class="form-group">
-          <label class="form-label" for="som-title">Title <span style="color:var(--neon-red)">*</span></label>
-          <input type="text" id="som-title" class="form-input" placeholder="Enter video title" maxlength="200" required>
-          <small style="color:var(--text-muted)" id="som-title-count">0 / 200</small>
+        <div class="som-field" style="margin-bottom:var(--space-md)">
+          <label class="som-label" for="som-title" style="font-size:0.75rem;letter-spacing:0.1em;color:var(--text-muted)">
+            TITLE <span style="color:#c9a84c">*</span>
+          </label>
+          <input type="text" id="som-title" class="som-input" placeholder="Enter video title" maxlength="200" required>
+          <small class="som-count" id="som-title-count">0 / 200</small>
         </div>
 
         <!-- Description -->
-        <div class="form-group">
-          <label class="form-label" for="som-desc">Description</label>
-          <textarea id="som-desc" class="form-input" placeholder="Describe your video..." rows="4" maxlength="5000" style="resize:vertical"></textarea>
-          <small style="color:var(--text-muted)" id="som-desc-count">0 / 5000</small>
+        <div class="som-field" style="margin-bottom:var(--space-md)">
+          <label class="som-label" for="som-desc" style="font-size:0.75rem;letter-spacing:0.1em;color:var(--text-muted)">DESCRIPTION</label>
+          <textarea id="som-desc" class="som-input som-textarea" placeholder="Describe your video…" rows="4" maxlength="5000"></textarea>
+          <small class="som-count" id="som-desc-count">0 / 5000</small>
         </div>
 
         <!-- Category -->
-        <div class="form-group">
-          <label class="form-label" for="som-category">Category</label>
-          <select id="som-category" class="form-input">
+        <div class="som-field" style="margin-bottom:var(--space-md)">
+          <label class="som-label" for="som-category" style="font-size:0.75rem;letter-spacing:0.1em;color:var(--text-muted)">CATEGORY</label>
+          <select id="som-category" class="som-input">
             <option value="other">Other</option>
             <option value="movies">Movies</option>
             <option value="shows">Shows</option>
@@ -674,43 +701,91 @@ function loadUploadTab(container) {
         </div>
 
         <!-- Visibility -->
-        <div class="form-group">
-          <label class="form-label">Visibility</label>
-          <div style="display:flex;gap:var(--space-md)">
+        <div class="som-field" style="margin-bottom:var(--space-lg)">
+          <label class="som-label" style="font-size:0.75rem;letter-spacing:0.1em;color:var(--text-muted);margin-bottom:10px;display:block">VISIBILITY</label>
+          <div class="av-visibility-group">
             ${[
               { val: 'public',   label: 'Public',   icon: '🌐', desc: 'Anyone can watch' },
               { val: 'unlisted', label: 'Unlisted',  icon: '🔗', desc: 'Only with link' },
               { val: 'private',  label: 'Private',   icon: '🔒', desc: 'Only you' },
             ].map((opt, i) => `
-              <label style="flex:1;cursor:pointer">
-                <input type="radio" name="som-visibility" value="${opt.val}" ${i === 0 ? 'checked' : ''} style="margin-right:6px">
-                ${opt.icon} ${opt.label}
-                <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px;padding-left:18px">${opt.desc}</div>
+              <label class="av-vis-card${i === 0 ? ' selected' : ''}" onclick="document.querySelectorAll('.av-vis-card').forEach(c=>c.classList.remove('selected'));this.classList.add('selected')">
+                <input type="radio" name="som-visibility" value="${opt.val}" ${i === 0 ? 'checked' : ''}>
+                <div class="av-vis-icon">${opt.icon}</div>
+                <div class="av-vis-label">${opt.label}</div>
+                <div class="av-vis-desc">${opt.desc}</div>
               </label>
             `).join('')}
           </div>
         </div>
 
-        <!-- Progress (hidden until upload) -->
-        <div id="som-upload-progress" style="display:none;margin:var(--space-md) 0">
-          <div style="display:flex;justify-content:space-between;font-size:0.82rem;color:var(--text-secondary);margin-bottom:6px">
-            <span id="som-progress-label">Uploading...</span>
-            <span id="som-progress-pct">0%</span>
+        <!-- Progress (hidden until upload starts) -->
+        <div id="som-upload-progress" class="av-upload-progress" style="display:none">
+          <div class="av-progress-header">
+            <span id="som-progress-label">Uploading…</span>
+            <span id="som-progress-pct" class="av-progress-pct">0%</span>
           </div>
-          <div class="midnight-progress-bar">
-            <div class="midnight-progress-fill" id="som-progress-fill" style="width:0%"></div>
+          <div class="av-progress-bar-wrap">
+            <div class="av-progress-bar-fill" id="som-progress-fill" style="width:0%"></div>
           </div>
-          <div id="som-upload-status" style="font-size:0.78rem;color:var(--text-muted);margin-top:6px"></div>
+          <div id="som-upload-status" class="av-progress-status"></div>
         </div>
 
         <div id="som-upload-result" style="display:none"></div>
 
-        <button type="submit" class="btn btn-primary w-full" id="som-upload-btn" style="margin-top:var(--space-md)">
-          UPLOAD VIDEO
+        <button type="submit" class="btn btn-primary" id="som-upload-btn" style="width:100%;padding:14px;font-family:var(--font-display,'Cinzel',serif);letter-spacing:0.12em;font-size:0.9rem;margin-top:var(--space-sm)">
+          🎬 UPLOAD VIDEO
         </button>
+
       </form>
     </div>
   `;
+
+  // Wire up drop-zone visual feedback for drag events
+  const dropZone = document.getElementById('som-drop-zone');
+  if (dropZone) {
+    dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+    dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+    dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); });
+  }
+
+  // Wire up file input → show selected state + validation row
+  const fileInput = document.getElementById('som-video-file');
+  const fileInfoEl = document.getElementById('som-file-info');
+  const validationRow = document.getElementById('som-validation-row');
+  if (fileInput) {
+    fileInput.addEventListener('change', () => {
+      const f = fileInput.files && fileInput.files[0];
+      if (!f) return;
+
+      // Show file-selected card
+      const sizeMB = (f.size / (1024 * 1024)).toFixed(1);
+      const ext = (f.name.split('.').pop() || '').toUpperCase();
+      fileInfoEl.style.display = 'flex';
+      fileInfoEl.className = 'av-file-selected';
+      fileInfoEl.innerHTML = `
+        <div class="av-file-selected-icon">✅</div>
+        <div class="av-file-selected-info">
+          <div class="av-file-selected-name">${escapeHtml(f.name)}</div>
+          <div class="av-file-selected-meta">${ext} · ${sizeMB} MB</div>
+        </div>
+        <button type="button" class="av-file-remove" aria-label="Remove file" onclick="document.getElementById('som-video-file').value='';document.getElementById('som-file-info').style.display='none';document.getElementById('som-validation-row').style.display='none'">✕</button>
+      `;
+
+      // Validation row
+      if (validationRow) {
+        validationRow.style.display = 'flex';
+        const isVideo = f.type.startsWith('video/') || /\.(mp4|webm|ogg|mov|avi|mkv)$/i.test(f.name);
+        const isSize  = f.size <= MAX_VIDEO_BYTES;
+        const typeEl  = document.getElementById('av-val-type');
+        const sizeEl  = document.getElementById('av-val-size');
+        const readyEl = document.getElementById('av-val-ready');
+        if (typeEl) { typeEl.textContent = (isVideo ? '✓' : '✗') + ' File type'; typeEl.className = 'av-val-item ' + (isVideo ? 'ok' : 'fail'); }
+        if (sizeEl) { sizeEl.textContent = (isSize ? '✓' : '✗') + ' File size'; sizeEl.className = 'av-val-item ' + (isSize ? 'ok' : 'fail'); }
+        if (readyEl) { readyEl.textContent = (isVideo && isSize ? '✓' : '✗') + ' Ready to upload'; readyEl.className = 'av-val-item ' + (isVideo && isSize ? 'ok' : 'fail'); }
+      }
+    });
+  }
 
   initUploadForm();
 }
@@ -881,7 +956,9 @@ async function openVideoDetail(videoId) {
           video.originalFileUrl = freshUrl;
         } else if (video.storagePath) {
           // Reconstruct the public URL from storagePath for public videos bucket
-          video.videoUrl = `https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public/videos/${video.storagePath}`;
+          // Encode segments so Android Chrome can load the URL (MediaError code 4 fix)
+          const encodedPath = video.storagePath.split('/').map(encodeURIComponent).join('/');
+          video.videoUrl = `https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public/videos/${encodedPath}`;
         }
       } catch (_) {}
     }
@@ -1047,13 +1124,13 @@ async function openVideoDetail(videoId) {
 /* ─── Player HTML ────────────────────────────────────────── */
 function buildPlayerHtml(video) {
   // Accept videoUrl (Supabase Storage), hlsUrl, or originalFileUrl (legacy API)
-  const src = video.videoUrl || video.hlsUrl || video.originalFileUrl;
-  if (!src) {
+  const rawSrc = video.videoUrl || video.hlsUrl || video.originalFileUrl;
+  if (!rawSrc) {
     return `
-      <div class="player-error-overlay" style="position:relative;min-height:280px">
-        <div class="player-error-icon">🎬</div>
-        <div class="player-error-msg">Video not yet available</div>
-        <div class="player-error-sub">
+      <div class="av-player-error" style="position:relative;min-height:280px;border-radius:var(--radius-md)">
+        <div class="av-player-error-icon">🎬</div>
+        <div class="av-player-error-title">VIDEO NOT YET AVAILABLE</div>
+        <div class="av-player-error-msg">
           Processing status: <strong>${escapeHtml(video.processingStatus || 'pending')}</strong><br>
           ${video.processingStatus === 'failed'
             ? 'This video failed to process. Please try re-uploading.'
@@ -1063,22 +1140,47 @@ function buildPlayerHtml(video) {
     `;
   }
 
-  const id = video._id || video.id;
+  // Ensure the URL is properly encoded so Android Chrome can load it.
+  // We only encode the pathname — never re-encode an already-encoded URL.
+  function _encodeSrc(url) {
+    try {
+      const u = new URL(url);
+      u.pathname = u.pathname.split('/').map(seg => {
+        try { return encodeURIComponent(decodeURIComponent(seg)); }
+        catch { return encodeURIComponent(seg); }
+      }).join('/');
+      return u.toString();
+    } catch {
+      return url;
+    }
+  }
+  const src = _encodeSrc(rawSrc);
+  const thumbSrc = video.thumbnailUrl ? _encodeSrc(video.thumbnailUrl) : null;
 
   return `
-    <video
-      id="som-video-el"
-      controls
-      playsinline
-      preload="metadata"
-      style="width:100%;display:block;max-height:70vh;background:#000"
-      aria-label="${escapeHtml(video.title)}"
-      src="${escapeHtml(src)}"
-      ${video.thumbnailUrl ? `poster="${escapeHtml(video.thumbnailUrl)}"` : ''}
-    >
-      <track kind="captions" label="Captions" default srclang="en" id="som-captions-track">
-      Your browser does not support HTML5 video.
-    </video>
+    <div class="avenora-player" id="som-player-container">
+      <div class="avenora-player-stage" style="aspect-ratio:16/9;position:relative;background:#000;border-radius:var(--radius-md);overflow:hidden">
+        <video
+          id="som-video-el"
+          controls
+          playsinline
+          preload="metadata"
+          crossorigin="anonymous"
+          style="width:100%;height:100%;display:block;background:#000"
+          aria-label="${escapeHtml(video.title)}"
+          src="${escapeHtml(src)}"
+          ${thumbSrc ? `poster="${escapeHtml(thumbSrc)}"` : ''}
+        >
+          <track kind="captions" label="Captions" srclang="en" id="som-captions-track">
+        </video>
+        <div class="avenora-player-overlay" id="som-player-overlay" style="display:none">
+          <div class="avenora-player-overlay-inner">
+            <div class="avenora-player-spinner"></div>
+            <div class="avenora-player-overlay-msg" id="som-overlay-msg">Loading video…</div>
+          </div>
+        </div>
+      </div>
+    </div>
   `;
 }
 
@@ -1089,53 +1191,129 @@ function initVideoElement(videoId) {
 
   const wrap = document.getElementById('som-player-wrap');
 
-  let retryCount = 0;
-  const maxRetries = 3;
+  // ── Overlay helpers ──────────────────────────────────────
+  function showOverlay(msg) {
+    const ov = document.getElementById('som-player-overlay');
+    const msgEl = document.getElementById('som-overlay-msg');
+    if (ov) { ov.style.display = 'flex'; }
+    if (msgEl) msgEl.textContent = msg || '';
+  }
+  function hideOverlay() {
+    const ov = document.getElementById('som-player-overlay');
+    if (ov) ov.style.display = 'none';
+  }
 
-  const showPlayerError = (msg, detail = '') => {
+  // ── Error card ───────────────────────────────────────────
+  // canRetry=false must be respected for codec errors (codes 3/4 format fail).
+  let retryCount = 0;
+  const maxNetworkRetries = 3;
+
+  const showPlayerError = (msg, detail = '', canRetry = false) => {
     wrap.innerHTML = `
-      <div class="player-error-overlay" style="position:relative;min-height:280px">
-        <div class="player-error-icon">⚠️</div>
-        <div class="player-error-msg">${escapeHtml(msg)}</div>
-        <div class="player-error-sub">${escapeHtml(detail)}</div>
-        ${retryCount < maxRetries ? `
-          <button class="btn btn-outline btn-sm" onclick="somRetryPlayer('${videoId}')">
-            Retry (${retryCount + 1}/${maxRetries})
-          </button>
-        ` : `
-          <p style="color:var(--text-muted);font-size:0.8rem">Max retries reached. Check your connection or try again later.</p>
-        `}
+      <div class="av-player-error" style="position:relative;min-height:280px;border-radius:var(--radius-md)">
+        <div class="av-player-error-icon">⚠</div>
+        <div class="av-player-error-title">VIDEO PLAYBACK ERROR</div>
+        <div class="av-player-error-msg">${escapeHtml(msg)}${detail ? '<br><span style="font-size:0.75rem;opacity:0.7">' + escapeHtml(detail) + '</span>' : ''}</div>
+        <div class="av-player-error-actions">
+          ${canRetry && retryCount < maxNetworkRetries ? `
+            <button class="btn btn-outline btn-sm" onclick="somRetryPlayer('${escapeHtml(videoId)}')">
+              ↻ Try Again (${retryCount + 1}/${maxNetworkRetries})
+            </button>
+          ` : canRetry ? `
+            <p style="color:var(--text-muted);font-size:0.8rem">Max retries reached. Check your connection.</p>
+          ` : ''}
+          <button class="btn btn-ghost btn-sm" onclick="loadTab(SOM.currentTab || 'home')">◀ Back to Videos</button>
+        </div>
       </div>
     `;
   };
 
-  el.addEventListener('error', () => {
+  // ── Error handler ────────────────────────────────────────
+  el.addEventListener('error', async () => {
     const err = el.error;
-    let msg = 'Unable to play this video.';
-    let detail = '';
-    if (err) {
-      switch (err.code) {
-        case 1:  detail = 'Playback was aborted.'; break;
-        case 2:  detail = 'Network error — check your connection.'; break;
-        case 3:  detail = 'Video decode error — unsupported format or corrupted file.'; break;
-        case 4:  detail = 'Video not supported by this browser.'; break;
-        default: detail = `Error code: ${err.code}`;
+    if (!err) return;
+
+    console.warn(`[SOM] Video error code=${err.code} videoId=${videoId}`, err.message || '');
+
+    switch (err.code) {
+      case 1:
+        // MEDIA_ERR_ABORTED — user/browser cancelled; not a real error
+        showPlayerError('Playback was stopped.', '', true);
+        break;
+
+      case 2:
+        retryCount++;
+        showPlayerError('Network connection interrupted.', 'Check your connection and try again.', true);
+        break;
+
+      case 3:
+        // Codec/decode failure — retrying is pointless
+        showPlayerError(
+          'Video decoding error — this format may not be supported.',
+          'Try re-uploading as MP4 (H.264 + AAC).',
+          false
+        );
+        break;
+
+      case 4: {
+        // MEDIA_ERR_SRC_NOT_SUPPORTED — could be bad URL, CORS, or truly unsupported codec.
+        // Probe the URL to distinguish between 404 / CORS / codec.
+        const src = el.currentSrc || el.src || '';
+        let probeResult = 'unknown';
+        if (src) {
+          try {
+            const resp = await fetch(src, { method: 'HEAD', mode: 'cors' });
+            if (resp.status === 404) probeResult = '404';
+            else if (resp.ok) probeResult = 'ok';
+            else probeResult = 'http_' + resp.status;
+          } catch (fetchErr) {
+            probeResult = fetchErr.message.toLowerCase().includes('cors') ? 'cors' : 'network';
+          }
+        }
+
+        let friendlyMsg, friendlyDetail;
+        if (probeResult === '404') {
+          friendlyMsg = 'Video not found in storage.';
+          friendlyDetail = 'The video file may have been deleted or moved.';
+        } else if (probeResult === 'cors') {
+          friendlyMsg = 'Storage access error.';
+          friendlyDetail = 'CORS policy blocked access to the video file.';
+        } else if (probeResult === 'network') {
+          friendlyMsg = 'Cannot reach video storage.';
+          friendlyDetail = 'Check your internet connection and try again.';
+          retryCount++;
+        } else {
+          friendlyMsg = 'Video format not supported by this browser.';
+          friendlyDetail = 'Try a different browser, or re-upload as MP4 (H.264 + AAC).';
+        }
+
+        const canRetry = probeResult === 'network' || probeResult === '404';
+        showPlayerError(friendlyMsg, friendlyDetail, canRetry);
+        break;
       }
+
+      default:
+        retryCount++;
+        showPlayerError('Playback error.', `Error code: ${err.code}`, true);
     }
-    showPlayerError(msg, detail);
   });
 
+  // ── Loading / buffering state ────────────────────────────
+  el.addEventListener('loadstart', () => showOverlay('Loading video…'));
+  el.addEventListener('loadedmetadata', () => hideOverlay());
+  el.addEventListener('canplay', () => { hideOverlay(); });
+  el.addEventListener('waiting', () => showOverlay('Buffering…'));
+  el.addEventListener('playing', () => hideOverlay());
+
   el.addEventListener('stalled', () => {
-    // Stalled doesn't immediately mean failure — wait for error event
     console.warn('[SOM] Video stalled — buffering or network issue');
   });
 
-  // Track position for history (local + server)
+  // ── Watch position tracking ──────────────────────────────
   el.addEventListener('timeupdate', throttle(() => {
     if (SOM.currentVideo) {
       const pos = Math.floor(el.currentTime);
       SOM.addToHistory(SOM.currentVideo, pos);
-      // Sync to server if logged in (every ~15s)
       if (LegendAPI.auth.isLoggedIn()) {
         LegendAPI.videos.updateHistory(videoId, pos).catch(() => {});
       }
@@ -1175,7 +1353,9 @@ window.somRetryPlayer = async function(videoId) {
           video.hlsUrl   = freshUrl;
           video.originalFileUrl = freshUrl;
         } else if (video.storagePath) {
-          video.videoUrl = `https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public/videos/${video.storagePath}`;
+          // Encode each path segment so the URL is valid on Android Chrome
+          const encodedPath = video.storagePath.split('/').map(encodeURIComponent).join('/');
+          video.videoUrl = `https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public/videos/${encodedPath}`;
         }
       } catch (_) {}
     }
