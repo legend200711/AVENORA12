@@ -82,13 +82,18 @@ USING (true);
 
 ---
 
-### 3.1–3.6 Storage bucket policies
+### 3.1–3.6 Storage bucket policies — CRITICAL FOR DIRECT BROWSER UPLOADS
+
+> **IMPORTANT:** AVENORA Channel Studio uploads files **directly from the browser** to
+> Supabase Storage using the anon key (bypassing the backend for the file transfer).
+> This means you **MUST** add INSERT policies for the anon role on the `music`, `videos`,
+> and `gallery` buckets, otherwise all uploads will fail with "Failed to fetch" / network error.
 
 Enable RLS on all buckets and apply the policies below.
 In the Supabase dashboard go to **Storage → Policies** and add the SQL policies,
 or run them in **SQL Editor**.
 
-### 3.1 `videos` bucket (public read, backend-only write)
+### 3.1 `videos` bucket
 
 ```sql
 -- Allow anyone to read (SELECT) objects in the videos bucket
@@ -96,40 +101,65 @@ CREATE POLICY "Public read — videos"
 ON storage.objects FOR SELECT
 USING (bucket_id = 'videos');
 
--- Allow INSERT via service role only (backend uses service-role key)
--- No client-side INSERT policy needed — all uploads go through the backend API.
+-- REQUIRED: Allow direct browser uploads (anon key) for Channel Studio video uploads
+CREATE POLICY "Anon insert — videos"
+ON storage.objects FOR INSERT
+TO anon
+WITH CHECK (bucket_id = 'videos');
 ```
 
-### 3.2 `thumbnails` bucket (public read, backend-only write)
+### 3.2 `thumbnails` bucket
 
 ```sql
 CREATE POLICY "Public read — thumbnails"
 ON storage.objects FOR SELECT
 USING (bucket_id = 'thumbnails');
+
+CREATE POLICY "Anon insert — thumbnails"
+ON storage.objects FOR INSERT
+TO anon
+WITH CHECK (bucket_id = 'thumbnails');
 ```
 
-### 3.3 `music` bucket (public read, backend-only write)
+### 3.3 `music` bucket — **REQUIRED for music uploads**
 
 ```sql
+-- REQUIRED: Without this policy all music uploads return "Failed to fetch"
 CREATE POLICY "Public read — music"
 ON storage.objects FOR SELECT
 USING (bucket_id = 'music');
+
+CREATE POLICY "Anon insert — music"
+ON storage.objects FOR INSERT
+TO anon
+WITH CHECK (bucket_id = 'music');
 ```
 
-### 3.4 `stream-media` bucket (public read, backend-only write)
+### 3.4 `stream-media` bucket
 
 ```sql
 CREATE POLICY "Public read — stream-media"
 ON storage.objects FOR SELECT
 USING (bucket_id = 'stream-media');
+
+CREATE POLICY "Anon insert — stream-media"
+ON storage.objects FOR INSERT
+TO anon
+WITH CHECK (bucket_id = 'stream-media');
 ```
 
-### 3.5 `gallery` bucket (public read, backend-only write)
+### 3.5 `gallery` bucket — **REQUIRED for photo/slideshow uploads**
 
 ```sql
+-- REQUIRED: Without this policy all photo uploads return "Failed to fetch"
 CREATE POLICY "Public read — gallery"
 ON storage.objects FOR SELECT
 USING (bucket_id = 'gallery');
+
+CREATE POLICY "Anon insert — gallery"
+ON storage.objects FOR INSERT
+TO anon
+WITH CHECK (bucket_id = 'gallery');
 ```
 
 ### 3.6 `avatars` bucket (private — signed URLs only)
@@ -140,11 +170,10 @@ USING (bucket_id = 'gallery');
 -- No additional client-side policies needed.
 ```
 
-> **Why no client-side INSERT policies?**
-> All file uploads flow through the AVENORA backend API (`/api/upload/*`,
-> `/api/videos/save-meta`, etc.). The backend uses the Supabase **service-role** key
-> which bypasses RLS entirely, so no client-facing INSERT policy is needed.
-> This prevents users from uploading to arbitrary paths.
+> **Security note:** The anon INSERT policies allow any client with the anon key to
+> upload files to these buckets. This is intentional — AVENORA uses Firebase Auth to
+> identify users (stored in the path as `{uid}/...`) and the backend validates ownership
+> before creating media records. Service-role writes bypass RLS automatically.
 
 ---
 
@@ -210,9 +239,15 @@ in any frontend file.
 
 ---
 
-## 7. Bucket CORS configuration
+## 7. Bucket CORS configuration — CRITICAL FOR UPLOADS
 
-In **Storage → Buckets → {bucket} → CORS**, add:
+> **IMPORTANT:** Supabase Storage CORS must allow `POST` and `PATCH` methods.
+> Without these, all direct browser uploads will fail with "Failed to fetch".
+
+In the **Supabase Dashboard → Storage → Policies → Configuration** (or via the API),
+set CORS on every bucket to allow uploads from the AVENORA frontend origin.
+
+Run in **SQL Editor** or via Supabase Management API:
 
 ```json
 [
@@ -220,16 +255,35 @@ In **Storage → Buckets → {bucket} → CORS**, add:
     "allowedOrigins": [
       "https://legend200711.github.io",
       "http://localhost:3000",
-      "http://localhost:5173"
+      "http://localhost:5173",
+      "http://localhost:3001"
     ],
-    "allowedMethods": ["GET", "HEAD"],
-    "allowedHeaders": ["*"],
+    "allowedMethods": ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "allowedHeaders": [
+      "authorization",
+      "x-client-info",
+      "apikey",
+      "content-type",
+      "content-length",
+      "x-upsert",
+      "tus-resumable",
+      "upload-length",
+      "upload-metadata",
+      "upload-offset",
+      "cache-control"
+    ],
+    "exposedHeaders": ["upload-offset", "location"],
     "maxAgeSeconds": 3600
   }
 ]
 ```
 
-For the `avatars` bucket also add `Authorization` to `allowedHeaders`.
+> **Note:** Supabase Storage has a built-in CORS config at the project level.
+> Go to **Supabase Dashboard → Settings → API → Storage CORS** or use the
+> Storage management API to apply this config to all buckets.
+> The `tus-resumable`, `upload-length`, `upload-metadata`, `upload-offset`, `x-upsert`
+> headers are required for the TUS resumable upload protocol used by AVENORA for
+> files larger than 6 MB.
 
 ---
 
@@ -284,11 +338,14 @@ After completing setup, verify each item:
 - [ ] `videos`, `thumbnails`, `music`, `stream-media`, `gallery` are set to **public**
 - [ ] `avatars` is set to **private** (RLS enabled, no public SELECT policy)
 - [ ] Public read SELECT policies created for all 5 public buckets
+- [ ] **Anon INSERT policies created for `music`, `videos`, `gallery`, `thumbnails`, `stream-media`** (required for direct browser upload)
+- [ ] **Supabase Storage CORS includes `POST`, `PATCH`, `OPTIONS` methods** (required for direct browser upload)
 - [ ] `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` in `backend/.env`
 - [ ] Backend starts without `[SupabaseStorage] Storage service is not configured` error
-- [ ] Test upload via `POST /api/videos/save-meta` returns a public URL
-- [ ] Public URL is playable directly in the browser / `<video>` tag
+- [ ] Test direct browser upload to `music` bucket succeeds from `https://legend200711.github.io`
+- [ ] Public URL is playable directly in the browser / `<video>` or `<audio>` tag
 - [ ] Avatar signed URL is generated and refreshed by backend
+- [ ] Render backend responds at `https://avenora-backend.onrender.com/health`
 
 ---
 
@@ -297,8 +354,11 @@ After completing setup, verify each item:
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | `STORAGE_NOT_CONFIGURED` error | Missing env vars | Set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env` |
+| **"Failed to fetch" at 0% on upload** | **Missing INSERT policy for anon role** | **Add `CREATE POLICY "Anon insert" ON storage.objects FOR INSERT TO anon WITH CHECK (bucket_id = 'music')` (and same for `videos`, `gallery`, `thumbnails`, `stream-media`)** |
+| **"Failed to fetch" at 0% on upload** | **CORS not allowing POST/PATCH** | **Update Supabase Storage CORS to include `POST`, `PATCH`, `PUT`, `OPTIONS` methods — see Section 7** |
 | `403 Forbidden` on public URL | Bucket is private or RLS blocks SELECT | Ensure bucket is public and public-read policy exists |
 | `413 Payload Too Large` | Upload size exceeds limit | Increase `MAX_FILE_SIZE_MB` in backend `.env` |
 | Video plays on desktop, black on mobile | CORS not set | Add CORS rule allowing `GET` from your frontend origin |
 | Signed URL expired | Token expired after 1 hour | Backend auto-refreshes; if broken, check `GET /api/users/:id/avatar-url` |
 | `Bucket not found` | Bucket not created yet | Create bucket in Supabase dashboard or restart backend to auto-create |
+| **Backend `404 x-render-routing: no-server`** | **Render service not running** | **Go to Render dashboard → avenora-backend → Manual Deploy or check build/deploy logs** |

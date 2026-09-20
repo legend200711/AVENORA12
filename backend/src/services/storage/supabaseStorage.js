@@ -252,9 +252,21 @@ async function ensureBuckets() {
           fileSizeLimit: cfg.fileSizeLimit,
         });
         if (updateErr) {
-          logger.warn(
-            `[SupabaseStorage] Could not update bucket "${cfg.name}": ${updateErr.message}`
-          );
+          // Supabase free plan rejects fileSizeLimit updates with 413 EntityTooLarge
+          // (a known Supabase API quirk). The bucket still exists and is usable.
+          // The actual upload limit is determined by the Supabase plan (free = 50 MB default).
+          // Suppress this non-fatal error.
+          if (updateErr.statusCode === '413' || updateErr.status === 413 ||
+              (updateErr.message || '').toLowerCase().includes('maximum allowed size')) {
+            logger.info(
+              `[SupabaseStorage] Bucket "${cfg.name}" exists (public=${cfg.public}) — ` +
+              `fileSizeLimit update skipped (Supabase plan limit applies; set in dashboard if needed)`
+            );
+          } else {
+            logger.warn(
+              `[SupabaseStorage] Could not update bucket "${cfg.name}": ${updateErr.message}`
+            );
+          }
         } else {
           logger.info(
             `[SupabaseStorage] Bucket "${cfg.name}" updated: ` +

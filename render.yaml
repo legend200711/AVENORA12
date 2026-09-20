@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: avenora-backend
+    runtime: node
+    plan: free
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: node src/server.js
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        fromService:
+          name: avenora-backend
+          type: web
+          property: port
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_WEB_API_KEY
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: JWT_SECRET
+        sync: false
+      - key: FOUNDER_EMAIL
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: FRONTEND_URL
+        value: https://legend200711.github.io
+      - key: RENDER
+        value: "true"
+      - key: MAX_FILE_SIZE_MB
+        value: "500"
+      - key: MUSIC_MAX_FILE_MB
+        value: "100"
+      - key: RESEND_API_KEY
+        sync: false

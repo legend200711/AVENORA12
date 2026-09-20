@@ -737,8 +737,9 @@
         const fullUrl = `${BASE_URL}/videos/library/${encodeURIComponent(sid)}`;
 
         // Attempt DELETE with automatic retry for transient failures (Render cold-start, 502/503).
-        // Max 3 attempts: immediate, after 8 s, after 20 s.
-        const RETRY_DELAYS = [0, 8000, 20000];
+        // Max 3 attempts: immediate, after 5 s, after 10 s.
+        // Keep timeouts short so the UI never hangs >30s total.
+        const RETRY_DELAYS = [0, 5000, 10000];
         let lastErr = null;
         for (let attempt = 0; attempt < RETRY_DELAYS.length; attempt++) {
           if (attempt > 0) {
@@ -753,8 +754,8 @@
           }
 
           const _aborter = new AbortController();
-          // Give the backend up to 30 s to respond (covers Render cold start)
-          const _tid = setTimeout(() => _aborter.abort(), 30000);
+          // Give the backend up to 12 s to respond per attempt (3 attempts = max ~27s total)
+          const _tid = setTimeout(() => _aborter.abort(), 12000);
           let res;
           try {
             res = await fetch(fullUrl, {

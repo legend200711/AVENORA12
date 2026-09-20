@@ -95,7 +95,27 @@
           reject(_storageError(rawMsg, xhr.status, bucket));
         }
       };
-      xhr.onerror = () => reject(new Error('Upload failed: network error. Check your internet connection.'));
+      xhr.onerror = () => {
+        // xhr.onerror fires for: CORS rejection, network down, wrong URL.
+        // On Android + Supabase this usually means the bucket is missing an
+        // INSERT policy for the anon role. See SUPABASE_SETUP.md.
+        const diagMsg =
+          'UPLOAD FAILED — Network error reaching Supabase Storage.\n\n' +
+          'UPLOAD ENDPOINT: ' + url + '\n' +
+          'BUCKET: ' + bucket + '\n\n' +
+          'Most likely cause: the "' + bucket + '" bucket has no INSERT policy for the anon role.\n' +
+          'Fix: Supabase Dashboard → Storage → ' + bucket + ' → Policies → Add INSERT policy for anon.\n' +
+          'See SUPABASE_SETUP.md for the exact SQL.\n\n' +
+          'Other causes: no internet connection, Supabase project paused/deleted.';
+        console.error('[AvenoraStorage] ' + diagMsg);
+        reject(new Error(
+          'UPLOAD FAILED\n\nReason: Network error — cannot reach Supabase Storage.\n\n' +
+          'UPLOAD ENDPOINT:\n' + url + '\n\n' +
+          'BUCKET: ' + bucket + '\n\n' +
+          'Most likely cause: "' + bucket + '" bucket needs an INSERT policy for the anon role.\n' +
+          'See SUPABASE_SETUP.md for the required SQL policies.'
+        ));
+      };
       xhr.onabort = () => reject(new Error('Upload cancelled'));
       xhr.send(file);
     });
@@ -201,7 +221,23 @@
         patchChunk();
       };
 
-      createXhr.onerror = () => reject(new Error('TUS upload init failed: network error.'));
+      createXhr.onerror = () => {
+        const url2 = `${SUPABASE_URL}/storage/v1/upload/resumable`;
+        console.error(
+          '[AvenoraStorage] TUS upload init failed.\n' +
+          'TUS ENDPOINT: ' + url2 + '\n' +
+          'BUCKET: ' + bucket + '\n' +
+          'Cause: network error — CORS rejection or Supabase project paused.\n' +
+          'Fix: ensure "' + bucket + '" bucket has INSERT policy for anon in Supabase Dashboard.'
+        );
+        reject(new Error(
+          'UPLOAD FAILED\n\nReason: Network error — cannot reach Supabase Storage (TUS).\n\n' +
+          'TUS ENDPOINT:\n' + url2 + '\n\n' +
+          'BUCKET: ' + bucket + '\n\n' +
+          'Most likely cause: "' + bucket + '" bucket needs an INSERT policy for the anon role.\n' +
+          'See SUPABASE_SETUP.md for the required SQL policies.'
+        ));
+      };
       createXhr.send();
     });
   }

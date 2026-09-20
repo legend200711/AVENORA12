@@ -746,7 +746,7 @@ window.adminDeleteVideo = async function(videoId) {
     const t = document.createElement('div');
     t.id = _delToastId;
     t.className = 'toast info';
-    t.textContent = 'Deleting… (server may take up to 30s to respond)';
+    t.textContent = 'Deleting… (contacting backend — up to 30s)';
     container.appendChild(t);
   })();
 

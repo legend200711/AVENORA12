@@ -1510,7 +1510,15 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
 
   try {
     if (!window.AvenoraStorage) throw new Error('Storage not available — refresh and try again');
-    _chsUpdateProgress(uid, 5, 'Uploading…');
+    _chsUpdateProgress(uid, 5, 'Uploading to storage…');
+
+    // Log diagnostic info before attempting upload
+    console.info('[ChannelStudio] Starting audio upload:', {
+      file: file.name,
+      size: Math.round(file.size / 1024) + ' KB',
+      type: file.type,
+      supabaseUrl: 'https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/music/',
+    });
 
     const result = await window.AvenoraStorage.upload('audio', file, pct => {
       _chsUpdateProgress(uid, pct, `Uploading… ${pct}%`);
@@ -1520,15 +1528,43 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
 
     const titleVal = (_chsEl('chs-prog-title-' + uid)?.value || file.name.replace(/\.[^.]+$/, '')).trim();
 
-    // Save record to media library — use returned savedItem for channel add
-    const saveResp = await _chsApi('POST', '/media/save', {
-      type: 'audio',
-      title: titleVal,
-      url: result.url,
-      storagePath: result.storagePath,
-      fileSize: file.size,
-      mimeType: file.type,
-    });
+    // Save record to media library via backend.
+    // If the backend is offline, store locally in _chsState.myMedia as a fallback
+    // so the user can at least see the uploaded item and add it to the queue when backend recovers.
+    let saveResp;
+    try {
+      saveResp = await _chsApi('POST', '/media/save', {
+        type: 'audio',
+        title: titleVal,
+        url: result.url,
+        storagePath: result.storagePath,
+        fileSize: file.size,
+        mimeType: file.type,
+      });
+    } catch (saveErr) {
+      // Backend offline — the file IS in Supabase Storage. Don't lose the upload.
+      console.warn('[ChannelStudio] Backend /media/save failed (backend offline?):', saveErr.message);
+      console.warn('[ChannelStudio] File WAS uploaded to Supabase Storage:', result.url);
+      // Create a temporary local record so the user can add to channel even if backend is down
+      const localId = 'local_' + Date.now();
+      saveResp = {
+        id: localId,
+        item: {
+          id: localId,
+          type: 'audio',
+          title: titleVal,
+          url: result.url,
+          storagePath: result.storagePath,
+          fileSize: file.size,
+          mimeType: file.type,
+          duration: 0,
+          status: 'ready',
+          createdAt: new Date().toISOString(),
+          _localOnly: true,
+        },
+      };
+      _chsToast(`⚠ File uploaded but backend offline — added locally. Backend error: ${saveErr.message}`, 'error');
+    }
 
     // Build channel program item from the saved media record (uses actual server ID)
     const savedItem = saveResp.item || {
@@ -1629,7 +1665,15 @@ window.chsDoVideoUpload = async function(uid, addToChannel) {
 
   try {
     if (!window.AvenoraStorage) throw new Error('Storage not available — refresh and try again');
-    _chsUpdateProgress(uid, 3, 'Uploading video…');
+    _chsUpdateProgress(uid, 3, 'Uploading video to storage…');
+
+    // Log diagnostic info before attempting upload
+    console.info('[ChannelStudio] Starting video upload:', {
+      file: file.name,
+      size: Math.round(file.size / 1024 / 1024) + ' MB',
+      type: file.type,
+      supabaseUrl: 'https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/videos/',
+    });
 
     const result = await window.AvenoraStorage.upload('video', file, pct => {
       _chsUpdateProgress(uid, pct, `Uploading… ${pct}%`);
@@ -1638,15 +1682,40 @@ window.chsDoVideoUpload = async function(uid, addToChannel) {
     _chsUpdateProgress(uid, 95, 'Saving to library…');
     const titleVal = (_chsEl('chs-prog-title-' + uid)?.value || file.name.replace(/\.[^.]+$/, '')).trim();
 
-    // Save record — use returned savedItem for channel add
-    const saveResp = await _chsApi('POST', '/media/save', {
-      type: 'video',
-      title: titleVal,
-      url: result.url,
-      storagePath: result.storagePath,
-      fileSize: file.size,
-      mimeType: file.type,
-    });
+    // Save record to media library via backend.
+    // If backend is offline, store locally so the upload isn't lost.
+    let saveResp;
+    try {
+      saveResp = await _chsApi('POST', '/media/save', {
+        type: 'video',
+        title: titleVal,
+        url: result.url,
+        storagePath: result.storagePath,
+        fileSize: file.size,
+        mimeType: file.type,
+      });
+    } catch (saveErr) {
+      console.warn('[ChannelStudio] Backend /media/save failed (backend offline?):', saveErr.message);
+      console.warn('[ChannelStudio] Video WAS uploaded to Supabase Storage:', result.url);
+      const localId = 'local_' + Date.now();
+      saveResp = {
+        id: localId,
+        item: {
+          id: localId,
+          type: 'video',
+          title: titleVal,
+          url: result.url,
+          storagePath: result.storagePath,
+          fileSize: file.size,
+          mimeType: file.type,
+          duration: 0,
+          status: 'ready',
+          createdAt: new Date().toISOString(),
+          _localOnly: true,
+        },
+      };
+      _chsToast(`⚠ Video uploaded but backend offline — added locally. Error: ${saveErr.message}`, 'error');
+    }
 
     const savedItem = saveResp.item || {
       id: saveResp.id,
