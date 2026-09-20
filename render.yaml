@@ -10,11 +10,6 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: PORT
-        fromService:
-          name: avenora-backend
-          type: web
-          property: port
       - key: FIREBASE_PROJECT_ID
         sync: false
       - key: FIREBASE_WEB_API_KEY
