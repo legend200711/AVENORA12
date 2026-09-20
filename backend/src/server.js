@@ -207,7 +207,7 @@ const _healthHandler = (req, res) => {
     ok: true,
     status: 'ok',
     service: 'avenora-backend',
-    version: '1.0.0',
+    version: '1.1.0',
     timestamp: new Date().toISOString(),
     // Safe diagnostics: presence checks only — no secret values returned
     config: {

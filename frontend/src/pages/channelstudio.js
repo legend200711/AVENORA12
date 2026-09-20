@@ -1581,21 +1581,43 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
       try {
         const programItem = _chsMediaToProgramItem(savedItem);
         await _chsApi('POST', '/channel/programming/add', programItem);
-        _chsSetCardComplete(uid, `✓ MUSIC UPLOADED · ✓ ADDED TO 24-HOUR CHANNEL`);
+        _chsSetCardComplete(uid, `✓ MUSIC UPLOADED\n✓ ADDED TO 24-HOUR CHANNEL`);
         _chsToast(`🎵 "${titleVal}" added to 24-Hour Channel`);
+        // Clean up and refresh
+        if (window._chsAudioFiles) delete window._chsAudioFiles[uid];
+        await chsLoadMyMedia();
         await chsLoadProgramming();
       } catch (qErr) {
-        _chsSetCardComplete(uid, `✓ Uploaded (queue error: ${qErr.message})`);
-        _chsToast(`Audio uploaded but queue add failed: ${qErr.message}`, 'error');
+        // File uploaded + media saved, but channel add failed.
+        // Retry should only retry the channel add — store savedItem keyed by uid.
+        window._chsPendingChannelAdd = window._chsPendingChannelAdd || {};
+        window._chsPendingChannelAdd[uid] = savedItem;
+        const retryFn = `async function(){
+          try {
+            const si = window._chsPendingChannelAdd && window._chsPendingChannelAdd['${uid}'];
+            if (!si) { alert('Retry data lost — use + Queue on the item in My Media'); return; }
+            const pi = _chsMediaToProgramItem(si);
+            await _chsApi('POST', '/channel/programming/add', pi);
+            delete window._chsPendingChannelAdd['${uid}'];
+            _chsSetCardComplete('${uid}', '✓ MUSIC UPLOADED\\n✓ ADDED TO 24-HOUR CHANNEL');
+            _chsToast('🎵 Added to 24-Hour Channel');
+            await chsLoadProgramming();
+          } catch(e2) { _chsToast('Retry failed: ' + e2.message, 'error'); }
+        }`;
+        _chsSetCardError(uid,
+          `✓ Uploaded to My Media\n⚠ Could not add to 24-Hour Channel: ${qErr.message}`,
+          retryFn
+        );
+        _chsToast(`Audio uploaded but channel add failed: ${qErr.message}`, 'error');
+        if (window._chsAudioFiles) delete window._chsAudioFiles[uid];
+        await chsLoadMyMedia();
       }
     } else {
       _chsSetCardComplete(uid, `✓ MUSIC UPLOADED — tap "+ Queue" to add to channel`);
       _chsToast(`🎵 "${titleVal}" saved to My Media`);
+      if (window._chsAudioFiles) delete window._chsAudioFiles[uid];
+      await chsLoadMyMedia();
     }
-
-    // Clean up file reference and refresh library
-    if (window._chsAudioFiles) delete window._chsAudioFiles[uid];
-    await chsLoadMyMedia();
   } catch (e) {
     _chsSetCardError(uid, e.message || 'Upload failed', `function(){chsDoAudioUpload('${uid}',${addToChannel})}`);
     console.error('[ChannelStudio] Audio upload failed:', e);
@@ -1731,20 +1753,42 @@ window.chsDoVideoUpload = async function(uid, addToChannel) {
       try {
         const programItem = _chsMediaToProgramItem(savedItem);
         await _chsApi('POST', '/channel/programming/add', programItem);
-        _chsSetCardComplete(uid, `✓ VIDEO UPLOADED · ✓ ADDED TO 24-HOUR CHANNEL`);
+        _chsSetCardComplete(uid, `✓ VIDEO UPLOADED\n✓ ADDED TO 24-HOUR CHANNEL`);
         _chsToast(`🎬 "${titleVal}" added to 24-Hour Channel`);
+        if (window._chsVideoFiles) delete window._chsVideoFiles[uid];
+        await chsLoadMyMedia();
         await chsLoadProgramming();
       } catch (qErr) {
-        _chsSetCardComplete(uid, `✓ Uploaded (queue error: ${qErr.message})`);
-        _chsToast(`Video uploaded but queue add failed: ${qErr.message}`, 'error');
+        // File uploaded + media saved, but channel add failed.
+        // Retry should only retry the channel add — store savedItem keyed by uid.
+        window._chsPendingChannelAdd = window._chsPendingChannelAdd || {};
+        window._chsPendingChannelAdd[uid] = savedItem;
+        const retryFn = `async function(){
+          try {
+            const si = window._chsPendingChannelAdd && window._chsPendingChannelAdd['${uid}'];
+            if (!si) { alert('Retry data lost — use + Queue on the item in My Media'); return; }
+            const pi = _chsMediaToProgramItem(si);
+            await _chsApi('POST', '/channel/programming/add', pi);
+            delete window._chsPendingChannelAdd['${uid}'];
+            _chsSetCardComplete('${uid}', '✓ VIDEO UPLOADED\\n✓ ADDED TO 24-HOUR CHANNEL');
+            _chsToast('🎬 Added to 24-Hour Channel');
+            await chsLoadProgramming();
+          } catch(e2) { _chsToast('Retry failed: ' + e2.message, 'error'); }
+        }`;
+        _chsSetCardError(uid,
+          `✓ Uploaded to My Media\n⚠ Could not add to 24-Hour Channel: ${qErr.message}`,
+          retryFn
+        );
+        _chsToast(`Video uploaded but channel add failed: ${qErr.message}`, 'error');
+        if (window._chsVideoFiles) delete window._chsVideoFiles[uid];
+        await chsLoadMyMedia();
       }
     } else {
       _chsSetCardComplete(uid, `✓ VIDEO UPLOADED — tap "+ Queue" to add to channel`);
       _chsToast(`🎬 "${titleVal}" saved to My Media`);
+      if (window._chsVideoFiles) delete window._chsVideoFiles[uid];
+      await chsLoadMyMedia();
     }
-
-    if (window._chsVideoFiles) delete window._chsVideoFiles[uid];
-    await chsLoadMyMedia();
   } catch (e) {
     _chsSetCardError(uid, e.message || 'Upload failed', `function(){chsDoVideoUpload('${uid}',${addToChannel})}`);
     console.error('[ChannelStudio] Video upload failed:', e);
@@ -2154,27 +2198,21 @@ window.chsSaveSlideshow = async function() {
       audioTrack: audioPayload,
     });
 
-    // Auto-add slideshow to 24-Hour Channel
+    // Auto-add slideshow to 24-Hour Channel using the saved item from the backend
+    // Use _chsMediaToProgramItem — the single converter for all media types
     let addedToChannel = false;
+    const savedItem = saved?.item || {
+      id:           saved?.id,
+      type:         'slideshow',
+      title:        name,
+      images:       uploadedImages,
+      perImageSecs: perSecs,
+      audioTrack:   audioPayload,
+      duration:     uploadedImages.length * perSecs,
+    };
     try {
-      const dur = uploadedImages.length * perSecs;
-      const slideProg = {
-        type:         'SLIDESHOW',
-        title:        name,
-        images:       uploadedImages.map(img => ({ url: img.url, caption: img.caption || '' })),
-        perImageSecs: perSecs,
-        duration:     dur,
-        sourceType:   'direct',
-      };
-      if (audioPayload) {
-        slideProg.tracks = [{
-          id:       'slide_audio_' + Date.now(),
-          title:    audioPayload.title || 'Background Music',
-          url:      audioPayload.url,
-          duration: audioPayload.duration || 0,
-        }];
-      }
-      await _chsApi('POST', '/channel/programming/add', slideProg);
+      const programItem = _chsMediaToProgramItem(savedItem);
+      await _chsApi('POST', '/channel/programming/add', programItem);
       addedToChannel = true;
       await chsLoadProgramming();
     } catch (qErr) {
@@ -2182,7 +2220,9 @@ window.chsSaveSlideshow = async function() {
     }
 
     _chsToast(addedToChannel
-      ? `✅ Slideshow "${name}" saved · ✓ Added to 24-Hour Channel`
+      ? (audioPayload
+          ? `✓ PHOTO + MUSIC SHOW CREATED · ✓ ADDED TO 24-HOUR CHANNEL`
+          : `✓ PHOTO SHOW CREATED · ✓ ADDED TO 24-HOUR CHANNEL`)
       : `✅ Slideshow "${name}" saved to My Media`
     );
 
