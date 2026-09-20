@@ -242,6 +242,17 @@ class ChannelEngine {
           createdAt: Date.now(),
         });
       await this.loadProgramming();
+
+      // If the channel was idle (waiting for content), kick it immediately
+      // rather than waiting up to 30 seconds for the re-check timer.
+      if (this.isRunning && !this.currentItem && this.programQueue.length > 0) {
+        logger.info('[ChannelEngine] New item added while idle — advancing immediately');
+        clearTimeout(this.itemTimer);
+        this.itemTimer = null;
+        // Use setImmediate so this call returns first, then _advance() fires
+        setImmediate(() => this._advance());
+      }
+
       return { ok: true, id: docRef.id };
     } catch (e) {
       return { ok: false, message: e.message };

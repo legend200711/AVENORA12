@@ -1730,3 +1730,69 @@
   .chs-slide-preview-grid { grid-template-columns: repeat(auto-fill, minmax(66px, 1fr)); }
   .chs-media-item-actions { flex-direction: row; flex-wrap: wrap; }
 }
+
+/* ── Direct Upload Buttons (always visible — no expand required) ──────── */
+.chs-upload-direct-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 16px 0 8px;
+}
+
+.chs-upload-direct-btn {
+  flex: 1;
+  min-width: 90px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  padding: 18px 12px;
+  background: rgba(201,168,76,0.07);
+  border: 2px solid rgba(201,168,76,0.25);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: all 0.18s;
+  color: inherit;
+  font-family: inherit;
+  text-align: center;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+.chs-upload-direct-btn:hover,
+.chs-upload-direct-btn:active {
+  background: rgba(201,168,76,0.14);
+  border-color: rgba(201,168,76,0.50);
+  transform: translateY(-2px);
+}
+
+.chs-upload-direct-audio  { border-color: rgba(201,168,76,0.30); }
+.chs-upload-direct-video  { border-color: rgba(0,204,255,0.28); }
+.chs-upload-direct-photo  { border-color: rgba(160,100,255,0.28); }
+
+.chs-upload-direct-audio:hover  { border-color: rgba(201,168,76,0.60); }
+.chs-upload-direct-video:hover  { border-color: rgba(0,204,255,0.55); }
+.chs-upload-direct-photo:hover  { border-color: rgba(160,100,255,0.55); }
+
+.chs-upload-direct-icon  { font-size: 2rem; }
+.chs-upload-direct-label {
+  font-family: var(--font-display, 'Cinzel', serif);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  color: #c9a84c;
+  text-transform: uppercase;
+  line-height: 1.3;
+}
+.chs-upload-direct-hint {
+  font-size: 0.62rem;
+  color: var(--text-muted, #8a8090);
+  line-height: 1.3;
+}
+
+/* Ensure the upload direct row is responsive on small screens */
+@media (max-width: 360px) {
+  .chs-upload-direct-btn { padding: 14px 8px; min-width: 75px; }
+  .chs-upload-direct-icon { font-size: 1.6rem; }
+  .chs-upload-direct-label { font-size: 0.55rem; }
+}

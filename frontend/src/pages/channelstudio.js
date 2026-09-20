@@ -169,39 +169,40 @@ registerPage('channelstudio', {
                 <span class="chs-section-icon">📤</span>
                 <h2 class="chs-section-title">UPLOAD YOUR MEDIA</h2>
               </div>
-              <button class="chs-btn chs-btn-ghost chs-btn-sm" id="chs-upload-toggle-btn" onclick="chsToggleUpload()">▼ Expand</button>
+              <button class="chs-btn chs-btn-ghost chs-btn-sm" id="chs-upload-toggle-btn" onclick="chsToggleUpload()">▲ Collapse</button>
             </div>
-            <p class="chs-section-desc">Upload music, videos, or photos directly from your phone. Add to your 24-hour channel.</p>
+            <p class="chs-section-desc">Upload music, videos, or photos directly from your phone or computer. Items are automatically added to your 24-hour channel.</p>
 
-            <div id="chs-upload-body" style="display:none">
-              <!-- Upload type buttons -->
-              <div class="chs-upload-type-row">
-                <button class="chs-upload-type-btn" onclick="chsUploadTrigger('audio')">
-                  <span class="chs-upload-type-icon">🎵</span>
-                  <span class="chs-upload-type-label">MUSIC</span>
-                  <span class="chs-upload-type-hint">MP3 · M4A · WAV · AAC</span>
-                </button>
-                <button class="chs-upload-type-btn" onclick="chsUploadTrigger('video')">
-                  <span class="chs-upload-type-icon">🎬</span>
-                  <span class="chs-upload-type-label">VIDEO</span>
-                  <span class="chs-upload-type-hint">MP4 · WebM · MOV</span>
-                </button>
-                <button class="chs-upload-type-btn" onclick="chsShowSlideshowBuilder()">
-                  <span class="chs-upload-type-icon">🖼️</span>
-                  <span class="chs-upload-type-label">PHOTOS + MUSIC</span>
-                  <span class="chs-upload-type-hint">Slideshow with audio</span>
-                </button>
-              </div>
+            <!-- ── Direct Upload Buttons (always visible) ───────────────── -->
+            <div class="chs-upload-direct-row">
+              <button class="chs-upload-direct-btn chs-upload-direct-audio" onclick="chsUploadTrigger('audio')">
+                <span class="chs-upload-direct-icon">🎵</span>
+                <span class="chs-upload-direct-label">UPLOAD MUSIC</span>
+                <span class="chs-upload-direct-hint">MP3 · M4A · WAV · AAC</span>
+              </button>
+              <button class="chs-upload-direct-btn chs-upload-direct-video" onclick="chsUploadTrigger('video')">
+                <span class="chs-upload-direct-icon">🎬</span>
+                <span class="chs-upload-direct-label">UPLOAD VIDEO</span>
+                <span class="chs-upload-direct-hint">MP4 · WebM · MOV</span>
+              </button>
+              <button class="chs-upload-direct-btn chs-upload-direct-photo" onclick="chsUploadTrigger('slideshow')">
+                <span class="chs-upload-direct-icon">🖼️</span>
+                <span class="chs-upload-direct-label">PHOTOS + MUSIC</span>
+                <span class="chs-upload-direct-hint">Slideshow with audio</span>
+              </button>
+            </div>
 
-              <!-- Hidden file inputs — works on Android Chrome -->
-              <input type="file" id="chs-audio-input" accept="audio/mpeg,audio/mp4,audio/m4a,audio/aac,audio/wav,audio/x-m4a,.mp3,.m4a,.aac,.wav" style="display:none" onchange="chsHandleAudioFile(this)">
-              <input type="file" id="chs-video-input" accept="video/mp4,video/webm,video/quicktime,video/x-msvideo,.mp4,.webm,.mov,.avi" style="display:none" onchange="chsHandleVideoFile(this)">
-              <input type="file" id="chs-image-input" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple style="display:none" onchange="chsHandleSlideImages(this)">
-              <input type="file" id="chs-slide-audio-input" accept="audio/mpeg,audio/mp4,audio/m4a,audio/aac,.mp3,.m4a,.aac" style="display:none" onchange="chsHandleSlideAudio(this)">
+            <!-- Hidden file inputs — works on Android Chrome -->
+            <input type="file" id="chs-audio-input" accept="audio/mpeg,audio/mp4,audio/m4a,audio/aac,audio/wav,audio/x-m4a,.mp3,.m4a,.aac,.wav" style="display:none" onchange="chsHandleAudioFile(this)">
+            <input type="file" id="chs-video-input" accept="video/mp4,video/webm,video/quicktime,video/x-msvideo,.mp4,.webm,.mov,.avi" style="display:none" onchange="chsHandleVideoFile(this)">
+            <input type="file" id="chs-image-input" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp" multiple style="display:none" onchange="chsHandleSlideImages(this)">
+            <input type="file" id="chs-slide-audio-input" accept="audio/mpeg,audio/mp4,audio/m4a,audio/aac,.mp3,.m4a,.aac" style="display:none" onchange="chsHandleSlideAudio(this)">
 
-              <!-- Active upload progress cards -->
-              <div id="chs-upload-progress-area"></div>
+            <!-- Active upload progress cards (always visible) -->
+            <div id="chs-upload-progress-area"></div>
 
+            <div id="chs-upload-body">
+              <!-- Upload type buttons (kept for legacy / power-user access) -->
               <!-- Slideshow Builder (hidden by default) -->
               <div id="chs-slideshow-builder" class="chs-slideshow-builder" style="display:none">
                 <div class="chs-slideshow-builder-hdr">
@@ -514,7 +515,8 @@ const _chsState = {
     audioTrack:   null, // { file, url, storagePath, title, duration }
     uploadExpanded: false,
   },
-  uploadExpanded: false,
+  // Upload section starts expanded so direct-upload buttons are always visible
+  uploadExpanded: true,
 };
 
 // ── localStorage cache helpers ────────────────────────────────────────────
@@ -555,6 +557,9 @@ async function _chsInit(user) {
 
   _chsSetConnState('connecting');
   await _chsInitialLoad();
+
+  // Upload section starts expanded — load media library immediately
+  chsLoadMyMedia().catch(() => {});
 
   // Auto-refresh status every 15s (avoids hammering a waking Render instance)
   _chsState.pollTimer = setInterval(chsLoadStatus, 15_000);
@@ -1351,6 +1356,7 @@ window.chsToggleUpload = function() {
 };
 
 // ── Trigger file picker ────────────────────────────────────────────────────
+// Also handles 'slideshow' as an alias that opens the slideshow builder.
 window.chsUploadTrigger = function(type) {
   if (type === 'audio') {
     const inp = _chsEl('chs-audio-input');
@@ -1358,6 +1364,8 @@ window.chsUploadTrigger = function(type) {
   } else if (type === 'video') {
     const inp = _chsEl('chs-video-input');
     if (inp) { inp.value = ''; inp.click(); }
+  } else if (type === 'slideshow') {
+    chsShowSlideshowBuilder();
   }
 };
 
@@ -1512,8 +1520,8 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
 
     const titleVal = (_chsEl('chs-prog-title-' + uid)?.value || file.name.replace(/\.[^.]+$/, '')).trim();
 
-    // Save record to media library
-    await _chsApi('POST', '/media/save', {
+    // Save record to media library — use returned savedItem for channel add
+    const saveResp = await _chsApi('POST', '/media/save', {
       type: 'audio',
       title: titleVal,
       url: result.url,
@@ -1522,18 +1530,22 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
       mimeType: file.type,
     });
 
+    // Build channel program item from the saved media record (uses actual server ID)
+    const savedItem = saveResp.item || {
+      id: saveResp.id,
+      type: 'audio',
+      title: titleVal,
+      url: result.url,
+      storagePath: result.storagePath,
+      duration: 0,
+    };
+
     if (addToChannel) {
       _chsUpdateProgress(uid, 98, 'Adding to channel…');
       try {
-        await _chsApi('POST', '/channel/programming/add', {
-          type:       'MUSIC',
-          title:      titleVal,
-          mediaUrl:   result.url,
-          sourceType: 'direct',
-          sourceUrl:  result.url,
-          duration:   0,
-        });
-        _chsSetCardComplete(uid, `✓ Uploaded · ✓ Added to Channel`);
+        const programItem = _chsMediaToProgramItem(savedItem);
+        await _chsApi('POST', '/channel/programming/add', programItem);
+        _chsSetCardComplete(uid, `✓ MUSIC UPLOADED · ✓ ADDED TO 24-HOUR CHANNEL`);
         _chsToast(`🎵 "${titleVal}" added to 24-Hour Channel`);
         await chsLoadProgramming();
       } catch (qErr) {
@@ -1541,7 +1553,7 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
         _chsToast(`Audio uploaded but queue add failed: ${qErr.message}`, 'error');
       }
     } else {
-      _chsSetCardComplete(uid, `✓ Uploaded to library`);
+      _chsSetCardComplete(uid, `✓ MUSIC UPLOADED — tap "+ Queue" to add to channel`);
       _chsToast(`🎵 "${titleVal}" saved to My Media`);
     }
 
@@ -1626,7 +1638,8 @@ window.chsDoVideoUpload = async function(uid, addToChannel) {
     _chsUpdateProgress(uid, 95, 'Saving to library…');
     const titleVal = (_chsEl('chs-prog-title-' + uid)?.value || file.name.replace(/\.[^.]+$/, '')).trim();
 
-    await _chsApi('POST', '/media/save', {
+    // Save record — use returned savedItem for channel add
+    const saveResp = await _chsApi('POST', '/media/save', {
       type: 'video',
       title: titleVal,
       url: result.url,
@@ -1635,18 +1648,21 @@ window.chsDoVideoUpload = async function(uid, addToChannel) {
       mimeType: file.type,
     });
 
+    const savedItem = saveResp.item || {
+      id: saveResp.id,
+      type: 'video',
+      title: titleVal,
+      url: result.url,
+      storagePath: result.storagePath,
+      duration: 0,
+    };
+
     if (addToChannel) {
       _chsUpdateProgress(uid, 98, 'Adding to channel…');
       try {
-        await _chsApi('POST', '/channel/programming/add', {
-          type:       'VIDEO',
-          title:      titleVal,
-          mediaUrl:   result.url,
-          sourceType: 'direct',
-          sourceUrl:  result.url,
-          duration:   0,
-        });
-        _chsSetCardComplete(uid, `✓ Uploaded · ✓ Added to Channel`);
+        const programItem = _chsMediaToProgramItem(savedItem);
+        await _chsApi('POST', '/channel/programming/add', programItem);
+        _chsSetCardComplete(uid, `✓ VIDEO UPLOADED · ✓ ADDED TO 24-HOUR CHANNEL`);
         _chsToast(`🎬 "${titleVal}" added to 24-Hour Channel`);
         await chsLoadProgramming();
       } catch (qErr) {
@@ -1654,7 +1670,7 @@ window.chsDoVideoUpload = async function(uid, addToChannel) {
         _chsToast(`Video uploaded but queue add failed: ${qErr.message}`, 'error');
       }
     } else {
-      _chsSetCardComplete(uid, `✓ Uploaded to library`);
+      _chsSetCardComplete(uid, `✓ VIDEO UPLOADED — tap "+ Queue" to add to channel`);
       _chsToast(`🎬 "${titleVal}" saved to My Media`);
     }
 
