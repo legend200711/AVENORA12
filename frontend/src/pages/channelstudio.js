@@ -260,7 +260,7 @@ registerPage('channelstudio', {
 
                 <div id="chs-slideshow-error" class="chs-error" style="display:none"></div>
                 <div class="chs-slideshow-actions">
-                  <button class="chs-btn chs-btn-primary" onclick="chsSaveSlideshow()" id="chs-slideshow-save-btn">💾 Save &amp; Add to Library</button>
+                  <button class="chs-btn chs-btn-primary" onclick="chsSaveSlideshow()" id="chs-slideshow-save-btn">💾 Save &amp; Add to Channel</button>
                   <button class="chs-btn chs-btn-ghost" onclick="chsCloseSlideshowBuilder()">Cancel</button>
                 </div>
               </div>
@@ -1443,8 +1443,12 @@ function _chsSetCardError(id, msg, retryFn) {
   }
 }
 
+// Global file store — maps upload UID to File object for deferred upload
+window._chsAudioFiles = window._chsAudioFiles || {};
+window._chsVideoFiles = window._chsVideoFiles || {};
+
 // ── Handle Audio Upload ────────────────────────────────────────────────────
-window.chsHandleAudioFile = async function(input) {
+window.chsHandleAudioFile = function(input) {
   const file = input.files && input.files[0];
   if (!file) return;
   input.value = '';
@@ -1453,6 +1457,9 @@ window.chsHandleAudioFile = async function(input) {
   if (err) { _chsToast(err, 'error'); return; }
 
   const uid = Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+  // Store file reference for later use by upload buttons
+  window._chsAudioFiles[uid] = file;
+
   const card = _chsMakeProgressCard(uid, file.name);
   // Show title edit box inside card
   if (card) {
@@ -1468,6 +1475,31 @@ window.chsHandleAudioFile = async function(input) {
     }
   }
 
+  // Offer "Upload + Add to Channel" or "Upload Only" after file is ready
+  // We add action buttons to the card before uploading
+  if (card) {
+    const actEl = _chsEl('chs-prog-actions-' + uid);
+    if (actEl) {
+      actEl.style.display = '';
+      actEl.innerHTML = `
+        <button class="chs-btn chs-btn-primary chs-btn-xs" onclick="chsDoAudioUpload('${uid}', true)" id="chs-upload-add-btn-${uid}">📤 Upload &amp; Add to Channel</button>
+        <button class="chs-btn chs-btn-ghost chs-btn-xs" onclick="chsDoAudioUpload('${uid}', false)" id="chs-upload-only-btn-${uid}">💾 Upload Only</button>
+      `;
+    }
+  }
+};
+
+/** Internal: perform the actual audio upload, optionally add to channel queue. */
+window.chsDoAudioUpload = async function(uid, addToChannel) {
+  const file = window._chsAudioFiles && window._chsAudioFiles[uid];
+  if (!file) return;
+
+  // Disable buttons
+  const addBtn   = _chsEl('chs-upload-add-btn-' + uid);
+  const onlyBtn  = _chsEl('chs-upload-only-btn-' + uid);
+  if (addBtn)  { addBtn.disabled  = true; }
+  if (onlyBtn) { onlyBtn.disabled = true; }
+
   try {
     if (!window.AvenoraStorage) throw new Error('Storage not available — refresh and try again');
     _chsUpdateProgress(uid, 5, 'Uploading…');
@@ -1480,8 +1512,8 @@ window.chsHandleAudioFile = async function(input) {
 
     const titleVal = (_chsEl('chs-prog-title-' + uid)?.value || file.name.replace(/\.[^.]+$/, '')).trim();
 
-    // Save record to Firestore via backend
-    const saved = await _chsApi('POST', '/media/save', {
+    // Save record to media library
+    await _chsApi('POST', '/media/save', {
       type: 'audio',
       title: titleVal,
       url: result.url,
@@ -1490,19 +1522,42 @@ window.chsHandleAudioFile = async function(input) {
       mimeType: file.type,
     });
 
-    _chsSetCardComplete(uid, `"${titleVal}" uploaded ✅`);
-    _chsToast(`🎵 "${titleVal}" uploaded successfully`);
+    if (addToChannel) {
+      _chsUpdateProgress(uid, 98, 'Adding to channel…');
+      try {
+        await _chsApi('POST', '/channel/programming/add', {
+          type:       'MUSIC',
+          title:      titleVal,
+          mediaUrl:   result.url,
+          sourceType: 'direct',
+          sourceUrl:  result.url,
+          duration:   0,
+        });
+        _chsSetCardComplete(uid, `✓ Uploaded · ✓ Added to Channel`);
+        _chsToast(`🎵 "${titleVal}" added to 24-Hour Channel`);
+        await chsLoadProgramming();
+      } catch (qErr) {
+        _chsSetCardComplete(uid, `✓ Uploaded (queue error: ${qErr.message})`);
+        _chsToast(`Audio uploaded but queue add failed: ${qErr.message}`, 'error');
+      }
+    } else {
+      _chsSetCardComplete(uid, `✓ Uploaded to library`);
+      _chsToast(`🎵 "${titleVal}" saved to My Media`);
+    }
 
-    // Refresh library
+    // Clean up file reference and refresh library
+    if (window._chsAudioFiles) delete window._chsAudioFiles[uid];
     await chsLoadMyMedia();
   } catch (e) {
-    _chsSetCardError(uid, e.message || 'Upload failed', `function(){chsHandleAudioRetry('${_esc(String(uid))}')}`);
+    _chsSetCardError(uid, e.message || 'Upload failed', `function(){chsDoAudioUpload('${uid}',${addToChannel})}`);
     console.error('[ChannelStudio] Audio upload failed:', e);
+    if (addBtn)  { addBtn.disabled  = false; }
+    if (onlyBtn) { onlyBtn.disabled = false; }
   }
 };
 
 // ── Handle Video Upload ────────────────────────────────────────────────────
-window.chsHandleVideoFile = async function(input) {
+window.chsHandleVideoFile = function(input) {
   const file = input.files && input.files[0];
   if (!file) return;
   input.value = '';
@@ -1523,6 +1578,9 @@ window.chsHandleVideoFile = async function(input) {
   }
 
   const uid = Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+  // Store file reference for deferred upload
+  window._chsVideoFiles[uid] = file;
+
   const card = _chsMakeProgressCard(uid, file.name);
   if (card) {
     const infoEl = card.querySelector('.chs-upload-card-info');
@@ -1535,7 +1593,27 @@ window.chsHandleVideoFile = async function(input) {
       titleInp.value = file.name.replace(/\.[^.]+$/, '');
       infoEl.appendChild(titleInp);
     }
+    // Show "Upload + Add to Channel" and "Upload Only" buttons
+    const actEl = _chsEl('chs-prog-actions-' + uid);
+    if (actEl) {
+      actEl.style.display = '';
+      actEl.innerHTML = `
+        <button class="chs-btn chs-btn-primary chs-btn-xs" onclick="chsDoVideoUpload('${uid}', true)" id="chs-vid-add-btn-${uid}">📤 Upload &amp; Add to Channel</button>
+        <button class="chs-btn chs-btn-ghost chs-btn-xs" onclick="chsDoVideoUpload('${uid}', false)" id="chs-vid-only-btn-${uid}">💾 Upload Only</button>
+      `;
+    }
   }
+};
+
+/** Internal: perform the actual video upload, optionally add to channel queue. */
+window.chsDoVideoUpload = async function(uid, addToChannel) {
+  const file = window._chsVideoFiles && window._chsVideoFiles[uid];
+  if (!file) return;
+
+  const addBtn  = _chsEl('chs-vid-add-btn-' + uid);
+  const onlyBtn = _chsEl('chs-vid-only-btn-' + uid);
+  if (addBtn)  addBtn.disabled  = true;
+  if (onlyBtn) onlyBtn.disabled = true;
 
   try {
     if (!window.AvenoraStorage) throw new Error('Storage not available — refresh and try again');
@@ -1546,7 +1624,6 @@ window.chsHandleVideoFile = async function(input) {
     });
 
     _chsUpdateProgress(uid, 95, 'Saving to library…');
-
     const titleVal = (_chsEl('chs-prog-title-' + uid)?.value || file.name.replace(/\.[^.]+$/, '')).trim();
 
     await _chsApi('POST', '/media/save', {
@@ -1558,12 +1635,36 @@ window.chsHandleVideoFile = async function(input) {
       mimeType: file.type,
     });
 
-    _chsSetCardComplete(uid, `"${titleVal}" uploaded ✅`);
-    _chsToast(`🎬 "${titleVal}" uploaded successfully`);
+    if (addToChannel) {
+      _chsUpdateProgress(uid, 98, 'Adding to channel…');
+      try {
+        await _chsApi('POST', '/channel/programming/add', {
+          type:       'VIDEO',
+          title:      titleVal,
+          mediaUrl:   result.url,
+          sourceType: 'direct',
+          sourceUrl:  result.url,
+          duration:   0,
+        });
+        _chsSetCardComplete(uid, `✓ Uploaded · ✓ Added to Channel`);
+        _chsToast(`🎬 "${titleVal}" added to 24-Hour Channel`);
+        await chsLoadProgramming();
+      } catch (qErr) {
+        _chsSetCardComplete(uid, `✓ Uploaded (queue error: ${qErr.message})`);
+        _chsToast(`Video uploaded but queue add failed: ${qErr.message}`, 'error');
+      }
+    } else {
+      _chsSetCardComplete(uid, `✓ Uploaded to library`);
+      _chsToast(`🎬 "${titleVal}" saved to My Media`);
+    }
+
+    if (window._chsVideoFiles) delete window._chsVideoFiles[uid];
     await chsLoadMyMedia();
   } catch (e) {
-    _chsSetCardError(uid, e.message || 'Upload failed', null);
+    _chsSetCardError(uid, e.message || 'Upload failed', `function(){chsDoVideoUpload('${uid}',${addToChannel})}`);
     console.error('[ChannelStudio] Video upload failed:', e);
+    if (addBtn)  addBtn.disabled  = false;
+    if (onlyBtn) onlyBtn.disabled = false;
   }
 };
 
@@ -1968,7 +2069,37 @@ window.chsSaveSlideshow = async function() {
       audioTrack: audioPayload,
     });
 
-    _chsToast(`✅ Slideshow "${name}" saved to My Media`);
+    // Auto-add slideshow to 24-Hour Channel
+    let addedToChannel = false;
+    try {
+      const dur = uploadedImages.length * perSecs;
+      const slideProg = {
+        type:         'SLIDESHOW',
+        title:        name,
+        images:       uploadedImages.map(img => ({ url: img.url, caption: img.caption || '' })),
+        perImageSecs: perSecs,
+        duration:     dur,
+        sourceType:   'direct',
+      };
+      if (audioPayload) {
+        slideProg.tracks = [{
+          id:       'slide_audio_' + Date.now(),
+          title:    audioPayload.title || 'Background Music',
+          url:      audioPayload.url,
+          duration: audioPayload.duration || 0,
+        }];
+      }
+      await _chsApi('POST', '/channel/programming/add', slideProg);
+      addedToChannel = true;
+      await chsLoadProgramming();
+    } catch (qErr) {
+      console.warn('[ChannelStudio] Slideshow channel add failed:', qErr.message);
+    }
+
+    _chsToast(addedToChannel
+      ? `✅ Slideshow "${name}" saved · ✓ Added to 24-Hour Channel`
+      : `✅ Slideshow "${name}" saved to My Media`
+    );
 
     // Reset builder state
     _chsState.slideshow.images.forEach(img => { if (img.blobUrl) URL.revokeObjectURL(img.blobUrl); });
@@ -1983,7 +2114,7 @@ window.chsSaveSlideshow = async function() {
     if (errEl) { errEl.textContent = e.message; errEl.style.display = ''; }
     console.error('[ChannelStudio] Slideshow save failed:', e);
   } finally {
-    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '💾 Save & Add to Library'; }
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = '💾 Save & Add to Channel'; }
   }
 };
 

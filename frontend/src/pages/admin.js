@@ -598,20 +598,20 @@ async function renderAdminVideos(container) {
       </div>
     </div>
 
-    <!-- Videos Table -->
+    <!-- Videos Table — responsive card list on mobile, table on desktop -->
     <div style="margin-bottom:var(--space-xl)">
       <h3 style="font-family:var(--font-display);font-size:1rem;letter-spacing:0.08em;margin-bottom:var(--space-md)">VIDEO LIBRARY</h3>
       ${videos.length === 0 ? `
         <p style="color:var(--text-muted);text-align:center;padding:var(--space-xl)">No videos found.</p>
       ` : `
-        <div style="overflow-x:auto">
+        <!-- Desktop table (hidden on narrow screens via CSS) -->
+        <div class="admin-vid-table-wrap" style="overflow-x:auto">
           <table style="width:100%;border-collapse:collapse;font-size:0.82rem">
             <thead>
               <tr style="border-bottom:1px solid var(--border-subtle)">
                 <th style="text-align:left;padding:10px;color:var(--text-muted);font-size:0.73rem;text-transform:uppercase;letter-spacing:0.06em">Title</th>
                 <th style="text-align:left;padding:10px;color:var(--text-muted);font-size:0.73rem;text-transform:uppercase;letter-spacing:0.06em">Uploader</th>
-                <th style="text-align:left;padding:10px;color:var(--text-muted);font-size:0.73rem;text-transform:uppercase;letter-spacing:0.06em">Category</th>
-                <th style="text-align:left;padding:10px;color:var(--text-muted);font-size:0.73rem;text-transform:uppercase;letter-spacing:0.06em">Views</th>
+                <th style="text-align:left;padding:10px;color:var(--text-muted);font-size:0.73rem;text-transform:uppercase;letter-spacing:0.06em;white-space:nowrap">Category · Views</th>
                 <th style="text-align:left;padding:10px;color:var(--text-muted);font-size:0.73rem;text-transform:uppercase;letter-spacing:0.06em">Status</th>
                 <th style="text-align:left;padding:10px;color:var(--text-muted);font-size:0.73rem;text-transform:uppercase;letter-spacing:0.06em">Actions</th>
               </tr>
@@ -622,27 +622,55 @@ async function renderAdminVideos(container) {
                 return `
                   <tr style="border-bottom:1px solid var(--border-subtle)" id="admin-vid-row-${id}">
                     <td style="padding:10px">
-                      <div style="font-weight:600;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(v.title)}</div>
+                      <div style="font-weight:600;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(v.title)}</div>
                       <div style="color:var(--text-muted);font-size:0.75rem">${formatDate(v.createdAt)}</div>
                     </td>
-                    <td style="padding:10px;color:var(--text-secondary)">${escapeHtml(v.uploader?.username || '—')}</td>
-                    <td style="padding:10px;color:var(--text-secondary);text-transform:capitalize">${escapeHtml(v.category || '—')}</td>
-                    <td style="padding:10px;color:var(--text-secondary)">${formatCount(v.views || 0)}</td>
+                    <td style="padding:10px;color:var(--text-secondary);white-space:nowrap">${escapeHtml(v.uploader?.username || '—')}</td>
+                    <td style="padding:10px;color:var(--text-secondary)">
+                      <span style="text-transform:capitalize">${escapeHtml(v.category || '—')}</span>
+                      <span style="color:var(--text-muted)"> · ${formatCount(v.views || 0)}</span>
+                    </td>
                     <td style="padding:10px">
                       <span class="${v.isFlagged ? 'badge badge-live' : 'badge badge-green'}" style="font-size:0.7rem">
                         ${v.isFlagged ? '⚑ FLAGGED' : '✓ OK'}
                       </span>
                     </td>
                     <td style="padding:10px">
-                      <div style="display:flex;gap:4px;flex-wrap:wrap">
-                        <button class="btn btn-ghost btn-sm" id="admin-del-btn-${id}" onclick="adminDeleteVideo('${id}')">🗑 Delete</button>
-                      </div>
+                      <button class="btn btn-ghost btn-sm" id="admin-del-btn-${id}" onclick="adminDeleteVideo('${id}')">🗑 Delete</button>
                     </td>
                   </tr>
                 `;
               }).join('')}
             </tbody>
           </table>
+        </div>
+        <!-- Mobile card list (shown only when table is too wide) -->
+        <style>
+          @media (max-width:600px){
+            .admin-vid-table-wrap { display:none!important; }
+            .admin-vid-cards { display:flex!important; }
+          }
+          .admin-vid-cards { display:none; flex-direction:column; gap:10px; }
+          .admin-vid-card { background:var(--bg-card,#111);border:1px solid var(--border-subtle,rgba(255,255,255,0.07));border-radius:10px;padding:12px 14px; }
+          .admin-vid-card-title { font-weight:600;margin-bottom:4px;word-break:break-word; }
+          .admin-vid-card-meta { font-size:0.8rem;color:var(--text-muted);margin-bottom:8px; }
+        </style>
+        <div class="admin-vid-cards">
+          ${videos.map(v => {
+            const id = v._id || v.id;
+            return `
+              <div class="admin-vid-card" id="admin-vid-row-${id}">
+                <div class="admin-vid-card-title">${escapeHtml(v.title)}</div>
+                <div class="admin-vid-card-meta">
+                  ${escapeHtml(v.uploader?.username || '—')} · ${escapeHtml(v.category || '—')} · ${formatCount(v.views || 0)} views · ${formatDate(v.createdAt)}
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                  <span class="${v.isFlagged ? 'badge badge-live' : 'badge badge-green'}" style="font-size:0.7rem">${v.isFlagged ? '⚑ FLAGGED' : '✓ OK'}</span>
+                  <button class="btn btn-ghost btn-sm" id="admin-del-btn-${id}" onclick="adminDeleteVideo('${id}')">🗑 Delete</button>
+                </div>
+              </div>
+            `;
+          }).join('')}
         </div>
       `}
     </div>
@@ -700,16 +728,39 @@ async function renderAdminVideos(container) {
 window.adminDeleteVideo = async function(videoId) {
   if (!confirm('Delete this video? This cannot be easily undone.')) return;
 
-  // Disable the delete button while the request is in-flight so the founder
-  // cannot double-click and cannot mistake silence for success.
+  // Disable the delete button while the request is in-flight.
+  // The API will automatically retry up to 3 times for transient Render failures.
   const btn = document.getElementById(`admin-del-btn-${videoId}`);
   if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+
+  // Show a non-dismissible in-progress toast so the founder knows it's working
+  // (especially important when Render is cold-starting and takes ~30 s)
+  const _delToastId = 'del-toast-' + videoId;
+  (function _showDelProgress() {
+    let existing = document.getElementById(_delToastId);
+    if (existing) return;
+    const container = document.getElementById('toast-container') || document.createElement('div');
+    container.id = 'toast-container';
+    container.className = 'toast-container';
+    if (!document.getElementById('toast-container')) document.body.appendChild(container);
+    const t = document.createElement('div');
+    t.id = _delToastId;
+    t.className = 'toast info';
+    t.textContent = 'Deleting… (server may take up to 30s to respond)';
+    container.appendChild(t);
+  })();
+
+  const _removeDelToast = () => {
+    const t = document.getElementById(_delToastId);
+    if (t) t.remove();
+  };
 
   let success = false;
   try {
     await LegendAPI.videos.deleteVideo(videoId);
     success = true;
   } catch (err) {
+    _removeDelToast();
     // Log the real technical reason so it can be diagnosed in DevTools
     console.error('[AVN] Admin delete video error:', {
       videoId,
@@ -721,7 +772,7 @@ window.adminDeleteVideo = async function(videoId) {
     // Classify the error into a user-readable message with actionable hints
     let userMsg;
     if (err.code === 'BACKEND_UNREACHABLE' || err.code === 'SERVICE_UNREACHABLE' || err.code === 'SERVICE_NOT_RUNNING') {
-      userMsg = 'AVENORA backend is temporarily unavailable (Render may be starting up). Please wait ~30 s and retry.';
+      userMsg = 'Backend unreachable after retries. Render may still be starting up — please wait 60 s and try again.';
     } else if (err.status === 401) {
       userMsg = 'Session expired — please sign in again (HTTP 401).';
     } else if (err.status === 403) {
@@ -736,16 +787,18 @@ window.adminDeleteVideo = async function(videoId) {
       userMsg = err.message || 'Video could not be deleted. Please try again.';
     }
 
-    // Keep the video row visible; restore the button with a Retry option
+    // Keep the video row visible; restore the button
     if (btn) {
       btn.disabled = false;
       btn.textContent = '🗑 Delete';
     }
 
     // Show persistent toast with error details
-    Toast.error(`Delete failed: ${userMsg}`);
+    Toast.error(`Delete failed: ${userMsg}`, 8000);
     return; // do NOT remove the row
   }
+
+  _removeDelToast();
 
   // Only reach here on confirmed server success — now update the UI
   if (success) {

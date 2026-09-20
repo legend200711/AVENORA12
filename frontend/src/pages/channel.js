@@ -388,6 +388,7 @@ function _chSubscribeNowPlaying() {
           return;
         }
         _ch._pollMode = false;
+        _chHideReconnectBanner();
         _chRenderState(snap.data());
       },
       err => {
@@ -423,6 +424,7 @@ async function _chPollNowPlaying() {
     if (res.ok) {
       const data = await res.json();
       if (data.success && data.channel) {
+        _chHideReconnectBanner();
         _chRenderState(data.channel);
         // If channel is ONLINE/PLAYING via REST, switch back to Firestore subscription
         // only if we don't already have one running.
@@ -447,11 +449,42 @@ async function _chPollNowPlaying() {
 
 // ── Reconnecting state ────────────────────────────────────────────────────
 function _chShowReconnecting() {
-  // Only switch to loading if we're already in loading/standby (not mid-playback)
+  // If mid-playback, show a subtle reconnecting banner instead of stopping playback
   const current = _ch.status;
-  if (!current || current === 'OFFLINE' || current === 'LOADING') {
+  const isPlaying = current === 'PLAYING' || current === 'FALLBACK' || current === 'LIVE';
+
+  // Update or create the reconnecting banner
+  let banner = document.getElementById('ch-reconnect-banner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'ch-reconnect-banner';
+    banner.style.cssText = [
+      'position:fixed', 'top:60px', 'left:0', 'right:0', 'z-index:999',
+      'background:rgba(201,168,76,0.12)', 'border-bottom:1px solid rgba(201,168,76,0.25)',
+      'padding:8px 16px', 'text-align:center', 'font-size:0.82rem',
+      'color:rgba(201,168,76,0.9)', 'letter-spacing:0.04em',
+    ].join(';');
+    document.body.appendChild(banner);
+  }
+  banner.textContent = 'RECONNECTING TO AVENORA…';
+  banner.style.display = '';
+
+  // Auto-hide after 30s
+  clearTimeout(banner._hideTimer);
+  banner._hideTimer = setTimeout(() => { banner.style.display = 'none'; }, 30000);
+
+  if (!isPlaying) {
     _chShowState('loading');
     _chSetText('ch-np-title', 'Reconnecting…');
+  }
+}
+
+// ── Hide reconnecting banner (called when connection restored) ─────────────
+function _chHideReconnectBanner() {
+  const banner = document.getElementById('ch-reconnect-banner');
+  if (banner) {
+    banner.style.display = 'none';
+    clearTimeout(banner._hideTimer);
   }
 }
 

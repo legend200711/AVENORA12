@@ -86,6 +86,9 @@ class ChannelEngine {
     this.itemStartedAt    = 0;        // Date.now() when current item started
     this.itemTimer        = null;     // setTimeout handle for item advancement
 
+    // Guard: prevent concurrent _advance() calls (e.g. from timer + skip)
+    this._advancing       = false;
+
     // Queues (loaded from Firestore)
     this.programQueue     = [];       // scheduled items
     this.fallbackQueue    = [];       // fallback items
@@ -365,6 +368,13 @@ class ChannelEngine {
    */
   _advance() {
     if (!this.isRunning) return;
+    // Guard: if a previous _advance() is still in the microtask queue, drop this call.
+    // This prevents a second timer firing before the first has cleared itself.
+    if (this._advancing) {
+      logger.debug('[ChannelEngine] _advance() reentrance blocked');
+      return;
+    }
+    this._advancing = true;
 
     clearTimeout(this.itemTimer);
     this.itemTimer = null;
@@ -383,13 +393,18 @@ class ChannelEngine {
       const fb = this._getFallbackItem();
       this._playItem(fb, 'fallback');
     } else {
-      // No content — stay online, wait
+      // No content — stay online, schedule a re-check in 30 s in case new content is added
       this.currentItem   = null;
       this.itemStartedAt = 0;
       this.status        = STATUS.ONLINE;
-      logger.info('[ChannelEngine] No programming or fallback — channel online, waiting');
+      logger.info('[ChannelEngine] No programming or fallback — channel online, waiting for content');
       this._publishState();
+      // Re-check every 30 s so the channel auto-starts when content is added
+      clearTimeout(this.itemTimer);
+      this.itemTimer = setTimeout(() => this._advance(), 30_000);
     }
+
+    this._advancing = false;
   }
 
   _getNextProgramItem() {
@@ -441,9 +456,13 @@ class ChannelEngine {
                        : source === 'fallback' ? STATUS.FALLBACK
                        : STATUS.PLAYING;
 
-    // Duration-based advance timer
+    // Duration-based advance timer — always schedule for non-live items.
+    // clearTimeout first to ensure only ONE timer is active at a time.
+    clearTimeout(this.itemTimer);
+    this.itemTimer = null;
+
     const durationMs = this._itemDurationMs(item);
-    if (durationMs > 0 && item.type !== TYPES.LIVE_CAMERA) {
+    if (item.type !== TYPES.LIVE_CAMERA) {
       logger.info(`[ChannelEngine] Item "${item.title}" scheduled for ${Math.round(durationMs/1000)}s`);
       this.itemTimer = setTimeout(() => this._advance(), durationMs);
     }

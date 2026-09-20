@@ -101,13 +101,14 @@
   // ─── Input sanitization ───────────────────────────────────
   function escapeHtml(str) {
     if (typeof str !== 'string') return '';
+    // Escape only the characters that are dangerous in HTML text/attribute contexts.
+    // Apostrophes (') and forward-slashes (/) are safe in double-quoted attributes
+    // and text nodes — escaping them causes literals like &#x27; to appear on screen.
     return str
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#x27;')
-      .replace(/\//g, '&#x2F;');
+      .replace(/"/g, '&quot;');
   }
 
   function sanitizeText(str, maxLen = 1000) {

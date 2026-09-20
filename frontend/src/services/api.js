@@ -717,11 +717,8 @@
       const sid = String(id);
 
       // ── Path 1: backend is configured — use DELETE /api/videos/library/:id
-      //   This is the correct and only path for founder/admin deletes.
-      //   The backend uses its service-role key for Supabase and Firebase Admin
-      //   SDK for Firestore, so it can delete ANY video regardless of ownership.
-      //   We do NOT attempt any fallback on non-auth/non-404 errors: if the backend
-      //   is sleeping or unreachable the caller must see the real error and retry.
+      //   Includes automatic retry with backoff for Render cold-start (502/503/network).
+      //   Only retries transient errors — auth (401) and permission (403) errors fail fast.
       if (BASE_URL) {
         // Ensure the token is fresh before making the authenticated DELETE request
         await _waitForAuthReady(5000);
@@ -737,57 +734,85 @@
           throw authErr;
         }
 
-        const fullUrl  = `${BASE_URL}/videos/library/${encodeURIComponent(sid)}`;
-        const _aborter = new AbortController();
-        const _tid     = setTimeout(() => _aborter.abort(), 20000); // 20 s — backend may be cold-starting
-        let res;
-        try {
-          res = await fetch(fullUrl, {
-            method: 'DELETE',
-            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-            signal: _aborter.signal,
-          });
-          clearTimeout(_tid);
-        } catch (networkErr) {
-          clearTimeout(_tid);
-          if (networkErr.name === 'AbortError') {
-            const timeoutErr = new Error(
-              'AVENORA backend is temporarily unavailable. The server may be starting up — please retry in ~30 s.'
-            );
-            timeoutErr.code          = 'BACKEND_UNREACHABLE';
-            timeoutErr.originalError = 'DELETE /api/videos/library timed out after 20 s';
-            console.error('[AVENORA] Video delete timeout:', { videoId: sid, url: fullUrl });
-            throw timeoutErr;
+        const fullUrl = `${BASE_URL}/videos/library/${encodeURIComponent(sid)}`;
+
+        // Attempt DELETE with automatic retry for transient failures (Render cold-start, 502/503).
+        // Max 3 attempts: immediate, after 8 s, after 20 s.
+        const RETRY_DELAYS = [0, 8000, 20000];
+        let lastErr = null;
+        for (let attempt = 0; attempt < RETRY_DELAYS.length; attempt++) {
+          if (attempt > 0) {
+            const delay = RETRY_DELAYS[attempt];
+            console.info(`[AVN] Video delete retry ${attempt}/${RETRY_DELAYS.length - 1} in ${delay / 1000}s…`);
+            await new Promise(r => setTimeout(r, delay));
+            // Refresh token before each retry in case it expired during the wait
+            if (window.AvenoraFirebase?.Auth) {
+              const fresh = await window.AvenoraFirebase.Auth.getIdToken().catch(() => null);
+              if (fresh) token = fresh;
+            }
           }
-          // "Failed to fetch" — network error or CORS block
-          const diagErr = _diagNetworkError(networkErr, 'DELETE', fullUrl);
-          console.error('[AVN] Backend video delete — network error:', {
-            id: sid, code: diagErr.code, message: diagErr.message,
-          });
-          throw diagErr;
+
+          const _aborter = new AbortController();
+          // Give the backend up to 30 s to respond (covers Render cold start)
+          const _tid = setTimeout(() => _aborter.abort(), 30000);
+          let res;
+          try {
+            res = await fetch(fullUrl, {
+              method:  'DELETE',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+              signal:  _aborter.signal,
+            });
+            clearTimeout(_tid);
+          } catch (networkErr) {
+            clearTimeout(_tid);
+            if (networkErr.name === 'AbortError') {
+              lastErr = new Error('AVENORA backend is temporarily unavailable. The server may be starting up — please retry in ~30 s.');
+              lastErr.code = 'BACKEND_UNREACHABLE';
+              console.warn(`[AVN] Video delete attempt ${attempt + 1} timed out`);
+              continue; // retry
+            }
+            lastErr = _diagNetworkError(networkErr, 'DELETE', fullUrl);
+            console.warn(`[AVN] Video delete attempt ${attempt + 1} network error:`, lastErr.message);
+            // Only retry on network errors that look like Render sleeping
+            if (lastErr.code === 'BACKEND_UNREACHABLE') continue;
+            throw lastErr; // Non-retriable network error
+          }
+
+          // Parse response body
+          const contentType = res.headers.get('content-type') || '';
+          let data;
+          try {
+            data = contentType.includes('application/json') ? await res.json() : await res.text();
+          } catch { data = null; }
+
+          // 502/503/504 — likely Render restarting; retry
+          if (res.status === 502 || res.status === 503 || res.status === 504) {
+            lastErr = new Error(`Server temporarily unavailable (HTTP ${res.status}) — retrying…`);
+            lastErr.status = res.status;
+            lastErr.code   = 'BACKEND_UNREACHABLE';
+            console.warn(`[AVN] Video delete attempt ${attempt + 1} got ${res.status} — will retry`);
+            continue;
+          }
+
+          if (!res.ok) {
+            console.error('[AVN] Backend video delete error:', {
+              id: sid, status: res.status, statusText: res.statusText, body: data,
+            });
+            const serverMsg = (data && typeof data === 'object' ? data.message : data) || res.statusText;
+            const err       = new Error(serverMsg || `Delete failed: HTTP ${res.status}`);
+            err.status       = res.status;
+            err.code         = (data && data.code) || (res.status === 401 ? 'UNAUTHORIZED' : res.status === 403 ? 'FORBIDDEN' : null);
+            err.serverResponse = data;
+            throw err; // Non-retriable error (auth, forbidden, not found, etc.)
+          }
+
+          console.info('[AVN] Video deleted via backend:', sid, data);
+          return { success: true };
         }
 
-        // Parse the response body for rich error details
-        const contentType = res.headers.get('content-type') || '';
-        let data;
-        try {
-          data = contentType.includes('application/json') ? await res.json() : await res.text();
-        } catch { data = null; }
-
-        if (!res.ok) {
-          console.error('[AVN] Backend video delete error:', {
-            id: sid, status: res.status, statusText: res.statusText, body: data,
-          });
-          const serverMsg  = (data && typeof data === 'object' ? data.message : data) || res.statusText;
-          const err        = new Error(serverMsg || `Delete failed: HTTP ${res.status}`);
-          err.status       = res.status;
-          err.code         = (data && data.code) || (res.status === 401 ? 'UNAUTHORIZED' : res.status === 403 ? 'FORBIDDEN' : null);
-          err.serverResponse = data;
-          throw err;
-        }
-
-        console.info('[AVN] Video deleted via backend:', sid, data);
-        return { success: true };
+        // All retries exhausted
+        if (lastErr) throw lastErr;
+        throw new Error('Delete failed after multiple retries. Check your connection and try again.');
       }
 
       // ── Path 2: no backend configured — direct Supabase DELETE for UUID rows.
