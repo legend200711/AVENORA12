@@ -50,7 +50,7 @@
   <!-- Avenora Radio -->
   <link rel="stylesheet" href="src/styles/radio.css">
   <!-- 24-Hour Channel + Channel Studio -->
-  <link rel="stylesheet" href="src/styles/channel.css">
+  <link rel="stylesheet" href="src/styles/channel.css?v=29">
 
   <!-- Page-specific styles loaded dynamically -->
 </head>
@@ -303,12 +303,15 @@
     Channel Studio, Channel API, and live heartbeat all use the Render backend.
   -->
   <script>
+    // ── Production version (one canonical string for all devices) ─────────
+    window.AVENORA_VERSION = '2026.09.20.1';
+
     // ── Build / version metadata ──────────────────────────────
     window.AVENORA_BUILD = {
-      version:         '3.7.6',
-      buildTimestamp:  '2025-11-01T00:00:00Z',
-      swVersion:       'v28',
-      swCacheName:     'avenora-cache-v28',
+      version:         '2026.09.20.1',
+      buildTimestamp:  '2026-09-20T00:00:00Z',
+      swVersion:       'v29',
+      swCacheName:     'avenora-cache-v29',
       firebaseProject: 'avenora-6e147',
       basePath:        '/AVENORA12/',
     };
@@ -354,6 +357,24 @@
         }
       );
     })();
+
+    // ── Production version diagnostic ─────────────────────────
+    console.info('[AVENORA] Production version: ' + window.AVENORA_VERSION);
+
+    // Call window.avenoraVersionCheck() in DevTools to confirm version across devices
+    window.avenoraVersionCheck = function() {
+      return {
+        version:       window.AVENORA_VERSION,
+        swVersion:     window.AVENORA_BUILD && window.AVENORA_BUILD.swVersion,
+        host:          location.host,
+        path:          location.pathname,
+        serviceWorker: navigator.serviceWorker && navigator.serviceWorker.controller
+                         ? navigator.serviceWorker.controller.scriptURL
+                         : null,
+        apiUrl:        window.LU_CONFIG && window.LU_CONFIG.apiUrl,
+        timestamp:     new Date().toISOString(),
+      };
+    };
   </script>
 
   <!-- ═══════ SCRIPTS ═══════════════════════════════════════════ -->
@@ -392,8 +413,8 @@
   <script src="src/pages/social.js"></script>
   <script src="src/pages/video.js"></script>
   <script src="src/pages/live.js"></script>
-  <script src="src/pages/channel.js"></script>
-  <script src="src/pages/channelstudio.js"></script>
+  <script src="src/pages/channel.js?v=29"></script>
+  <script src="src/pages/channelstudio.js?v=29"></script>
   <script src="src/pages/cloudstream.js"></script>
   <script src="src/pages/cloudstudio.js"></script>
   <script src="src/pages/dj.js"></script>

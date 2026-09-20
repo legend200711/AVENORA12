@@ -42,7 +42,8 @@ jobs:
       # Prevents GitHub's Jekyll processor from ignoring files that start with
       # underscores or transforming HTML/JS/CSS.
       # Also verifies every CSS and JS file referenced by index.html is present
-      # so a missing file is caught before deployment, not after.
+      # and that critical channel upload code is present.
+      # FAILS the deployment if expected code is missing — never silently deploy old frontend.
       - name: Add .nojekyll and verify deployment artifact
         run: |
           touch frontend/.nojekyll
@@ -68,11 +69,14 @@ jobs:
             frontend/manifest.json \
             frontend/src/styles/theme.css \
             frontend/src/styles/avenora-cosmic.css \
+            frontend/src/styles/channel.css \
             frontend/src/styles/responsive.css \
             frontend/src/app.js \
             frontend/src/services/firebase.js \
             frontend/src/services/api.js \
             frontend/src/pages/hub.js \
+            frontend/src/pages/channel.js \
+            frontend/src/pages/channelstudio.js \
             frontend/src/pages/music.js \
             frontend/src/pages/social.js \
             frontend/icons/icon-192.png \
@@ -93,6 +97,46 @@ jobs:
           echo "=== SW VERSION ==="
           grep "const SW_VERSION\|const CACHE_NAME" frontend/sw.js
 
+          echo "=== PRODUCTION VERSION CHECK ==="
+          if grep -q "AVENORA_VERSION = '2026.09.20.1'" frontend/index.html; then
+            echo "  OK  AVENORA_VERSION = 2026.09.20.1 found in index.html"
+          else
+            echo "  FAIL  AVENORA_VERSION not updated in index.html"
+            exit 1
+          fi
+
+          echo "=== CHANNEL UPLOAD CODE VERIFICATION ==="
+          if grep -q "/channel/programming/add" frontend/src/pages/channelstudio.js; then
+            echo "  OK  /channel/programming/add found in channelstudio.js"
+          else
+            echo "  FAIL  /channel/programming/add missing from channelstudio.js — upload→channel wiring not deployed"
+            exit 1
+          fi
+          if grep -q "chsMediaToProgramItem" frontend/src/pages/channelstudio.js; then
+            echo "  OK  _chsMediaToProgramItem found in channelstudio.js"
+          else
+            echo "  FAIL  _chsMediaToProgramItem missing from channelstudio.js"
+            exit 1
+          fi
+          if grep -q "chsDoAudioUpload\|chsDoVideoUpload" frontend/src/pages/channelstudio.js; then
+            echo "  OK  upload handlers found in channelstudio.js"
+          else
+            echo "  FAIL  upload handlers missing from channelstudio.js"
+            exit 1
+          fi
+          if grep -q "chs-upload-direct-row" frontend/src/pages/channelstudio.js; then
+            echo "  OK  direct upload buttons found in channelstudio.js"
+          else
+            echo "  FAIL  direct upload buttons missing from channelstudio.js"
+            exit 1
+          fi
+          if grep -q "SW_VERSION.*v29\|avenora-cache-v29" frontend/sw.js; then
+            echo "  OK  SW v29 confirmed in sw.js"
+          else
+            echo "  FAIL  sw.js has not been bumped to v29"
+            exit 1
+          fi
+
           echo "=== DEAD REFERENCE CHECK ==="
           for bad in snx-gifts.css cohost.css cohost.js snx-gifts.js snx-net.js; do
             if grep -r --include="*.html" --include="*.js" --include="*.css" \
@@ -104,6 +148,9 @@ jobs:
               echo "  CLEAN: no reference to ${bad}"
             fi
           done
+
+          echo ""
+          echo "=== ALL VERIFICATION CHECKS PASSED ==="
 
       # ── 4. Upload artifact ─────────────────────────────────────────────────
       # Packages frontend/ (the real AVENORA app) as the Pages artifact.
