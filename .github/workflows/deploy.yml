@@ -164,3 +164,21 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+
+      # ── 6. Trigger Render backend redeploy (if hook URL is configured) ─────
+      # Set RENDER_DEPLOY_HOOK_URL in GitHub → Settings → Secrets and variables
+      # → Actions. Get the hook URL from Render Dashboard → your service →
+      # Settings → Deploy Hook.
+      # This step is a no-op if the secret is not set.
+      - name: Trigger Render backend deploy
+        if: ${{ env.RENDER_DEPLOY_HOOK_URL != '' }}
+        env:
+          RENDER_DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL }}
+        run: |
+          echo "Triggering Render backend deploy..."
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$RENDER_DEPLOY_HOOK_URL")
+          if [ "$RESPONSE" = "200" ] || [ "$RESPONSE" = "201" ] || [ "$RESPONSE" = "204" ]; then
+            echo "  OK  Render deploy triggered (HTTP $RESPONSE)"
+          else
+            echo "  WARN  Render deploy hook returned HTTP $RESPONSE — check hook URL in GitHub secrets"
+          fi
