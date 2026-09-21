@@ -53,6 +53,15 @@ function musicEnsureSystemPlaylists() {
   const existing = LS.get('lu_music_playlists', []);
   const existingSysIds = new Set(existing.map(p => p.sysId).filter(Boolean));
   let changed = false;
+
+  // Normalise all existing playlist track IDs to strings (fixes numeric vs string mismatch)
+  for (const pl of existing) {
+    if (Array.isArray(pl.tracks) && pl.tracks.some(t => typeof t !== 'string')) {
+      pl.tracks = pl.tracks.map(t => String(t));
+      changed = true;
+    }
+  }
+
   for (const sp of SYSTEM_PLAYLISTS) {
     if (!existingSysIds.has(sp.sysId)) {
       existing.push({
@@ -260,6 +269,9 @@ window.musicTabSwitch = async function (tab, clickedBtn) {
 
   const el = document.getElementById('music-content');
   if (!el) return;
+
+  // Clear the open-playlist tracker when navigating to a different tab
+  if (typeof _currentOpenPlaylistId !== 'undefined') _currentOpenPlaylistId = null;
 
   // Clean up any active real-time listeners from previous tab
   if (typeof _radioTabCleanup === 'function') _radioTabCleanup();
@@ -1934,6 +1946,78 @@ window.musicOpenArtist = async function (id) {
   }
 };
 
+// ─── Resolve playlist tracks (local queue + Firestore + backend) ──────────
+// Returns a Promise<Array> of resolved track objects.
+// Local tracks have {id, name, artist, url, _isLocal, _localIndex}.
+// Cloud/backend tracks have {id, title, artistName, fileUrl, ...} shapes
+// already accepted by mpLoadBackendTrack.
+async function _resolvePlaylistTracks(trackIds) {
+  const resolved = [];
+
+  // 1. Try local queue first (fastest, no network)
+  for (const tid of trackIds) {
+    const local = MP.queue.find(t => String(t.id) === String(tid));
+    if (local) { resolved.push({ ...local, _isLocal: true }); }
+  }
+  if (resolved.length === trackIds.length) return resolved;
+
+  // Build the set of IDs still missing
+  const resolvedIds = new Set(resolved.map(t => String(t.id)));
+  const missing = trackIds.filter(tid => !resolvedIds.has(String(tid)));
+
+  // 2. Try Firestore cloudStreamTracks (user's own uploads)
+  const firebaseUser = window.AvenoraFirebase?.Auth?.getUser?.();
+  if (firebaseUser && window.AvenoraFirebase?.getFirestore && missing.length > 0) {
+    try {
+      const uid = firebaseUser.uid || firebaseUser.id;
+      const fsDb = await window.AvenoraFirebase.getFirestore();
+      const { doc, getDoc, collection, query, orderBy, limit, getDocs } =
+        await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+
+      // Try individual doc lookups for each missing ID
+      const stillMissing = [];
+      for (const tid of missing) {
+        try {
+          const snap = await getDoc(doc(fsDb, 'cloudStreamTracks', uid, 'tracks', String(tid)));
+          if (snap.exists()) {
+            const d = snap.data();
+            resolved.push({
+              id:          snap.id,
+              title:       d.title       || 'Untitled',
+              artistName:  d.artist      || '',
+              albumTitle:  d.album       || '',
+              genre:       d.genre       || '',
+              fileUrl:     d.url         || d.downloadURL || d.fileUrl || '',
+              storagePath: d.storagePath || null,
+              coverUrl:    d.coverUrl    || null,
+              duration:    d.duration    || 0,
+              _isFirestore: true,
+            });
+          } else {
+            stillMissing.push(tid);
+          }
+        } catch (_) { stillMissing.push(tid); }
+      }
+      missing.length = 0;
+      missing.push(...stillMissing);
+    } catch (fsErr) {
+      console.warn('[AVN] Playlist Firestore resolve error:', fsErr.message);
+    }
+  }
+
+  // 3. Try backend API for any still-missing IDs
+  for (const tid of missing) {
+    try {
+      const data = await LegendAPI.music.track(tid);
+      if (data && data.track) {
+        resolved.push({ ...data.track, _isBackend: true });
+      }
+    } catch (_) { /* track not found in backend — skip */ }
+  }
+
+  return resolved;
+}
+
 window.musicOpenPlaylist = function (id) {
   const playlists = LS.get('lu_music_playlists', []);
   const pl = playlists.find(p => p.id === id);
@@ -1942,13 +2026,10 @@ window.musicOpenPlaylist = function (id) {
   const el = document.getElementById('music-content');
   if (!el) return;
 
-  // Resolve tracks: prefer local queue, then fire-and-forget cloud lookups
+  // Track the currently open playlist so Import Files knows which playlist to update
+  _currentOpenPlaylistId = id;
+
   const trackIds = pl.tracks || [];
-  const localTracks = trackIds.map(tid => MP.queue.find(t => t.id === tid)).filter(Boolean);
-
-  // Build the valid local indices for play-all / shuffle
-  const localIndices = localTracks.map(t => MP.queue.indexOf(t)).filter(i => i >= 0);
-
   const sp = SYSTEM_PLAYLISTS.find(s => s.sysId === pl.sysId);
   const icon = sp ? sp.icon : '📂';
   const color = sp ? sp.color : 'var(--neon-blue)';
@@ -1959,6 +2040,7 @@ window.musicOpenPlaylist = function (id) {
     <button class="btn btn-outline btn-sm" style="color:var(--neon-red);border-color:rgba(255,60,80,0.3)"
       onclick="musicDeletePlaylist('${escapeHtml(id)}','${escapeHtml(pl.name)}')">🗑 Delete</button>`;
 
+  // Render shell immediately with loading state, then fill tracks asynchronously
   el.innerHTML = `
     <div>
       <button class="btn btn-ghost btn-sm" style="margin-bottom:var(--space-lg)"
@@ -1976,27 +2058,70 @@ window.musicOpenPlaylist = function (id) {
           ${pl.description ? `<p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:var(--space-sm)">${escapeHtml(pl.description)}</p>` : ''}
           <p style="color:var(--text-muted);font-size:0.8rem">${trackIds.length} track${trackIds.length!==1?'s':''}</p>
           <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;margin-top:var(--space-md)">
-            <button class="btn btn-green btn-sm" onclick="musicPlayPlaylistTracks(${JSON.stringify(localIndices)})">▶ Play All</button>
-            <button class="btn btn-outline btn-sm" onclick="mpShufflePlaylist(${JSON.stringify(localIndices)})">⇄ Shuffle</button>
+            <button class="btn btn-green btn-sm" id="pl-play-all-btn" onclick="musicPlayLocalPlaylist('${escapeHtml(id)}')">▶ Play All</button>
+            <button class="btn btn-outline btn-sm" id="pl-shuffle-btn" onclick="musicShufflePlaylist('${escapeHtml(id)}')">⇄ Shuffle</button>
             <button class="btn btn-outline btn-sm" onclick="musicTabSwitch('library')">+ Add Tracks</button>
             ${editControls}
           </div>
         </div>
       </div>
 
-      ${!localTracks.length
-        ? `<div class="music-empty">
-             <span class="music-empty-icon">${icon}</span>
-             <p>${trackIds.length > 0 ? 'Tracks not in current queue. Import music first.' : 'This playlist is empty.'}</p>
-             <p style="font-size:0.82rem;color:var(--text-muted)">Import music files or go to the Songs tab and tap ⋮ → Add to Playlist.</p>
-             <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center;margin-top:var(--space-md)">
-               <button class="btn btn-green btn-sm" onclick="mpImport()">📂 Import Files</button>
-               <button class="btn btn-outline btn-sm" onclick="musicTabSwitch('library')">Browse Songs</button>
-             </div>
-           </div>`
-        : `<div class="music-track-list">${localTracks.map((t) => renderLocalTrackRow(t, MP.queue.indexOf(t))).join('')}</div>`}
+      <div id="pl-track-list-wrap">
+        ${trackIds.length === 0
+          ? `<div class="music-empty">
+               <span class="music-empty-icon">${icon}</span>
+               <p>This playlist is empty.</p>
+               <p style="font-size:0.82rem;color:var(--text-muted)">Go to the Songs tab and tap ⋮ → Add to Playlist.</p>
+               <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center;margin-top:var(--space-md)">
+                 <button class="btn btn-green btn-sm" onclick="mpImport()">📂 Import Files</button>
+                 <button class="btn btn-outline btn-sm" onclick="musicTabSwitch('library')">Browse Songs</button>
+               </div>
+             </div>`
+          : `<div style="color:var(--text-muted);font-size:0.85rem;padding:var(--space-md) 0">Loading tracks…</div>`}
+      </div>
     </div>`;
+
+  if (!trackIds.length) return;
+
+  // Asynchronously resolve & render tracks
+  _resolvePlaylistTracks(trackIds).then(tracks => {
+    const wrap = document.getElementById('pl-track-list-wrap');
+    if (!wrap) return; // user navigated away
+
+    if (!tracks.length) {
+      wrap.innerHTML = `
+        <div class="music-empty">
+          <span class="music-empty-icon">${icon}</span>
+          <p>Could not load tracks. They may have been deleted.</p>
+          <p style="font-size:0.82rem;color:var(--text-muted)">Import music files or go to the Songs tab and tap ⋮ → Add to Playlist.</p>
+          <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center;margin-top:var(--space-md)">
+            <button class="btn btn-green btn-sm" onclick="mpImport()">📂 Import Files</button>
+            <button class="btn btn-outline btn-sm" onclick="musicTabSwitch('library')">Browse Songs</button>
+          </div>
+        </div>`;
+      return;
+    }
+
+    // Store resolved tracks on the playlist view for play/shuffle
+    // Using a module-level map keyed by playlist id
+    _plResolvedTracks[id] = tracks;
+
+    wrap.innerHTML = `<div class="music-track-list">${tracks.map((t, i) => {
+      if (t._isLocal) {
+        return renderLocalTrackRow(t, t._localIndex != null ? t._localIndex : MP.queue.indexOf(t));
+      }
+      return renderTrackRow(t, i, tracks, 'playlist-' + id);
+    }).join('')}</div>`;
+  }).catch(err => {
+    console.warn('[AVN] Playlist track resolution failed:', err);
+    const wrap = document.getElementById('pl-track-list-wrap');
+    if (wrap) wrap.innerHTML = `<p style="color:var(--neon-red);font-size:0.85rem">Could not load tracks. Check your connection.</p>`;
+  });
 };
+
+// Registry for resolved playlist tracks so Play All / Shuffle can access them
+// without re-fetching.
+const _plResolvedTracks = {};
 
 window.musicPlayPlaylistTracks = function (indices) {
   if (!indices.length) { Toast.info('Playlist is empty'); return; }
@@ -2091,6 +2216,8 @@ window.musicDeletePlaylist = function (id, name) {
 };
 
 window.musicAddToPlaylistModal = function (trackId, trackName) {
+  // Always work with string IDs to prevent numeric vs string type mismatches
+  const sid = String(trackId);
   const playlists = LS.get('lu_music_playlists', []);
   if (!playlists.length) {
     if (confirm('No playlists yet. Create one now?')) musicCreatePlaylistModal();
@@ -2099,7 +2226,7 @@ window.musicAddToPlaylistModal = function (trackId, trackName) {
 
   // Build checkbox list — all playlists (system + user), mark which already contain this track
   const items = playlists.map(p => {
-    const has = (p.tracks || []).includes(trackId);
+    const has = (p.tracks || []).some(t => String(t) === sid);
     const sp  = SYSTEM_PLAYLISTS.find(s => s.sysId === p.sysId);
     const icon = sp ? sp.icon : '📂';
     return `
@@ -2123,13 +2250,15 @@ window.musicAddToPlaylistModal = function (trackId, trackName) {
       </div>`,
     actions: [
       { label: '✦ New Sound World', class: 'btn-cosmic-outline btn-sm', onclick: `Modal.close('add-to-pl-modal');musicCreatePlaylistModal()` },
-      { label: 'Done', class: 'btn-cosmic', onclick: `musicConfirmAddToPlaylist('${trackId}')` },
+      { label: 'Done', class: 'btn-cosmic', onclick: `musicConfirmAddToPlaylist('${sid}')` },
     ],
   });
   Modal.open('add-to-pl-modal');
 };
 
 window.musicConfirmAddToPlaylist = function (trackId) {
+  // Normalise to string — prevents numeric vs string type mismatches in pl.tracks
+  const sid = String(trackId);
   const checked = document.querySelectorAll('#music-pl-check-list input[name="pl-check"]');
   if (!checked.length) { Modal.close('add-to-pl-modal'); return; }
 
@@ -2140,15 +2269,19 @@ window.musicConfirmAddToPlaylist = function (trackId) {
     const pl = playlists.find(p => p.id === cb.value);
     if (!pl) return;
     if (!pl.tracks) pl.tracks = [];
+    // Normalise existing IDs to strings for consistent comparison
+    pl.tracks = pl.tracks.map(t => String(t));
     if (cb.checked) {
-      if (!pl.tracks.includes(trackId)) { pl.tracks.push(trackId); added++; }
+      if (!pl.tracks.includes(sid)) { pl.tracks.push(sid); added++; }
     } else {
-      const idx = pl.tracks.indexOf(trackId);
+      const idx = pl.tracks.indexOf(sid);
       if (idx !== -1) { pl.tracks.splice(idx, 1); removed++; }
     }
   });
 
   LS.set('lu_music_playlists', playlists);
+  // Invalidate resolved track cache for affected playlists so next open re-fetches
+  checked.forEach(cb => { delete _plResolvedTracks[cb.value]; });
 
   if (added > 0 && removed === 0) Toast.success(`Added to ${added} playlist${added!==1?'s':''}`);
   else if (removed > 0 && added === 0) Toast.info(`Removed from ${removed} playlist${removed!==1?'s':''}`);
@@ -2176,11 +2309,71 @@ window.musicPlayLocalPlaylist = function (id) {
   const playlists = LS.get('lu_music_playlists', []);
   const pl = playlists.find(p => p.id === id);
   if (!pl || !pl.tracks || !pl.tracks.length) { Toast.info('Playlist is empty'); return; }
+
+  // 1. Try local queue first (instant — no network)
   const indices = pl.tracks
-    .map(tid => MP.queue.findIndex(t => t.id === tid))
+    .map(tid => MP.queue.findIndex(t => String(t.id) === String(tid)))
     .filter(i => i >= 0);
-  if (!indices.length) { Toast.info('No imported tracks in this playlist'); return; }
-  mpLoadTrack(indices[0]);
+  if (indices.length) { mpLoadTrack(indices[0]); return; }
+
+  // 2. Try pre-resolved tracks from open playlist view
+  const pre = _plResolvedTracks[id];
+  if (pre && pre.length) { _playResolvedTrack(pre[0], pre, id); return; }
+
+  // 3. Resolve async (covers reload scenario — no pre-resolved cache)
+  Toast.info('Loading tracks…');
+  _resolvePlaylistTracks(pl.tracks).then(tracks => {
+    if (!tracks.length) { Toast.error('Could not load tracks for this playlist'); return; }
+    _plResolvedTracks[id] = tracks;
+    _playResolvedTrack(tracks[0], tracks, id);
+  }).catch(() => Toast.error('Could not load tracks. Check your connection.'));
+};
+
+// Play a single resolved track (local or backend) and register the context for auto-advance.
+function _playResolvedTrack(track, allTracks, contextId) {
+  if (!track) return;
+  if (track._isLocal) {
+    const idx = MP.queue.findIndex(t => String(t.id) === String(track.id));
+    if (idx >= 0) { mpLoadTrack(idx); return; }
+  }
+  const idx = allTracks.indexOf(track);
+  mpLoadBackendTrack(track, idx >= 0 ? idx : 0, 'playlist-' + contextId, allTracks);
+}
+
+window.musicShufflePlaylist = function (id) {
+  const playlists = LS.get('lu_music_playlists', []);
+  const pl = playlists.find(p => p.id === id);
+  if (!pl || !pl.tracks || !pl.tracks.length) { Toast.info('Nothing to shuffle'); return; }
+
+  // 1. Try local queue
+  const indices = pl.tracks
+    .map(tid => MP.queue.findIndex(t => String(t.id) === String(tid)))
+    .filter(i => i >= 0);
+  if (indices.length) {
+    const shuffled = [...indices].sort(() => Math.random() - 0.5);
+    mpLoadTrack(shuffled[0]);
+    Toast.info('Shuffled — playing a random track');
+    return;
+  }
+
+  // 2. Try pre-resolved
+  const pre = _plResolvedTracks[id];
+  if (pre && pre.length) {
+    const pick = pre[Math.floor(Math.random() * pre.length)];
+    _playResolvedTrack(pick, pre, id);
+    Toast.info('Shuffled — playing a random track');
+    return;
+  }
+
+  // 3. Resolve async
+  Toast.info('Loading tracks…');
+  _resolvePlaylistTracks(pl.tracks).then(tracks => {
+    if (!tracks.length) { Toast.error('Could not load tracks for this playlist'); return; }
+    _plResolvedTracks[id] = tracks;
+    const pick = tracks[Math.floor(Math.random() * tracks.length)];
+    _playResolvedTrack(pick, tracks, id);
+    Toast.info('Shuffled — playing a random track');
+  }).catch(() => Toast.error('Could not load tracks. Check your connection.'));
 };
 
 window.mpShufflePlaylist = function (indices) {
@@ -2552,6 +2745,9 @@ function _mpNotifyQueueChange() {
 
 // ─── Import ───────────────────────────────────────────────────
 
+// Track which playlist is currently open so Import Files can add IDs to it.
+let _currentOpenPlaylistId = null;
+
 window.mpImport = function () {
   const input = document.createElement('input');
   input.type     = 'file';
@@ -2576,6 +2772,24 @@ window.mpImport = function () {
     mpRenderQueueList();
     _mpNotifyQueueChange();
 
+    // If a playlist is currently open, persist these local track IDs to it
+    if (_currentOpenPlaylistId) {
+      const playlists = LS.get('lu_music_playlists', []);
+      const pl = playlists.find(p => p.id === _currentOpenPlaylistId);
+      if (pl) {
+        if (!pl.tracks) pl.tracks = [];
+        pl.tracks = pl.tracks.map(t => String(t));
+        for (const t of tracks) {
+          if (!pl.tracks.includes(t.id)) pl.tracks.push(t.id);
+        }
+        LS.set('lu_music_playlists', playlists);
+        // Invalidate resolved cache so the playlist view re-resolves
+        delete _plResolvedTracks[_currentOpenPlaylistId];
+        // Re-open the playlist to show the new tracks
+        setTimeout(() => musicOpenPlaylist(_currentOpenPlaylistId), 50);
+      }
+    }
+
     // Re-render track list if on library/discover tab
     const listEl = document.getElementById('music-track-list');
     if (listEl) {
@@ -2591,7 +2805,7 @@ window.mpImport = function () {
     const contentEl = document.getElementById('music-content');
     if (contentEl) {
       const tl = contentEl.querySelector('.music-track-list');
-      if (tl) {
+      if (tl && !_currentOpenPlaylistId) {
         tl.insertAdjacentHTML('beforeend', tracks.map((t, i) => renderLocalTrackRow(t, MP.queue.length - tracks.length + i)).join(''));
       }
     }
