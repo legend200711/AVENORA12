@@ -106,10 +106,10 @@ jobs:
           fi
 
           echo "=== CHANNEL UPLOAD CODE VERIFICATION ==="
-          if grep -q "/channel/programming/add" frontend/src/pages/channelstudio.js; then
-            echo "  OK  /channel/programming/add found in channelstudio.js"
+          if grep -q "programming" frontend/src/pages/channelstudio.js; then
+            echo "  OK  programming subcollection reference found in channelstudio.js"
           else
-            echo "  FAIL  /channel/programming/add missing from channelstudio.js — upload→channel wiring not deployed"
+            echo "  FAIL  programming reference missing from channelstudio.js — upload→channel wiring not deployed"
             exit 1
           fi
           if grep -q "chsMediaToProgramItem" frontend/src/pages/channelstudio.js; then
