@@ -810,43 +810,87 @@
       //   The video-delete Edge Function already handles Firebase token
       //   verification correctly — use it.
       if (_isUUID(sid)) {
-        // Get a fresh Firebase ID token for the Edge Function
-        let token = null;
-        if (window.AvenoraFirebase?.Auth) {
-          token = await window.AvenoraFirebase.Auth.getIdToken().catch(() => null);
+        // Helper: obtain the freshest possible Firebase ID token.
+        // forceRefresh=true ensures we never send a stale cached token to the
+        // Edge Function, which is the primary cause of HTTP 401 on delete.
+        async function _getFreshToken() {
+          // Primary: AvenoraFirebase.Auth.getIdToken() now always force-refreshes
+          if (window.AvenoraFirebase?.Auth) {
+            const t = await window.AvenoraFirebase.Auth.getIdToken(true).catch(() => null);
+            if (t) return t;
+          }
+          // Fallback: reach directly into the Firebase auth instance
+          if (window.AvenoraFirebase?.getFirebaseAuth) {
+            try {
+              const auth = await window.AvenoraFirebase.getFirebaseAuth();
+              if (auth?.currentUser) {
+                return await auth.currentUser.getIdToken(/* forceRefresh= */true);
+              }
+            } catch (_) {}
+          }
+          return null;
         }
-        if (!token && window.AvenoraFirebase?.getFirebaseAuth) {
-          try {
-            const auth = await window.AvenoraFirebase.getFirebaseAuth();
-            token = auth.currentUser ? await auth.currentUser.getIdToken() : null;
-          } catch (_) {}
+
+        // Wait for Firebase auth state to be determined before trying to get a token
+        await _waitForAuthReady(5000);
+
+        let token = await _getFreshToken();
+        if (!token) {
+          const authErr = new Error('Not authenticated — please sign in before deleting a video.');
+          authErr.status = 401;
+          authErr.code   = 'UNAUTHORIZED';
+          throw authErr;
         }
-        if (!token) throw new Error('Not authenticated — please sign in before deleting a video.');
 
         const edgeFnUrl = `${SUPABASE_PROJECT_URL}/functions/v1/video-delete?id=${encodeURIComponent(sid)}`;
-        let res;
-        try {
-          res = await fetch(edgeFnUrl, {
-            method: 'DELETE',
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type':  'application/json',
-            },
-          });
-        } catch (networkErr) {
-          console.error('[AVN] video-delete Edge Function network error:', networkErr);
-          throw new Error('Network error while deleting video. Check your connection.');
+
+        // Attempt the delete, with ONE automatic retry on 401 using a freshly-
+        // force-refreshed token (covers the case where the cached token expired
+        // between the time it was fetched and the time the request was sent).
+        for (let attempt = 0; attempt < 2; attempt++) {
+          let res;
+          try {
+            res = await fetch(edgeFnUrl, {
+              method: 'DELETE',
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type':  'application/json',
+              },
+            });
+          } catch (networkErr) {
+            console.error('[AVN] video-delete Edge Function network error:', networkErr);
+            throw new Error('Network error while deleting video. Check your connection.');
+          }
+
+          // On 401: if this is the first attempt, force-refresh the token and retry once.
+          // Never retry twice — avoid an infinite auth loop.
+          if (res.status === 401 && attempt === 0) {
+            console.warn('[AVN] video-delete got 401 — force-refreshing Firebase token and retrying once…');
+            const refreshed = await _getFreshToken().catch(() => null);
+            if (refreshed && refreshed !== token) {
+              token = refreshed;
+              continue; // retry with the new token
+            }
+            // Token unchanged or unavailable — fall through to error handling
+          }
+
+          const edgeData = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            const msg = edgeData.message || `Delete failed (HTTP ${res.status})`;
+            console.error('[AVN] video-delete Edge Function error:', { status: res.status, attempt, edgeData });
+            const err = new Error(
+              res.status === 401
+                ? 'Authentication could not be refreshed. Please sign out and sign back in.'
+                : msg
+            );
+            err.status = res.status;
+            err.code   = res.status === 401 ? 'UNAUTHORIZED' : null;
+            throw err;
+          }
+
+          console.info('[AVN] Video deleted via Edge Function:', sid);
+          return { success: true };
         }
-        const edgeData = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          const msg = edgeData.message || `Delete failed (HTTP ${res.status})`;
-          console.error('[AVN] video-delete Edge Function error:', { status: res.status, edgeData });
-          const err = new Error(msg);
-          err.status = res.status;
-          throw err;
-        }
-        console.info('[AVN] Video deleted via Edge Function:', sid);
-        return { success: true };
       }
 
       // ── Path 3: Firestore-backed video (non-UUID id, no backend configured).

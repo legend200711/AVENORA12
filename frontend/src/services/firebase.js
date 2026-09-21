@@ -249,11 +249,15 @@
       });
     },
 
-    /** Returns a fresh Firebase ID token (for backend-verified requests). */
-    async getIdToken() {
+    /**
+     * Returns a fresh Firebase ID token (for backend-verified requests).
+     * Always forces a server-side refresh so the returned token is never
+     * a stale cached copy — critical for privileged operations like delete.
+     */
+    async getIdToken(forceRefresh = true) {
       const auth = await getFirebaseAuth();
       if (!auth.currentUser) return null;
-      return auth.currentUser.getIdToken();
+      return auth.currentUser.getIdToken(forceRefresh);
     },
   };
 

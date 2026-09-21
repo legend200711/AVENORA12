@@ -766,7 +766,7 @@ window.adminDeleteVideo = async function(videoId) {
     if (err.code === 'BACKEND_UNREACHABLE' || err.code === 'SERVICE_UNREACHABLE' || err.code === 'SERVICE_NOT_RUNNING') {
       userMsg = 'Backend unreachable after retries. Render may still be starting up — please wait 60 s and try again.';
     } else if (err.status === 401) {
-      userMsg = 'Session expired — please sign in again (HTTP 401).';
+      userMsg = 'Authentication could not be refreshed (HTTP 401). Please sign out and sign back in.';
     } else if (err.status === 403) {
       userMsg = 'Permission denied — only the founder can delete videos (HTTP 403).';
     } else if (err.status === 404) {
