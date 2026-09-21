@@ -1951,6 +1951,16 @@ window.musicOpenArtist = async function (id) {
 // Local tracks have {id, name, artist, url, _isLocal, _localIndex}.
 // Cloud/backend tracks have {id, title, artistName, fileUrl, ...} shapes
 // already accepted by mpLoadBackendTrack.
+//
+// Resolution order:
+//   1. Local imported queue (instant, no network)
+//   2. Firestore cloudStreamTracks/{uid}/tracks/{docId}
+//      — uses auth.currentUser as the authoritative uid source to avoid the
+//        LegendState timing race that causes false "track missing" failures
+//        immediately after a page load while Firebase auth is still restoring.
+//   3. MongoDB backend API (shared/admin catalogue)
+//
+// Returns a plain array — never throws. Callers check .length === 0 for failure.
 async function _resolvePlaylistTracks(trackIds) {
   const resolved = [];
 
@@ -1966,53 +1976,107 @@ async function _resolvePlaylistTracks(trackIds) {
   const missing = trackIds.filter(tid => !resolvedIds.has(String(tid)));
 
   // 2. Try Firestore cloudStreamTracks (user's own uploads)
-  const firebaseUser = window.AvenoraFirebase?.Auth?.getUser?.();
-  if (firebaseUser && window.AvenoraFirebase?.getFirestore && missing.length > 0) {
+  //
+  // Auth UID strategy — prefer the Firebase SDK's authoritative source
+  // (auth.currentUser.uid) over LegendState which may lag on a fresh page load
+  // by up to ~1 s while onAuthStateChanged propagates.  Falling back through:
+  //   a) auth.currentUser — always correct when Firebase has restored the session
+  //   b) LegendState user — populated after onAuthStateChanged fires
+  //   c) persisted lu_uid — last resort for scenarios where auth.currentUser
+  //      is somehow null but the session was already established
+  //
+  // Without this layered approach, opening a playlist immediately after page load
+  // returns uid = null → Firestore step is skipped → tracks fall through to the
+  // backend API → not found → "Could not load tracks. They may have been deleted."
+  if (window.AvenoraFirebase?.getFirestore && missing.length > 0) {
+    let uid = null;
     try {
-      const uid = firebaseUser.uid || firebaseUser.id;
-      const fsDb = await window.AvenoraFirebase.getFirestore();
-      const { doc, getDoc, collection, query, orderBy, limit, getDocs } =
-        await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+      // Attempt to get the live auth instance — this is the most reliable source
+      const { getAuth } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js');
+      const auth = getAuth();
+      if (auth.currentUser) uid = auth.currentUser.uid;
+    } catch (_) { /* Firebase auth module unavailable — fall through */ }
 
-      // Try individual doc lookups for each missing ID
-      const stillMissing = [];
-      for (const tid of missing) {
-        try {
-          const snap = await getDoc(doc(fsDb, 'cloudStreamTracks', uid, 'tracks', String(tid)));
-          if (snap.exists()) {
-            const d = snap.data();
-            resolved.push({
-              id:          snap.id,
-              title:       d.title       || 'Untitled',
-              artistName:  d.artist      || '',
-              albumTitle:  d.album       || '',
-              genre:       d.genre       || '',
-              fileUrl:     d.url         || d.downloadURL || d.fileUrl || '',
-              storagePath: d.storagePath || null,
-              coverUrl:    d.coverUrl    || null,
-              duration:    d.duration    || 0,
-              _isFirestore: true,
-            });
-          } else {
+    // Layer b: LegendState (populated after onAuthStateChanged)
+    if (!uid) {
+      const stateUser = window.AvenoraFirebase?.Auth?.getUser?.();
+      if (stateUser) uid = stateUser.uid || stateUser.id;
+    }
+
+    // Layer c: persisted UID written by firebase.js _persistUid()
+    if (!uid) {
+      uid = sessionStorage.getItem('lu_uid') || localStorage.getItem('lu_uid') || null;
+    }
+
+    if (uid) {
+      try {
+        const fsDb = await window.AvenoraFirebase.getFirestore();
+        const { doc, getDoc } =
+          await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+
+        const stillMissing = [];
+        for (const tid of missing) {
+          try {
+            const snap = await getDoc(doc(fsDb, 'cloudStreamTracks', uid, 'tracks', String(tid)));
+            if (snap.exists()) {
+              const d = snap.data();
+              // Validate the record has a playable URL before accepting it
+              const playUrl = d.url || d.downloadURL || d.fileUrl || '';
+              if (!playUrl && !d.storagePath) {
+                console.warn('[AVN] Track record exists but has no playable URL — trackId:', tid);
+                // Still push so the track row renders (mpLoadBackendTrack will surface the error)
+              }
+              resolved.push({
+                id:           snap.id,
+                title:        d.title       || 'Untitled',
+                artistName:   d.artist      || '',
+                albumTitle:   d.album       || '',
+                genre:        d.genre       || '',
+                fileUrl:      playUrl,
+                storagePath:  d.storagePath || null,
+                coverUrl:     d.coverUrl    || null,
+                duration:     d.duration    || 0,
+                _isFirestore: true,
+              });
+            } else {
+              // Doc not found for this uid — could be a legacy reference uploaded
+              // under a different uid, or a truly deleted track.
+              console.warn(`[AVN] Track not found in Firestore: cloudStreamTracks/${uid}/tracks/${tid}`);
+              stillMissing.push(tid);
+            }
+          } catch (docErr) {
+            const code = docErr?.code || '';
+            if (code === 'permission-denied') {
+              console.warn(`[AVN] PERMISSION_DENIED reading track ${tid} — check Firestore rules`);
+            } else {
+              console.warn(`[AVN] FIRESTORE_ERROR reading track ${tid}:`, docErr.message || code);
+            }
             stillMissing.push(tid);
           }
-        } catch (_) { stillMissing.push(tid); }
+        }
+        missing.length = 0;
+        missing.push(...stillMissing);
+      } catch (fsErr) {
+        const code = fsErr?.code || '';
+        if (code === 'permission-denied') {
+          console.warn('[AVN] PERMISSION_DENIED on Firestore cloudStreamTracks — check auth rules:', fsErr.message);
+        } else {
+          console.warn('[AVN] Playlist Firestore resolve error:', fsErr.message || code);
+        }
       }
-      missing.length = 0;
-      missing.push(...stillMissing);
-    } catch (fsErr) {
-      console.warn('[AVN] Playlist Firestore resolve error:', fsErr.message);
+    } else {
+      console.warn('[AVN] No authenticated UID found — skipping Firestore track resolution for', missing.length, 'track(s)');
     }
   }
 
-  // 3. Try backend API for any still-missing IDs
+  // 3. Try backend API for any still-missing IDs (shared/admin catalogue, non-Firestore tracks)
   for (const tid of missing) {
     try {
       const data = await LegendAPI.music.track(tid);
       if (data && data.track) {
         resolved.push({ ...data.track, _isBackend: true });
       }
-    } catch (_) { /* track not found in backend — skip */ }
+    } catch (_) { /* track not in backend catalogue — skip */ }
   }
 
   return resolved;
@@ -2089,12 +2153,22 @@ window.musicOpenPlaylist = function (id) {
     if (!wrap) return; // user navigated away
 
     if (!tracks.length) {
+      // Show a specific diagnostic rather than the generic "may have been deleted"
+      // message — auth timing, network errors, or Firestore rules failures are far
+      // more common than actual deletion, and hiding the real cause wastes time.
+      const signedIn = !!(sessionStorage.getItem('lu_uid') || localStorage.getItem('lu_uid'));
+      const diagCode = signedIn ? 'MEDIA_RECORD_MISSING' : 'NOT_SIGNED_IN';
+      const diagMsg  = signedIn
+        ? 'The track reference could not be resolved from your cloud library. Check the browser console for the specific error (DevTools → Console).'
+        : 'You must be signed in to load cloud tracks. Sign in and try again.';
+
       wrap.innerHTML = `
         <div class="music-empty">
           <span class="music-empty-icon">${icon}</span>
-          <p>Could not load tracks. They may have been deleted.</p>
-          <p style="font-size:0.82rem;color:var(--text-muted)">Import music files or go to the Songs tab and tap ⋮ → Add to Playlist.</p>
+          <p style="color:var(--neon-red);font-weight:600">${diagCode}</p>
+          <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:var(--space-sm)">${diagMsg}</p>
           <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center;margin-top:var(--space-md)">
+            <button class="btn btn-cosmic btn-sm" onclick="musicOpenPlaylist('${escapeHtml(id)}')">↺ Retry</button>
             <button class="btn btn-green btn-sm" onclick="mpImport()">📂 Import Files</button>
             <button class="btn btn-outline btn-sm" onclick="musicTabSwitch('library')">Browse Songs</button>
           </div>
@@ -2115,7 +2189,12 @@ window.musicOpenPlaylist = function (id) {
   }).catch(err => {
     console.warn('[AVN] Playlist track resolution failed:', err);
     const wrap = document.getElementById('pl-track-list-wrap');
-    if (wrap) wrap.innerHTML = `<p style="color:var(--neon-red);font-size:0.85rem">Could not load tracks. Check your connection.</p>`;
+    if (wrap) wrap.innerHTML = `
+      <div style="padding:var(--space-md)">
+        <p style="color:var(--neon-red);font-weight:600">NETWORK_ERROR</p>
+        <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:var(--space-sm)">${err.message || 'Could not load tracks. Check your connection.'}</p>
+        <button class="btn btn-cosmic btn-sm" onclick="musicOpenPlaylist('${escapeHtml(id)}')">↺ Retry</button>
+      </div>`;
   });
 };
 
@@ -2321,12 +2400,20 @@ window.musicPlayLocalPlaylist = function (id) {
   if (pre && pre.length) { _playResolvedTrack(pre[0], pre, id); return; }
 
   // 3. Resolve async (covers reload scenario — no pre-resolved cache)
+  // Cloud-uploaded tracks are not in MP.queue (the local import list) so this
+  // path is the normal code path for Firestore-backed tracks.
   Toast.info('Loading tracks…');
   _resolvePlaylistTracks(pl.tracks).then(tracks => {
-    if (!tracks.length) { Toast.error('Could not load tracks for this playlist'); return; }
+    if (!tracks.length) {
+      const signedIn = !!(sessionStorage.getItem('lu_uid') || localStorage.getItem('lu_uid'));
+      Toast.error(signedIn
+        ? 'MEDIA_RECORD_MISSING — track could not be resolved. Check console for details.'
+        : 'NOT_SIGNED_IN — sign in to play your cloud tracks.');
+      return;
+    }
     _plResolvedTracks[id] = tracks;
     _playResolvedTrack(tracks[0], tracks, id);
-  }).catch(() => Toast.error('Could not load tracks. Check your connection.'));
+  }).catch(err => Toast.error('NETWORK_ERROR — ' + (err.message || 'Check your connection.')));
 };
 
 // Play a single resolved track (local or backend) and register the context for auto-advance.
@@ -2368,12 +2455,18 @@ window.musicShufflePlaylist = function (id) {
   // 3. Resolve async
   Toast.info('Loading tracks…');
   _resolvePlaylistTracks(pl.tracks).then(tracks => {
-    if (!tracks.length) { Toast.error('Could not load tracks for this playlist'); return; }
+    if (!tracks.length) {
+      const signedIn = !!(sessionStorage.getItem('lu_uid') || localStorage.getItem('lu_uid'));
+      Toast.error(signedIn
+        ? 'MEDIA_RECORD_MISSING — track could not be resolved. Check console for details.'
+        : 'NOT_SIGNED_IN — sign in to play your cloud tracks.');
+      return;
+    }
     _plResolvedTracks[id] = tracks;
     const pick = tracks[Math.floor(Math.random() * tracks.length)];
     _playResolvedTrack(pick, tracks, id);
     Toast.info('Shuffled — playing a random track');
-  }).catch(() => Toast.error('Could not load tracks. Check your connection.'));
+  }).catch(err => Toast.error('NETWORK_ERROR — ' + (err.message || 'Check your connection.')));
 };
 
 window.mpShufflePlaylist = function (indices) {

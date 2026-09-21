@@ -1,5 +1,5 @@
 /**
- * AVENORA — Service Worker v37
+ * AVENORA — Service Worker v39
  *
  * Deployment-aware: detects GitHub Pages vs Firebase Hosting automatically.
  *   GitHub Pages:      https://legend200711.github.io/AVENORA12/  → BASE = /AVENORA12
@@ -47,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v38';
-const CACHE_NAME  = 'avenora-cache-v38';
+const SW_VERSION  = 'v39';
+const CACHE_NAME  = 'avenora-cache-v39';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -92,6 +92,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v35', // v35 — evict: fix false "Playlist is empty" bug in Music Hub
   'avenora-cache-v36', // v36 — evict: backup account profile load bug fix
   'avenora-cache-v37', // v37 — evict: profile resolution bug fix (wrong UID lookup)
+  'avenora-cache-v38', // v38 — evict: broken track reference repair (Cloud Radio)
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',
