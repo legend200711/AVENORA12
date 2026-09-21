@@ -179,27 +179,43 @@ registerPage('profile', {
     } catch (err) {
       // ── Diagnostic log: always log the real error during development ─────
       // Production shows a friendly message; DevTools preserves the real cause.
-      const isNotFound = err.code === 'PROFILE_NOT_FOUND';
-      const isNetwork  = err.message === 'Failed to fetch'
+      const isNotFound        = err.code === 'PROFILE_NOT_FOUND';
+      const isPermissionDenied = err.code === 'permission-denied'
+        || err.code === 'PERMISSION_DENIED'
+        || err.message?.includes('permission');
+      const isNetwork         = err.message === 'Failed to fetch'
         || err.message?.includes('NetworkError')
-        || err.message?.includes('net::ERR');
-      const isApiUnconfigured = err.code === 'API_NOT_CONFIGURED';
+        || err.message?.includes('net::ERR')
+        || err.code === 'unavailable';
+      const isAuthProblem     = err.code === 'unauthenticated'
+        || err.code === 'UNAUTHENTICATED';
+      const isApiUnconfigured = err.code === 'API_NOT_CONFIGURED'
+        || err.code === 'FIREBASE_NOT_READY';
 
       console.error('[AVN] PROFILE LOAD FAILED', {
-        authenticatedUid: authenticatedUid || '(not signed in)',
-        viewedUid:        viewedUid        || '(none)',
-        documentPath:     viewedUid ? `users/${viewedUid}` : '(unknown)',
-        firebaseCode:     err.code         || '(none)',
-        message:          err.message,
+        authenticatedUid:  authenticatedUid || '(not signed in)',
+        routeIdentifier:   routeParam       || '(none — own profile)',
+        viewedUid:         viewedUid        || '(none)',
+        documentPath:      viewedUid ? `users/${viewedUid}` : '(unknown)',
+        firebaseCode:      err.code         || '(none)',
+        message:           err.message,
         isNotFound,
+        isPermissionDenied,
         isNetwork,
+        isAuthProblem,
         isApiUnconfigured,
       });
 
-      let friendlyMsg = 'This profile is temporarily unavailable.';
-      if (isNetwork)          friendlyMsg = 'Could not connect. Check your connection and try again.';
-      if (isNotFound)         friendlyMsg = 'This profile does not exist.';
-      if (isApiUnconfigured)  friendlyMsg = 'Service not configured. Check your internet connection and try again.';
+      // Only show "does not exist" when the lookup genuinely found nothing.
+      // Every other condition is a transient or configuration error — show a
+      // recovery message so the user can try again rather than thinking the
+      // account is gone.
+      let friendlyMsg = 'This profile is temporarily unavailable. Please try again.';
+      if (isNotFound)          friendlyMsg = 'This profile does not exist.';
+      if (isNetwork)           friendlyMsg = 'Could not connect. Check your connection and try again.';
+      if (isPermissionDenied)  friendlyMsg = 'You need to be signed in to view this profile.';
+      if (isAuthProblem)       friendlyMsg = 'Your session has expired. Please sign in again.';
+      if (isApiUnconfigured)   friendlyMsg = 'Service not configured. Check your internet connection and try again.';
 
       // "Try Again" re-runs the full load — not just a cached promise.
       showError(container, friendlyMsg, () => _doLoad());
@@ -319,8 +335,11 @@ const SNProfile = {
         listEl.innerHTML = '<p style="padding:16px;color:var(--text-muted);text-align:center">No followers yet.</p>';
         return;
       }
-      listEl.innerHTML = users.map(u => `
-        <a href="#profile/${escapeHtml(u.username)}" class="sn-user-list-item" onclick="Modal.close('sn-followers-modal')">
+      listEl.innerHTML = users.map(u => {
+        // Navigate by UID so the profile page can always resolve the user.
+        const pid = encodeURIComponent(u.uid || u.id || u.username || '');
+        return `
+        <a href="#profile/${pid}" class="sn-user-list-item" onclick="Modal.close('sn-followers-modal')">
           ${avatarHtml(u, 'sm')}
           <div>
             <div class="font-bold">${escapeHtml(u.profile?.displayName || u.username)}</div>
@@ -328,7 +347,7 @@ const SNProfile = {
           </div>
           ${roleBadgeHtml(u.role)}
         </a>
-      `).join('');
+      `}).join('');
     } catch (err) {
       console.warn('[AVN] Followers load error:', err);
       const listEl = document.getElementById('sn-followers-list');
@@ -354,8 +373,10 @@ const SNProfile = {
         listEl.innerHTML = '<p style="padding:16px;color:var(--text-muted);text-align:center">Not following anyone yet.</p>';
         return;
       }
-      listEl.innerHTML = users.map(u => `
-        <a href="#profile/${escapeHtml(u.username)}" class="sn-user-list-item" onclick="Modal.close('sn-following-modal')">
+      listEl.innerHTML = users.map(u => {
+        const pid = encodeURIComponent(u.uid || u.id || u.username || '');
+        return `
+        <a href="#profile/${pid}" class="sn-user-list-item" onclick="Modal.close('sn-following-modal')">
           ${avatarHtml(u, 'sm')}
           <div>
             <div class="font-bold">${escapeHtml(u.profile?.displayName || u.username)}</div>
@@ -363,7 +384,7 @@ const SNProfile = {
           </div>
           ${roleBadgeHtml(u.role)}
         </a>
-      `).join('');
+      `}).join('');
     } catch (err) {
       console.warn('[AVN] Following load error:', err);
       const listEl = document.getElementById('sn-following-list');

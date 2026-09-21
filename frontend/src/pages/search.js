@@ -80,8 +80,13 @@ const performSearch = debounce(async function (query) {
     if (results.users?.length) {
       html += `<div class="section-header"><h3 class="section-title">USERS (${results.users.length})</h3></div>`;
       html += `<div style="display:flex;flex-direction:column;gap:var(--space-sm);margin-bottom:var(--space-xl)">`;
-      html += results.users.map(u => `
-        <a href="#profile/${escapeHtml(u.username || '')}" class="card" style="display:flex;align-items:center;gap:var(--space-md);text-decoration:none;color:inherit">
+      html += results.users.map(u => {
+        // Always navigate by UID (document ID) — it is always present and the
+        // profile page handles UIDs via its ≥20-char alphanumeric regex.
+        // Falling back to username only when no uid is available (should never happen).
+        const profileId = encodeURIComponent(u.uid || u.id || u.username || '');
+        return `
+        <a href="#profile/${profileId}" class="card" style="display:flex;align-items:center;gap:var(--space-md);text-decoration:none;color:inherit">
           ${avatarHtml(u, 'md')}
           <div>
             <div style="font-weight:600">${escapeHtml(u.profile?.displayName || u.username || 'Unknown')}</div>
@@ -89,7 +94,7 @@ const performSearch = debounce(async function (query) {
           </div>
           ${roleBadgeHtml(u.role)}
         </a>
-      `).join('');
+      `}).join('');
       html += '</div>';
     }
 

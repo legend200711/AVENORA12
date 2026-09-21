@@ -47,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v37';
-const CACHE_NAME  = 'avenora-cache-v37';
+const SW_VERSION  = 'v38';
+const CACHE_NAME  = 'avenora-cache-v38';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -91,6 +91,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v34', // v34 — evict: fix Firebase token force-refresh for video delete (HTTP 401)
   'avenora-cache-v35', // v35 — evict: fix false "Playlist is empty" bug in Music Hub
   'avenora-cache-v36', // v36 — evict: backup account profile load bug fix
+  'avenora-cache-v37', // v37 — evict: profile resolution bug fix (wrong UID lookup)
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',

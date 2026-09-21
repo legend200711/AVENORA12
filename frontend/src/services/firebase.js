@@ -386,14 +386,78 @@
       return snap.exists() ? { id: snap.id, ...snap.data() } : null;
     },
 
-    async getProfileByUsername(username) {
+    async getProfileByUsername(usernameOrIdentifier) {
       const db = await getFirestore();
-      const { collection, query, where, limit, getDocs } = await loadModule('firestore');
-      const q = query(collection(db, 'users'), where('username', '==', username), limit(1));
-      const snap = await getDocs(q);
-      if (snap.empty) return null;
-      const d = snap.docs[0];
-      return { id: d.id, ...d.data() };
+      const { collection, query, where, limit, getDocs, doc, getDoc } = await loadModule('firestore');
+
+      const identifier = String(usernameOrIdentifier || '').trim();
+      if (!identifier) return null;
+
+      console.debug('[AVN] getProfileByUsername', {
+        identifier,
+        looksLikeUid: /^[A-Za-z0-9]{20,}$/.test(identifier),
+      });
+
+      // ── 1. Direct document ID lookup (identifier IS the Firebase UID) ──────
+      // Firebase UIDs are 28 chars; auto-generated Firestore IDs are 20 chars.
+      // Both are alphanumeric-only — try a direct doc read first (cheapest).
+      if (/^[A-Za-z0-9]{20,}$/.test(identifier)) {
+        try {
+          const snap = await getDoc(doc(db, 'users', identifier));
+          if (snap.exists()) {
+            console.debug('[AVN] getProfileByUsername — found by document ID', { identifier });
+            return { id: snap.id, ...snap.data() };
+          }
+        } catch (_) { /* not a valid doc path — fall through */ }
+      }
+
+      // ── 2. username field (exact match) ────────────────────────────────────
+      const q1 = query(collection(db, 'users'), where('username', '==', identifier), limit(1));
+      const snap1 = await getDocs(q1);
+      if (!snap1.empty) {
+        const d = snap1.docs[0];
+        console.debug('[AVN] getProfileByUsername — found by username field', { identifier });
+        return { id: d.id, ...d.data() };
+      }
+
+      // ── 3. uid / userId / firebaseUid / ownerId field ─────────────────────
+      // Legacy documents may store the Firebase UID in a data field rather than
+      // using it as the document ID.
+      for (const field of ['uid', 'userId', 'firebaseUid', 'ownerId']) {
+        try {
+          const q2 = query(collection(db, 'users'), where(field, '==', identifier), limit(1));
+          const snap2 = await getDocs(q2);
+          if (!snap2.empty) {
+            const d = snap2.docs[0];
+            console.debug('[AVN] getProfileByUsername — found by field', { field, identifier });
+            return { id: d.id, ...d.data() };
+          }
+        } catch (_) { /* field may not exist or lack an index — skip */ }
+      }
+
+      // ── 4. displayName / profile.displayName (case-insensitive fallback) ──
+      // Scan up to 200 docs and match client-side so no extra index is needed.
+      try {
+        const { limit: lim } = await loadModule('firestore');
+        const qAll = query(collection(db, 'users'), lim(200));
+        const snapAll = await getDocs(qAll);
+        const lower = identifier.toLowerCase();
+        const matched = snapAll.docs.find(d => {
+          const data = d.data();
+          const uname  = (data.username           || '').toLowerCase();
+          const dname1 = (data.displayName         || '').toLowerCase();
+          const dname2 = (data.profile?.displayName || '').toLowerCase();
+          const email  = (data.email               || '').split('@')[0].toLowerCase();
+          return uname === lower || dname1 === lower || dname2 === lower || email === lower;
+        });
+        if (matched) {
+          console.debug('[AVN] getProfileByUsername — found by displayName/email scan', { identifier });
+          return { id: matched.id, ...matched.data() };
+        }
+      } catch (_) { /* scan is best-effort */ }
+
+      console.debug('[AVN] getProfileByUsername — no match found', { identifier });
+      return null;
     },
 
     async upsertProfile(uid, data) {

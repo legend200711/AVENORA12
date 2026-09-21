@@ -383,12 +383,12 @@ const SNPost = {
 
       <!-- Post header -->
       <div class="sn-post-header">
-        <a href="#profile/${escapeHtml(post.author?.username || '')}" class="sn-author-link">
+        <a href="#profile/${encodeURIComponent(post.author?.uid || post.author?.id || post.author?.username || '')}" class="sn-author-link">
           ${avatarHtml(post.author, 'md')}
         </a>
         <div class="sn-author-info">
           <div class="sn-author-top">
-            <a href="#profile/${escapeHtml(post.author?.username || '')}" class="sn-author-name">
+            <a href="#profile/${encodeURIComponent(post.author?.uid || post.author?.id || post.author?.username || '')}" class="sn-author-name">
               ${escapeHtml(post.author?.profile?.displayName || post.author?.username || 'Unknown')}
             </a>
             ${roleBadgeHtml(post.author?.role)}
@@ -743,12 +743,12 @@ const SNComments = {
       const canDelete = isOwn || isMod;
 
       el.innerHTML = `
-        <a href="#profile/${escapeHtml(c.author?.username || '')}" class="sn-comment-avatar">
+        <a href="#profile/${encodeURIComponent(c.author?.uid || c.author?.id || c.author?.username || '')}" class="sn-comment-avatar">
           ${avatarHtml(c.author, 'sm')}
         </a>
         <div class="sn-comment-body">
           <div class="sn-comment-header">
-            <a href="#profile/${escapeHtml(c.author?.username || '')}" class="sn-comment-author">
+            <a href="#profile/${encodeURIComponent(c.author?.uid || c.author?.id || c.author?.username || '')}" class="sn-comment-author">
               ${escapeHtml(c.author?.profile?.displayName || c.author?.username || 'Unknown')}
             </a>
             ${roleBadgeHtml(c.author?.role)}

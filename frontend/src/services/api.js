@@ -1384,31 +1384,46 @@
           return this.loadProfile(authenticatedUid);
         }
 
-        // Viewing another user's profile — query by username field.
+        // Viewing another user's profile — getProfileByUsername now tries:
+        //   1. Direct document ID lookup (if identifier looks like a UID)
+        //   2. username field exact match
+        //   3. uid / userId / firebaseUid / ownerId field match
+        //   4. displayName / profile.displayName scan
         let fsProfile = null;
         try {
           fsProfile = await window.AvenoraFirebase.Firestore.getProfileByUsername(usernameOrUid);
         } catch (fsErr) {
-          console.error('[AVN] PROFILE LOAD FAILED (by username)', {
+          // A hard Firebase error (e.g. permission-denied, network failure).
+          // Do NOT surface this as PROFILE_NOT_FOUND — it's a different problem.
+          console.error('[AVN] PROFILE LOAD FAILED (by identifier — Firebase error)', {
             authenticatedUid,
-            username: usernameOrUid,
-            firebaseCode: fsErr.code,
-            message: fsErr.message,
+            identifier:    usernameOrUid,
+            firebaseCode:  fsErr.code,
+            message:       fsErr.message,
           });
           throw fsErr;
         }
 
         if (fsProfile) {
+          console.debug('[AVN] profile() — resolved via getProfileByUsername', {
+            identifier:    usernameOrUid,
+            resolvedDocId: fsProfile.id,
+          });
           return this.loadProfile(fsProfile.id);
         }
 
-        // Username not found in Firestore — profile genuinely doesn't exist.
-        const err = new Error(`No profile found for username: ${usernameOrUid}`);
+        // All lookup strategies exhausted — only NOW is it genuinely not found.
+        const err = new Error(`No profile found for: ${usernameOrUid}`);
         err.code = 'PROFILE_NOT_FOUND';
-        console.error('[AVN] PROFILE LOAD FAILED — username not in Firestore', {
+        console.error('[AVN] PROFILE LOAD FAILED — all lookup strategies exhausted', {
           authenticatedUid,
-          username: usernameOrUid,
-          reason: 'USERNAME_NOT_FOUND',
+          identifier:        usernameOrUid,
+          documentPath:      `users/${usernameOrUid}`,
+          triedDocId:        /^[A-Za-z0-9]{20,}$/.test(String(usernameOrUid || '')),
+          triedUsernameField: true,
+          triedUidFields:    true,
+          triedDisplayName:  true,
+          reason:            'ALL_LOOKUPS_FAILED',
         });
         throw err;
       }
