@@ -178,11 +178,6 @@ registerPage('channel', {
               <div id="ch-history-list" class="ch-history-list"></div>
             </div>
 
-            <div class="ch-actions">
-              <button class="ch-btn ch-btn-outline ch-btn-sm" onclick="navigateTo('cloudstudio')">🎛 Studio</button>
-              <button class="ch-btn ch-btn-outline ch-btn-sm" onclick="navigateTo('music')">🎧 Music Hub</button>
-            </div>
-
             <div class="ch-channel-desc">
               <div class="ch-channel-name">AVENORA 24-HOUR CHANNEL</div>
               <div class="ch-channel-sub">Always on. Never silent.</div>

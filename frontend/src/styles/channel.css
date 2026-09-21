@@ -245,7 +245,6 @@
 .ch-history-type { font-size: 0.85rem; flex-shrink: 0; }
 .ch-history-title { font-size: 0.82rem; color: var(--text-secondary, #c4bcc8); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ch-history-artist { font-size: 0.72rem; color: var(--text-muted, #8a8090); flex-shrink: 0; }
-.ch-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; }
 .ch-btn { padding: 8px 14px; border-radius: 6px; font-size: 0.82rem; font-weight: 600; cursor: pointer; transition: all 0.15s; letter-spacing: 0.04em; text-decoration: none; display: inline-flex; align-items: center; gap: 5px; border: 1px solid transparent; }
 .ch-btn-outline { background: rgba(201,168,76,0.06); border-color: rgba(201,168,76,0.22); color: #c9a84c; }
 .ch-btn-outline:hover { background: rgba(201,168,76,0.12); }
