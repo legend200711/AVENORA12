@@ -50,7 +50,7 @@
   <!-- Avenora Radio -->
   <link rel="stylesheet" href="src/styles/radio.css">
   <!-- 24-Hour Channel + Channel Studio -->
-  <link rel="stylesheet" href="src/styles/channel.css?v=29">
+  <link rel="stylesheet" href="src/styles/channel.css?v=30">
 
   <!-- Page-specific styles loaded dynamically -->
 </head>
@@ -296,29 +296,27 @@
     Deployment: GitHub Pages  →  https://legend200711.github.io/AVENORA12/
     Firebase project:            avenora-6e147
     ────────────────────────────────────────────────────────────────
-    Architecture: Firebase (Auth, Firestore, Realtime DB, Storage)
-                + Supabase (Storage, Edge Functions)
-                + Render backend (Express / Node.js — channel API, auth bridge)
-    Render backend: https://avenora-backend.onrender.com
-    Channel Studio, Channel API, and live heartbeat all use the Render backend.
+    Architecture: Firebase (Auth + Firestore) + Supabase (Storage + DB)
+    No backend server required. All operations go direct to Firebase/Supabase.
   -->
   <script>
     // ── Production version (one canonical string for all devices) ─────────
-    window.AVENORA_VERSION = '2026.09.20.1';
+    window.AVENORA_VERSION = '2026.09.21.1';
 
     // ── Build / version metadata ──────────────────────────────
     window.AVENORA_BUILD = {
-      version:         '2026.09.20.1',
-      buildTimestamp:  '2026-09-20T00:00:00Z',
-      swVersion:       'v29',
-      swCacheName:     'avenora-cache-v29',
+      version:         '2026.09.21.1',
+      buildTimestamp:  '2026-09-21T00:00:00Z',
+      swVersion:       'v30',
+      swCacheName:     'avenora-cache-v30',
       firebaseProject: 'avenora-6e147',
       basePath:        '/AVENORA12/',
     };
 
-    // ── Runtime API config ────────────────────────────────────
-    // Architecture: Firebase + Supabase + Render backend.
-    // The Render backend handles Channel API, auth verification, and channel engine.
+    // ── Runtime config ────────────────────────────────────────
+    // Architecture: Firebase + Supabase only. No backend server.
+    // apiUrl is null in production — all operations go direct to Firebase/Supabase.
+    // Override with ?api= query param for local dev (e.g. ?api=http://localhost:3001)
     (function () {
       var _isPWA = window.matchMedia('(display-mode: standalone)').matches ||
                    window.navigator.standalone === true;
@@ -326,10 +324,7 @@
                          location.hostname === '127.0.0.1' ||
                          location.hostname === '0.0.0.0';
 
-      // ── Backend API URL ───────────────────────────────────────────────
-      // Production Render backend: https://avenora-backend.onrender.com
-      // Override with ?api= query param for local dev (e.g. ?api=http://localhost:3001)
-      var _apiUrl = 'https://avenora-backend.onrender.com/api';
+      var _apiUrl = null; // No backend server in production
       try {
         var _apiOverride = new URLSearchParams(location.search).get('api');
         if (_apiOverride) _apiUrl = _apiOverride.replace(/\/api\/?$/, '') + '/api';
@@ -346,14 +341,13 @@
       };
 
       console.info(
-        '[AVENORA] Config loaded',
+        '[AVENORA] Config loaded — Firebase + Supabase architecture',
         {
           firebaseProject: 'avenora-6e147',
           apiUrl:          _apiUrl,
           isPWA:           _isPWA,
           isLocalhost:     _isLocalhost,
           origin:          location.origin,
-          href:            location.href,
         }
       );
     })();
@@ -361,7 +355,6 @@
     // ── Production version diagnostic ─────────────────────────
     console.info('[AVENORA] Production version: ' + window.AVENORA_VERSION);
 
-    // Call window.avenoraVersionCheck() in DevTools to confirm version across devices
     window.avenoraVersionCheck = function() {
       return {
         version:       window.AVENORA_VERSION,
@@ -413,8 +406,8 @@
   <script src="src/pages/social.js"></script>
   <script src="src/pages/video.js"></script>
   <script src="src/pages/live.js"></script>
-  <script src="src/pages/channel.js?v=29"></script>
-  <script src="src/pages/channelstudio.js?v=29"></script>
+  <script src="src/pages/channel.js?v=30"></script>
+  <script src="src/pages/channelstudio.js?v=30"></script>
   <script src="src/pages/cloudstream.js"></script>
   <script src="src/pages/cloudstudio.js"></script>
   <script src="src/pages/dj.js"></script>

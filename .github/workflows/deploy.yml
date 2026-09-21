@@ -98,8 +98,8 @@ jobs:
           grep "const SW_VERSION\|const CACHE_NAME" frontend/sw.js
 
           echo "=== PRODUCTION VERSION CHECK ==="
-          if grep -q "AVENORA_VERSION = '2026.09.20.1'" frontend/index.html; then
-            echo "  OK  AVENORA_VERSION = 2026.09.20.1 found in index.html"
+          if grep -q "AVENORA_VERSION = '2026.09.21.1'" frontend/index.html; then
+            echo "  OK  AVENORA_VERSION = 2026.09.21.1 found in index.html"
           else
             echo "  FAIL  AVENORA_VERSION not updated in index.html"
             exit 1
@@ -130,10 +130,10 @@ jobs:
             echo "  FAIL  direct upload buttons missing from channelstudio.js"
             exit 1
           fi
-          if grep -q "SW_VERSION.*v29\|avenora-cache-v29" frontend/sw.js; then
-            echo "  OK  SW v29 confirmed in sw.js"
+          if grep -q "SW_VERSION.*v30\|avenora-cache-v30" frontend/sw.js; then
+            echo "  OK  SW v30 confirmed in sw.js"
           else
-            echo "  FAIL  sw.js has not been bumped to v29"
+            echo "  FAIL  sw.js has not been bumped to v30"
             exit 1
           fi
 

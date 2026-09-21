@@ -521,29 +521,22 @@ async function _adminLoadAllVideos() {
 async function renderAdminVideos(container) {
   showLoading(container, 'Loading video library…');
 
-  let videos = [], channels = [], videoError = null, backendStatus = null, backendHealth = null;
+  let videos = [], channels = [], videoError = null, supabaseOk = null, firebaseOk = null;
 
-  // Check backend health first — diagnose the exact Render state
-  if (window.LU_CONFIG && window.LU_CONFIG.apiUrl) {
-    try {
-      const _ac = new AbortController();
-      const _tid = setTimeout(() => _ac.abort(), 12000);
-      const healthRes = await fetch(`${window.LU_CONFIG.apiUrl}/health`, { signal: _ac.signal }).catch(() => null);
-      clearTimeout(_tid);
-      if (healthRes) {
-        if (healthRes.ok) {
-          backendStatus = 'ok';
-          try { backendHealth = await healthRes.json(); } catch (_) {}
-        } else if (healthRes.status === 404) {
-          backendStatus = 'no-server'; // Render x-render-routing: no-server
-        } else {
-          backendStatus = 'error';
-        }
-      } else {
-        backendStatus = 'unreachable';
-      }
-    } catch { backendStatus = 'unreachable'; }
-  }
+  // Check Firebase + Supabase status (no backend server)
+  const SUPABASE_URL  = 'https://licuiqxkkfboqezzmsqu.supabase.co';
+  const SUPABASE_ANON = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpY3VpcXhra2Zib3Flenptc3F1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNTYxMDQsImV4cCI6MjEwNDkzMjEwNH0.tsYOyCI7skF6Otz2W0oNYhxM63-0551lrqIDCO8NoJo';
+  try {
+    const _ac = new AbortController();
+    const _tid = setTimeout(() => _ac.abort(), 8000);
+    const r = await fetch(`${SUPABASE_URL}/rest/v1/`, { method: 'HEAD', headers: { apikey: SUPABASE_ANON }, signal: _ac.signal }).catch(() => null);
+    clearTimeout(_tid);
+    supabaseOk = r && (r.ok || r.status === 401 || r.status === 404);
+  } catch { supabaseOk = false; }
+  try {
+    if (window.AvenoraFirebase?.getFirestore) { await window.AvenoraFirebase.getFirestore(); firebaseOk = true; }
+    else { firebaseOk = null; }
+  } catch { firebaseOk = false; }
 
   try {
     const [vList, cRes] = await Promise.all([
@@ -555,22 +548,6 @@ async function renderAdminVideos(container) {
   } catch (err) {
     videoError = err;
   }
-
-  const _backendUrl = (window.LU_CONFIG && window.LU_CONFIG.apiUrl) || 'https://avenora-backend.onrender.com/api';
-  const backendBanner = (backendStatus === 'unreachable' || backendStatus === 'no-server') ? `
-    <div style="background:rgba(255,51,68,0.08);border:1px solid rgba(255,51,68,0.25);border-radius:10px;padding:14px 16px;margin-bottom:var(--space-lg);display:flex;align-items:center;gap:10px">
-      <span style="font-size:1.2rem">🔴</span>
-      <span>
-        <strong style="color:var(--neon-red)">AVENORA backend is not running.</strong>
-        ${backendStatus === 'no-server'
-          ? 'Render returned <code>x-render-routing: no-server</code> — the backend process has crashed or the service is suspended. <strong>Go to the Render dashboard and manually deploy the avenora-backend service.</strong>'
-          : 'Cannot reach the backend server.'
-        }
-        <br><small style="color:var(--text-muted)">URL: ${escapeHtml(_backendUrl)}</small>
-        <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="adminSection('videos')">🔄 Check Again</button>
-      </span>
-    </div>
-  ` : '';
 
   const errorBanner = videoError ? `
     <div style="background:rgba(255,51,68,0.08);border:1px solid rgba(255,51,68,0.2);border-radius:10px;padding:16px;margin-bottom:var(--space-lg)">
@@ -585,7 +562,6 @@ async function renderAdminVideos(container) {
       🎬 AVENORA VIDEO — Video Management
     </h2>
 
-    ${backendBanner}
     ${errorBanner}
 
     <!-- Stats -->
@@ -599,14 +575,17 @@ async function renderAdminVideos(container) {
         <div style="font-size:0.78rem;text-transform:uppercase;letter-spacing:0.1em;color:var(--text-muted)">Channels</div>
       </div>
       <div class="card" style="text-align:center">
-        <div style="display:flex;align-items:center;justify-content:center;gap:6px">
-          <span style="width:8px;height:8px;border-radius:50%;background:${backendStatus === 'ok' ? 'var(--neon-green)' : (backendStatus === 'no-server' || backendStatus === 'unreachable') ? '#ff3333' : 'var(--text-muted)'}"></span>
-          <span style="font-size:0.82rem;color:var(--text-secondary)">
-            ${backendStatus === 'ok' ? 'Backend online' : backendStatus === 'no-server' ? 'Backend offline (no-server)' : backendStatus === 'unreachable' ? 'Backend unreachable' : 'Backend status unknown'}
-          </span>
+        <div style="display:flex;flex-direction:column;gap:4px;align-items:center">
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="width:8px;height:8px;border-radius:50%;background:${firebaseOk === true ? 'var(--neon-green)' : firebaseOk === false ? '#ff3333' : 'var(--text-muted)'}"></span>
+            <span style="font-size:0.78rem;color:var(--text-secondary)">Firebase ${firebaseOk === true ? '🟢' : firebaseOk === false ? '🔴' : '…'}</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px">
+            <span style="width:8px;height:8px;border-radius:50%;background:${supabaseOk === true ? 'var(--neon-green)' : supabaseOk === false ? '#ff3333' : 'var(--text-muted)'}"></span>
+            <span style="font-size:0.78rem;color:var(--text-secondary)">Supabase ${supabaseOk === true ? '🟢' : supabaseOk === false ? '🔴' : '…'}</span>
+          </div>
         </div>
-        <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px">avenora-backend.onrender.com</div>
-        ${backendHealth ? `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:2px">v${escapeHtml(backendHealth.version || '?')} · deployed ${escapeHtml(backendHealth.deployedAt || '?')}</div>` : ''}
+        <div style="font-size:0.68rem;color:var(--text-muted);margin-top:4px">Firebase + Supabase</div>
       </div>
     </div>
 

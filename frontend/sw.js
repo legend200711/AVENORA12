@@ -1,5 +1,5 @@
 /**
- * AVENORA — Service Worker v29
+ * AVENORA — Service Worker v30
  *
  * Deployment-aware: detects GitHub Pages vs Firebase Hosting automatically.
  *   GitHub Pages:      https://legend200711.github.io/AVENORA12/  → BASE = /AVENORA12
@@ -47,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v29';
-const CACHE_NAME  = 'avenora-cache-v29';
+const SW_VERSION  = 'v30';
+const CACHE_NAME  = 'avenora-cache-v30';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -200,8 +200,6 @@ function shouldNeverCache(url) {
   // Analytics / tracking
   if (u.hostname.includes('google-analytics.com')) return true;
   if (u.hostname.includes('analytics.google.com')) return true;
-  // Render backend
-  if (u.hostname.includes('onrender.com')) return true;
   return false;
 }
 

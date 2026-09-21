@@ -157,12 +157,9 @@
   //   - service not reachable / wrong URL
   //   - CORS preflight failure (browser suppresses the response body)
   //   - no internet connection
-  //   - Render free-tier backend sleeping / cold-starting
-  // We classify the error, log a diagnostic, and return a typed Error
-  // so the UI can show a specific message instead of "Failed to fetch".
+  // We classify the error and return a typed Error with a clear message.
   function _diagNetworkError(networkErr, method, fullUrl) {
     const isLocalhost = fullUrl.includes('localhost') || fullUrl.includes('127.0.0.1');
-    const isRender    = fullUrl.includes('.onrender.com');
     const serviceHost = (() => {
       try { return new URL(fullUrl).origin; } catch { return fullUrl; }
     })();
@@ -170,11 +167,6 @@
     if (isLocalhost) {
       msg = `Service unavailable (local) — ${method} ${fullUrl}. ` +
             'Make sure the local service is running.';
-    } else if (isRender) {
-      msg = 'AVENORA backend is temporarily unavailable. ' +
-            'The Render service may be starting up (cold start takes ~30 s on the free plan). ' +
-            'Please wait a moment and retry. ' +
-            `(${method} ${serviceHost})`;
     } else {
       msg = `Cannot reach service — ${method} ${fullUrl}. ` +
             'Possible causes: (1) the service is not reachable, ' +
@@ -185,19 +177,10 @@
     }
     console.error(
       '[AVENORA] Network error — ' + method + ' ' + fullUrl,
-      {
-        originalError: networkErr.message,
-        requestUrl:    fullUrl,
-        method,
-        serviceHost,
-        isRender,
-        fullMessage: msg,
-      }
+      { originalError: networkErr.message, requestUrl: fullUrl, method, serviceHost, fullMessage: msg }
     );
     const err = new Error(msg);
-    err.code = isLocalhost ? 'SERVICE_NOT_RUNNING'
-             : isRender    ? 'BACKEND_UNREACHABLE'
-             : 'SERVICE_UNREACHABLE';
+    err.code = isLocalhost ? 'SERVICE_NOT_RUNNING' : 'SERVICE_UNREACHABLE';
     err.originalError = networkErr.message;
     return err;
   }
@@ -1932,8 +1915,8 @@
   })();
 
   // ─── Health ───────────────────────────────────────────────
-  // Checks reachability of the backend and Supabase.
-  // Uses AbortController with a 10 s timeout so the check never hangs.
+  // Checks reachability of Firebase and Supabase.
+  // Architecture: no backend server — Firebase + Supabase only.
   const HealthAPI = {
     check: () => {
       function _timedFetch(url, options, timeoutMs) {
@@ -1944,32 +1927,33 @@
       }
 
       // Supabase connectivity check (uses anon key — public)
-      const checks = [
-        _timedFetch(`${SUPABASE_PROJECT_URL}/rest/v1/`, {
-          method: 'HEAD',
-          headers: { apikey: SUPABASE_ANON_KEY },
-        }, 8000)
-          .then(r => ({
-            service:         'Supabase',
-            status:          (r.ok || r.status === 401 || r.status === 404) ? 'ok' : 'error',
-            supabaseProject: SUPABASE_PROJECT_URL,
-            httpStatus:      r.status,
-          }))
-          .catch(e => ({ service: 'Supabase', status: 'error', error: e.name === 'AbortError' ? 'Timed out' : e.message })),
-      ];
+      const supabaseCheck = _timedFetch(`${SUPABASE_PROJECT_URL}/rest/v1/`, {
+        method: 'HEAD',
+        headers: { apikey: SUPABASE_ANON_KEY },
+      }, 8000)
+        .then(r => ({
+          service:         'Supabase',
+          status:          (r.ok || r.status === 401 || r.status === 404) ? 'ok' : 'error',
+          supabaseProject: SUPABASE_PROJECT_URL,
+          httpStatus:      r.status,
+        }))
+        .catch(e => ({ service: 'Supabase', status: 'error', error: e.name === 'AbortError' ? 'Timed out' : e.message }));
 
-      // Backend health check (if configured) — 10 s timeout
-      if (BASE_URL) {
-        checks.push(
-          _timedFetch(`${BASE_URL}/health`, {}, 10000)
-            .then(r => r.json())
-            .then(d => ({ service: 'Backend', status: (d.ok || d.status === 'ok') ? 'ok' : 'error', config: d.config, ok: d.ok }))
-            .catch(e => ({ service: 'Backend', status: 'error', error: e.name === 'AbortError' ? 'Timed out (backend may be starting up)' : e.message }))
-        );
-      }
+      // Firebase connectivity check (resolve Firestore)
+      const firebaseCheck = Promise.resolve().then(async () => {
+        try {
+          if (window.AvenoraFirebase?.getFirestore) {
+            await window.AvenoraFirebase.getFirestore();
+            return { service: 'Firebase', status: 'ok' };
+          }
+          return { service: 'Firebase', status: 'unknown', error: 'AvenoraFirebase not ready' };
+        } catch (e) {
+          return { service: 'Firebase', status: 'error', error: e.message };
+        }
+      });
 
-      return Promise.all(checks).then(results => ({
-        status: results.every(r => r.status === 'ok') ? 'ok' : 'degraded',
+      return Promise.all([supabaseCheck, firebaseCheck]).then(results => ({
+        status: results.every(r => r.status === 'ok' || r.status === 'unknown') ? 'ok' : 'degraded',
         services: results,
       }));
     },

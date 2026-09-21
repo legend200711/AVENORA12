@@ -11,7 +11,7 @@
  *   - Connection status system with exponential backoff retry
  *
  * Authentication: reuses existing AVENORA Firebase session.
- * Access: founder/admin role only (checked server-side on all mutations).
+ * Access: founder/admin role only (checked via Firestore role on all mutations).
  */
 
 registerPage('channelstudio', {
@@ -365,7 +365,7 @@ registerPage('channelstudio', {
               <div class="chs-setting-card" id="chs-backend-card">
                 <div class="chs-setting-label">BACKEND STATUS</div>
                 <div id="chs-backend-status" class="chs-setting-value">Checking…</div>
-                <div class="chs-setting-hint" id="chs-backend-hint">Verifying connection to channel engine</div>
+                <div class="chs-setting-hint" id="chs-backend-hint">Verifying connection to Firebase + Supabase</div>
                 <button id="chs-backend-reconnect" class="chs-btn chs-btn-outline chs-btn-sm" style="display:none;margin-top:8px" onclick="chsManualRetry()">RECONNECT</button>
               </div>
             </div>
@@ -490,7 +490,6 @@ registerPage('channelstudio', {
 // ── Module state ──────────────────────────────────────────────────────────
 const _chsState = {
   user:               null,
-  apiBase:            null,
   programming:        [],
   fallback:           [],
   addingTo:           'program',  // 'program' | 'fallback'
@@ -507,7 +506,7 @@ const _chsState = {
   _cacheKeyProg:      'avn_chs_prog_cache',
   _cacheKeyFallback:  'avn_chs_fallback_cache',
   // Media upload state
-  myMedia:            [],   // full list from /api/media/library
+  myMedia:            [],
   mediaFilter:        'all',
   slideshow: {
     images:       [],   // { file, url, blobUrl, storagePath, caption }
@@ -534,12 +533,24 @@ function _chsLoadCache(key) {
   return null;
 }
 
+// ── Firestore helpers ─────────────────────────────────────────────────────
+async function _chsFs() {
+  const db = await window.AvenoraFirebase.getFirestore();
+  const m  = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+  return { db, ...m };
+}
+
+function _chsUid() {
+  const u = (typeof LegendState !== 'undefined' && LegendState?.get?.('user'))
+    || window.AvenoraFirebase?.Auth?.getUser?.();
+  return u?.uid || u?.id || null;
+}
+
 // ── Init ──────────────────────────────────────────────────────────────────
 async function _chsInit(user) {
-  _chsState.user    = user;
-  _chsState.apiBase = (window.LU_CONFIG && window.LU_CONFIG.apiUrl) || '/api';
+  _chsState.user = user;
 
-  // Check role — server will also enforce, but give a nice early gate
+  // Check role — Firestore enforces, but give a nice early gate
   const role = user.role || (await _chsGetRole(user));
   if (role !== 'founder' && role !== 'admin') {
     document.getElementById('chs-noaccess').style.display = '';
@@ -551,29 +562,14 @@ async function _chsInit(user) {
   // Show last-known-good data immediately while connecting
   _chsRestoreFromCache();
 
-  // Proactively wake the Render backend by pinging /health first
-  // (Render free tier can be asleep — this starts the warm-up before the real requests fire)
-  _chsWakeBackend();
-
   _chsSetConnState('connecting');
   await _chsInitialLoad();
 
   // Upload section starts expanded — load media library immediately
   chsLoadMyMedia().catch(() => {});
 
-  // Auto-refresh status every 15s (avoids hammering a waking Render instance)
+  // Auto-refresh status every 15s
   _chsState.pollTimer = setInterval(chsLoadStatus, 15_000);
-}
-
-// ── Backend wake-up ping (Render free-tier cold start) ────────────────────
-// Fires a lightweight /health ping immediately when Channel Studio opens.
-// The backend may be asleep — this starts the warm-up in parallel with
-// the initial data load so by the time the real API requests fire the
-// backend has had a few seconds head start.
-function _chsWakeBackend() {
-  const base = _chsState.apiBase || '/api';
-  // Silent fire-and-forget — no error handling needed
-  fetch(base + '/health', { method: 'GET', cache: 'no-store' }).catch(() => {});
 }
 
 // ── Restore cached data immediately (prevents blank cards on cold start) ──
@@ -608,13 +604,12 @@ async function _chsTryLoad() {
       chsLoadFallback(),
       chsLoadHistory(),
     ]);
-    // Consider connected if at least status OR programming loaded successfully
+    // Consider connected if at least one loaded successfully
     const anySuccess = results.some(r => r.status === 'fulfilled');
     if (anySuccess) {
       _chsSetConnState('connected');
       _chsState.retryCount = 0;
     } else {
-      // All failed — enter reconnect cycle
       const firstErr = results.find(r => r.status === 'rejected');
       console.warn('[ChannelStudio] All loads failed:', firstErr?.reason?.message);
       _chsHandleConnFailure();
@@ -663,15 +658,9 @@ function _chsSetConnState(state, retryIn) {
     banner.style.display = '';
     banner.classList.add('chs-conn-reconnecting');
     const sec = retryIn ? Math.round(retryIn / 1000) : '…';
-    // Give a helpful message — the Render free tier can take 30-90s to wake
-    const wakingMsg = _chsState.retryCount <= 2
-      ? `BACKEND STARTING UP — Retry in ${sec}s (may take up to 60s on free hosting)`
-      : `CONNECTION LOST — Retrying in ${sec}s…`;
-    if (bannerTxt) bannerTxt.textContent = wakingMsg;
+    if (bannerTxt) bannerTxt.textContent = `CONNECTION LOST — Retrying in ${sec}s…`;
     if (retryBtn) retryBtn.style.display = '';
-    if (backendEl) backendEl.innerHTML = _chsState.retryCount <= 2
-      ? '<span class="chs-conn-connecting-text">● STARTING UP…</span>'
-      : '<span class="chs-conn-lost">● RECONNECTING…</span>';
+    if (backendEl) backendEl.innerHTML = '<span class="chs-conn-lost">● RECONNECTING…</span>';
     if (reconnBtn) reconnBtn.style.display = '';
   } else if (state === 'offline') {
     banner.style.display = '';
@@ -686,7 +675,6 @@ function _chsSetConnState(state, retryIn) {
 window.chsManualRetry = function() {
   clearTimeout(_chsState.retryTimer);
   _chsState.retryCount = 0;
-  // Allow retrying even after permanent offline
   _chsState.connState = 'idle';
   _chsTryLoad();
 };
@@ -713,101 +701,22 @@ function _chsClearAll() {
   _chsState.retryTimer = null;
 }
 
-// ── API helper ────────────────────────────────────────────────────────────
-// Includes a 15-second request timeout so no request can hang forever.
-async function _chsApi(method, path, body, timeoutMs = 15000) {
-  const base = _chsState.apiBase || '/api';
-  let token = null;
-
-  // Wait up to 8 s for Firebase auth to resolve before attempting to get a token.
-  // This fixes the race condition where the page loads before the Firebase SDK has
-  // restored the session from localStorage, causing all requests to fail immediately
-  // with "Not authenticated" before the backend is ever contacted.
-  const _deadline = Date.now() + 8000;
-  while (!token && Date.now() < _deadline) {
-    try {
-      const auth = await window.AvenoraFirebase.getFirebaseAuth();
-      if (auth.currentUser) {
-        token = await auth.currentUser.getIdToken(false);
-      }
-    } catch (_) {}
-    if (!token) {
-      // If LegendState already has a user, Firebase session should be available soon.
-      const _stateUser = (typeof LegendState !== 'undefined') ? LegendState.get('user') : null;
-      if (!_stateUser) break; // No user at all — stop waiting
-      await new Promise(r => setTimeout(r, 300));
-    }
-  }
-
-  if (!token) {
-    // One final attempt — force a fresh token in case the cached one expired
-    try {
-      const auth = await window.AvenoraFirebase.getFirebaseAuth();
-      if (auth.currentUser) token = await auth.currentUser.getIdToken(true);
-    } catch (_) {}
-  }
-
-  if (!token) throw new Error('Not authenticated — please sign in again');
-
-  const controller = new AbortController();
-  const tid = setTimeout(() => controller.abort(), timeoutMs);
-
-  const opts = {
-    method,
-    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
-    signal: controller.signal,
-  };
-  if (body !== undefined) opts.body = JSON.stringify(body);
-
-  try {
-    const res  = await fetch(base + path, opts);
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
-    return data;
-  } catch (e) {
-    if (e.name === 'AbortError') throw new Error('Request timed out — backend may be starting up');
-    throw e;
-  } finally {
-    clearTimeout(tid);
-  }
-}
-
-// ── Backend health check ──────────────────────────────────────────────────
+// ── Firebase/Supabase connectivity check ─────────────────────────────────
 async function _chsCheckBackend() {
   const el   = document.getElementById('chs-backend-status');
   const hint = document.getElementById('chs-backend-hint');
   if (!el) return;
   try {
-    const base = _chsState.apiBase || '/api';
-    const controller = new AbortController();
-    const tid = setTimeout(() => controller.abort(), 10000);
-    let res, d;
-    try {
-      res = await fetch(base + '/health', { signal: controller.signal });
-      d   = await res.json();
-    } finally {
-      clearTimeout(tid);
-    }
-    if (d && d.ok) {
-      const extra = d.config?.mediaMTXConfigured === false
-        ? '<br><span style="color:#c9a84c;font-size:0.75rem">MediaMTX not configured — live camera unavailable</span>'
-        : '';
-      el.innerHTML = '<span class="chs-conn-ok">● CONNECTED</span>' + extra;
-      if (hint) hint.textContent = 'Channel engine is online and responding';
-      const reconnBtn = document.getElementById('chs-backend-reconnect');
-      if (reconnBtn) reconnBtn.style.display = 'none';
-    } else {
-      el.innerHTML = '<span class="chs-conn-warn">⚠ BACKEND ERROR</span>';
-      if (hint) hint.textContent = 'Backend returned an error — check server logs';
-    }
+    // Verify Firestore is reachable by reading the channel config doc
+    const { db, doc, getDoc } = await _chsFs();
+    await getDoc(doc(db, 'channel', 'avenora'));
+    el.innerHTML = '<span class="chs-conn-ok">● FIREBASE CONNECTED</span>';
+    if (hint) hint.textContent = 'Firestore + Supabase Storage active';
+    const reconnBtn = document.getElementById('chs-backend-reconnect');
+    if (reconnBtn) reconnBtn.style.display = 'none';
   } catch (e) {
-    const isTimeout = e.name === 'AbortError';
-    el.innerHTML = isTimeout
-      ? '<span class="chs-conn-connecting-text">● WAKING UP…</span>'
-      : '<span class="chs-conn-lost">● OFFLINE</span>';
-    if (hint) hint.textContent = isTimeout
-      ? 'Backend is starting up — this takes up to 60 seconds on free hosting'
-      : 'Cannot reach backend server';
+    el.innerHTML = '<span class="chs-conn-lost">● FIRESTORE ERROR</span>';
+    if (hint) hint.textContent = 'Cannot reach Firestore: ' + e.message;
     const reconnBtn = document.getElementById('chs-backend-reconnect');
     if (reconnBtn) reconnBtn.style.display = '';
   }
@@ -816,13 +725,13 @@ async function _chsCheckBackend() {
 // ── Channel status ────────────────────────────────────────────────────────
 window.chsLoadStatus = async function() {
   try {
-    const data = await _chsApi('GET', '/channel/status');
-    if (data.success) {
-      _chsRenderStatus(data.status);
-      if (_chsState.connState !== 'connected') {
-        _chsSetConnState('connected');
-        _chsCheckBackend().catch(() => {});
-      }
+    const { db, doc, getDoc } = await _chsFs();
+    const snap = await getDoc(doc(db, 'channelNowPlaying', 'avenora'));
+    const st = snap.exists() ? snap.data() : { status: 'OFFLINE', running: false };
+    _chsRenderStatus(st);
+    if (_chsState.connState !== 'connected') {
+      _chsSetConnState('connected');
+      _chsCheckBackend().catch(() => {});
     }
   } catch (e) {
     console.warn('[ChannelStudio] Status load failed:', e.message);
@@ -907,11 +816,11 @@ function _chsRenderStatus(st) {
   }
 
   // Live badge
-  const liveBadge      = document.getElementById('chs-live-status-badge');
-  const liveInfo       = document.getElementById('chs-live-info');
-  const liveDetail     = document.getElementById('chs-live-detail');
-  const stopLiveBtn    = document.getElementById('chs-stop-live-btn');
-  const liveSessionSt  = document.getElementById('chs-live-session-status');
+  const liveBadge     = document.getElementById('chs-live-status-badge');
+  const liveInfo      = document.getElementById('chs-live-info');
+  const liveDetail    = document.getElementById('chs-live-detail');
+  const stopLiveBtn   = document.getElementById('chs-stop-live-btn');
+  const liveSessionSt = document.getElementById('chs-live-session-status');
 
   if (st.status === 'LIVE' && st.liveSession?.active) {
     if (liveBadge)  { liveBadge.style.display = ''; liveBadge.innerHTML = '<span class="chs-live-badge-dot"></span>🔴 LIVE'; }
@@ -931,41 +840,48 @@ function _chsRenderStatus(st) {
   }
 }
 
-// ── Channel start/stop ─────────────────────────────────────────────────
+// ── Channel start/stop/skip ────────────────────────────────────────────────
 window.chsStartChannel = async function() {
   try {
-    const data = await _chsApi('POST', '/channel/start');
-    if (data.success) { _chsToast('Channel started ✅'); _chsRenderStatus(data.status); }
+    const { db, doc, setDoc, serverTimestamp } = await _chsFs();
+    await setDoc(doc(db, 'channel', 'avenora'), { status: 'ONLINE', running: true, updatedAt: serverTimestamp() }, { merge: true });
+    _chsToast('Channel started ✅');
+    await chsLoadStatus();
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
 };
 
 window.chsStopChannel = async function() {
   if (!confirm('Stop the channel? It will go offline for viewers.')) return;
   try {
-    const data = await _chsApi('POST', '/channel/stop');
-    if (data.success) { _chsToast('Channel stopped'); chsLoadStatus(); }
+    const { db, doc, setDoc, serverTimestamp } = await _chsFs();
+    await setDoc(doc(db, 'channel', 'avenora'), { status: 'OFFLINE', running: false, updatedAt: serverTimestamp() }, { merge: true });
+    _chsToast('Channel stopped');
+    await chsLoadStatus();
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
 };
 
 window.chsSkip = async function() {
   try {
-    await _chsApi('POST', '/channel/skip');
+    const { db, doc, setDoc } = await _chsFs();
+    await setDoc(doc(db, 'channel', 'avenora'), { skipAt: Date.now() }, { merge: true });
     _chsToast('Skipped to next program');
     setTimeout(chsLoadStatus, 1000);
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
 };
 
-// ── Live camera ────────────────────────────────────────────────────────
+// ── Live camera ────────────────────────────────────────────────────────────
 window.chsGoLive = async function() {
   navigateTo('live');
 };
 
 window.chsStopLive = async function() {
+  // Resolve liveStreamId from Firestore if not already known
   if (!_chsState.liveStreamId) {
     try {
-      const data = await _chsApi('GET', '/channel/status');
-      if (data.status?.liveSession?.streamId) {
-        _chsState.liveStreamId = data.status.liveSession.streamId;
+      const { db, doc, getDoc } = await _chsFs();
+      const snap = await getDoc(doc(db, 'channelNowPlaying', 'avenora'));
+      if (snap.exists()) {
+        _chsState.liveStreamId = snap.data()?.liveSession?.streamId || null;
       }
     } catch (_) {}
   }
@@ -974,7 +890,12 @@ window.chsStopLive = async function() {
     return;
   }
   try {
-    await _chsApi('POST', '/channel/live/stop', { streamId: _chsState.liveStreamId });
+    const { db, doc, setDoc, serverTimestamp } = await _chsFs();
+    await setDoc(doc(db, 'channel', 'avenora'), {
+      liveSession: { active: false, streamId: _chsState.liveStreamId, stoppedAt: Date.now() },
+      status: 'ONLINE',
+      updatedAt: serverTimestamp(),
+    }, { merge: true });
     _chsToast('Live stopped — transitioning to next program');
     clearInterval(_chsState.liveHeartbeatTimer);
     _chsState.liveStreamId = null;
@@ -982,26 +903,23 @@ window.chsStopLive = async function() {
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
 };
 
-// ── Programming ────────────────────────────────────────────────────────
+// ── Programming ────────────────────────────────────────────────────────────
 window.chsLoadProgramming = async function() {
   const el = document.getElementById('chs-program-list');
   try {
-    const data = await _chsApi('GET', '/channel/programming/full');
-    if (data.success) {
-      _chsState.programming = data.programming || [];
-      _chsSaveCache(_chsState._cacheKeyProg, _chsState.programming);
-      // Clear any stale banners
-      const stale = el?.parentNode?.querySelector('.chs-stale-banner');
-      if (stale) stale.remove();
-      _chsRenderProgramming();
-    }
+    const { db, collection, getDocs, query, orderBy } = await _chsFs();
+    const snap = await getDocs(query(collection(db, 'channel', 'avenora', 'programming'), orderBy('sortOrder', 'asc')));
+    _chsState.programming = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    _chsSaveCache(_chsState._cacheKeyProg, _chsState.programming);
+    // Clear any stale banners
+    const stale = el?.parentNode?.querySelector('.chs-stale-banner');
+    if (stale) stale.remove();
+    _chsRenderProgramming();
   } catch (e) {
-    // Try last-known-good before showing error
     const cached = _chsLoadCache(_chsState._cacheKeyProg);
     if (cached && Array.isArray(cached) && cached.length > 0) {
       _chsState.programming = cached;
       _chsRenderProgramming();
-      // Show a subtle stale-data banner above the list if not already there
       if (el && !el.parentNode.querySelector('.chs-stale-banner')) {
         const stale = document.createElement('div');
         stale.className = 'chs-stale-banner';
@@ -1058,7 +976,20 @@ function _chsRenderProgramming() {
 
 window.chsMoveProgram = async function(id, direction) {
   try {
-    await _chsApi('PATCH', '/channel/programming/' + id + '/move', { direction });
+    const items = _chsState.programming;
+    const idx = items.findIndex(p => p.id === id);
+    if (idx < 0) return;
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= items.length) return;
+
+    const { db, doc, writeBatch } = await _chsFs();
+    const batch = writeBatch(db);
+    // Swap sortOrder values
+    const aOrder = items[idx].sortOrder ?? idx;
+    const bOrder = items[swapIdx].sortOrder ?? swapIdx;
+    batch.update(doc(db, 'channel', 'avenora', 'programming', items[idx].id),   { sortOrder: bOrder });
+    batch.update(doc(db, 'channel', 'avenora', 'programming', items[swapIdx].id), { sortOrder: aOrder });
+    await batch.commit();
     await chsLoadProgramming();
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
 };
@@ -1066,27 +997,25 @@ window.chsMoveProgram = async function(id, direction) {
 window.chsRemoveProgram = async function(id) {
   if (!confirm('Remove this program from the schedule?')) return;
   try {
-    await _chsApi('DELETE', '/channel/programming/' + id);
+    const { db, doc, deleteDoc } = await _chsFs();
+    await deleteDoc(doc(db, 'channel', 'avenora', 'programming', id));
     _chsToast('Program removed');
     await chsLoadProgramming();
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
 };
 
-// ── Fallback ───────────────────────────────────────────────────────────
+// ── Fallback ───────────────────────────────────────────────────────────────
 window.chsLoadFallback = async function() {
   const el = document.getElementById('chs-fallback-list');
   try {
-    const data = await _chsApi('GET', '/channel/fallback');
-    if (data.success) {
-      // Clear any stale banners
-      const stale = el?.parentNode?.querySelector('.chs-stale-banner');
-      if (stale) stale.remove();
-      _chsState.fallback = data.fallback || [];
-      _chsSaveCache(_chsState._cacheKeyFallback, _chsState.fallback);
-      _chsRenderFallback();
-    }
+    const { db, collection, getDocs, query, orderBy } = await _chsFs();
+    const snap = await getDocs(query(collection(db, 'channel', 'avenora', 'fallback'), orderBy('sortOrder', 'asc')));
+    const stale = el?.parentNode?.querySelector('.chs-stale-banner');
+    if (stale) stale.remove();
+    _chsState.fallback = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    _chsSaveCache(_chsState._cacheKeyFallback, _chsState.fallback);
+    _chsRenderFallback();
   } catch (e) {
-    // Try last-known-good before showing error
     const cached = _chsLoadCache(_chsState._cacheKeyFallback);
     if (cached && Array.isArray(cached) && cached.length > 0) {
       _chsState.fallback = cached;
@@ -1145,20 +1074,21 @@ function _chsRenderFallback() {
 window.chsRemoveFallback = async function(id) {
   if (!confirm('Remove this fallback item?')) return;
   try {
-    const remaining = _chsState.fallback.filter(i => i.id !== id);
-    await _chsApi('POST', '/channel/fallback', { items: remaining });
+    const { db, doc, deleteDoc } = await _chsFs();
+    await deleteDoc(doc(db, 'channel', 'avenora', 'fallback', id));
     _chsToast('Fallback item removed');
     await chsLoadFallback();
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
 };
 
-// ── Broadcast history ─────────────────────────────────────────────────
+// ── Broadcast history ──────────────────────────────────────────────────────
 window.chsLoadHistory = async function() {
   const el = document.getElementById('chs-history-list');
   if (!el) return;
   try {
-    const data = await _chsApi('GET', '/channel/history');
-    const history = data.history || [];
+    const { db, doc, getDoc } = await _chsFs();
+    const snap = await getDoc(doc(db, 'channel', 'avenora'));
+    const history = (snap.exists() ? snap.data().history : null) || [];
     if (!history.length) {
       el.innerHTML = `<div class="chs-empty-state">
         <div class="chs-empty-icon">📜</div>
@@ -1186,7 +1116,7 @@ window.chsLoadHistory = async function() {
   }
 };
 
-// ── Add program panel ──────────────────────────────────────────────────
+// ── Add program panel ──────────────────────────────────────────────────────
 window.chsOpenAddProgram = function() {
   _chsState.addingTo = 'program';
   _chsEl('chs-add-panel-title').textContent = 'Add Program to Schedule';
@@ -1207,16 +1137,13 @@ window.chsCloseAddPanel = function() {
   _chsEl('chs-add-panel').style.display = 'none';
 };
 
-// ── YouTube URL detection ─────────────────────────────────────────────────
+// ── YouTube URL detection ──────────────────────────────────────────────────
 function _chsExtractYouTubeId(url) {
   if (!url) return null;
-  // youtu.be/VIDEO_ID
   const short = url.match(/youtu\.be\/([A-Za-z0-9_-]{11})/);
   if (short) return short[1];
-  // youtube.com/watch?v=VIDEO_ID
   const long = url.match(/[?&]v=([A-Za-z0-9_-]{11})/);
   if (long) return long[1];
-  // youtube.com/embed/VIDEO_ID
   const embed = url.match(/youtube\.com\/embed\/([A-Za-z0-9_-]{11})/);
   if (embed) return embed[1];
   return null;
@@ -1269,6 +1196,19 @@ window.chsOnTypeChange = function() {
   if (artField) artField.style.display = (type === 'VIDEO' || type === 'PRE_RECORDED_SHOW') ? 'none' : '';
 };
 
+// ── Add to subcollection helper ───────────────────────────────────────────
+async function _chsAddToSubcollection(subcol, item) {
+  const { db, collection, addDoc, getDocs, query, orderBy } = await _chsFs();
+  // Determine next sortOrder
+  const snap = await getDocs(query(collection(db, 'channel', 'avenora', subcol), orderBy('sortOrder', 'desc')));
+  const maxOrder = snap.empty ? 0 : (snap.docs[0].data().sortOrder ?? snap.docs.length - 1);
+  await addDoc(collection(db, 'channel', 'avenora', subcol), {
+    ...item,
+    sortOrder: maxOrder + 1,
+    createdAt: Date.now(),
+  });
+}
+
 window.chsSubmitAdd = async function() {
   const type     = (_chsEl('chs-add-type')?.value || '').toUpperCase();
   const title    = (_chsEl('chs-add-title')?.value || '').trim();
@@ -1293,21 +1233,13 @@ window.chsSubmitAdd = async function() {
     delete item.mediaUrl;
   } else {
     if (!mediaUrl) { _chsShowError('Media URL is required for this program type'); return; }
-
-    // ── Detect source type from URL ──────────────────────────────────────
     const youtubeId = _chsExtractYouTubeId(mediaUrl);
     if (youtubeId) {
-      // YouTube URL — store as YouTube source.
-      // Do NOT call fetch() against the YouTube URL.
-      // The channel engine and player will use YouTube embed/IFrame API.
       item.sourceType = 'youtube';
       item.youtubeId  = youtubeId;
       item.sourceUrl  = mediaUrl;
-      // mediaUrl is set to null so the channel engine doesn't try to play it
-      // as a direct audio/video src. The player checks sourceType instead.
       item.mediaUrl   = null;
     } else {
-      // Direct media file or CDN/storage URL
       item.sourceType = 'direct';
       item.sourceUrl  = mediaUrl;
       item.mediaUrl   = mediaUrl;
@@ -1316,11 +1248,11 @@ window.chsSubmitAdd = async function() {
 
   try {
     if (_chsState.addingTo === 'fallback') {
-      await _chsApi('POST', '/channel/fallback/add', item);
+      await _chsAddToSubcollection('fallback', item);
       _chsToast('Fallback item added ✅');
       await chsLoadFallback();
     } else {
-      await _chsApi('POST', '/channel/programming/add', item);
+      await _chsAddToSubcollection('programming', item);
       _chsToast('Program added ✅');
       await chsLoadProgramming();
     }
@@ -1330,7 +1262,6 @@ window.chsSubmitAdd = async function() {
     });
     const dur = _chsEl('chs-add-duration');
     if (dur) dur.value = '0';
-    // Reset URL type badge
     const badge = _chsEl('chs-url-type-badge');
     if (badge) badge.style.display = 'none';
   } catch (e) {
@@ -1356,7 +1287,6 @@ window.chsToggleUpload = function() {
 };
 
 // ── Trigger file picker ────────────────────────────────────────────────────
-// Also handles 'slideshow' as an alias that opens the slideshow builder.
 window.chsUploadTrigger = function(type) {
   if (type === 'audio') {
     const inp = _chsEl('chs-audio-input');
@@ -1369,7 +1299,7 @@ window.chsUploadTrigger = function(type) {
   }
 };
 
-// ── Validate format compatibility ─────────────────────────────────────────
+// ── Validate format compatibility ──────────────────────────────────────────
 function _chsValidateMediaFile(file, type) {
   const name = (file.name || '').toLowerCase();
   const mime = (file.type || '').toLowerCase();
@@ -1382,7 +1312,6 @@ function _chsValidateMediaFile(file, type) {
     return null;
   }
   if (type === 'video') {
-    const preferred = mime === 'video/mp4' || /\.mp4$/i.test(name);
     const supported = mime.startsWith('video/') || /\.(mp4|webm|mov|avi)$/.test(name);
     if (!supported) return `Incompatible video format: ${file.name}. Use MP4 (H.264/AAC), WebM, or MOV.`;
     if (file.size > 500 * 1024 * 1024) return `${file.name} is too large (max 500 MB for video).`;
@@ -1422,7 +1351,7 @@ function _chsMakeProgressCard(id, filename) {
 }
 
 function _chsUpdateProgress(id, pct, status) {
-  const fill = _chsEl('chs-prog-fill-' + id);
+  const fill  = _chsEl('chs-prog-fill-' + id);
   const pctEl = _chsEl('chs-prog-pct-' + id);
   const statEl = _chsEl('chs-prog-status-' + id);
   if (fill) fill.style.width = pct + '%';
@@ -1465,11 +1394,9 @@ window.chsHandleAudioFile = function(input) {
   if (err) { _chsToast(err, 'error'); return; }
 
   const uid = Date.now() + '-' + Math.random().toString(36).slice(2, 6);
-  // Store file reference for later use by upload buttons
   window._chsAudioFiles[uid] = file;
 
   const card = _chsMakeProgressCard(uid, file.name);
-  // Show title edit box inside card
   if (card) {
     const infoEl = card.querySelector('.chs-upload-card-info');
     if (infoEl) {
@@ -1481,11 +1408,6 @@ window.chsHandleAudioFile = function(input) {
       titleInp.value = file.name.replace(/\.[^.]+$/, '');
       infoEl.appendChild(titleInp);
     }
-  }
-
-  // Offer "Upload + Add to Channel" or "Upload Only" after file is ready
-  // We add action buttons to the card before uploading
-  if (card) {
     const actEl = _chsEl('chs-prog-actions-' + uid);
     if (actEl) {
       actEl.style.display = '';
@@ -1497,27 +1419,84 @@ window.chsHandleAudioFile = function(input) {
   }
 };
 
+/** Save a media record directly to Firestore userMedia/{uid}/items and optionally Supabase music_library */
+async function _chsSaveMediaRecord(data) {
+  const uid = _chsUid();
+  if (!uid) throw new Error('Not authenticated');
+
+  const { db, collection, addDoc } = await _chsFs();
+  const record = {
+    uid,
+    type:        data.type,
+    title:       data.title,
+    url:         data.url,
+    storagePath: data.storagePath || '',
+    thumbnailUrl: data.thumbnailUrl || null,
+    duration:    data.duration    || 0,
+    fileSize:    data.fileSize    || 0,
+    mimeType:    data.mimeType    || '',
+    status:      'ready',
+    createdAt:   new Date().toISOString(),
+  };
+
+  const docRef = await addDoc(collection(db, 'userMedia', uid, 'items'), record);
+
+  // Also insert to Supabase music_library for audio/video (best-effort)
+  if (data.type === 'audio' || data.type === 'video') {
+    try {
+      const supaUrl = window.LU_CONFIG?.supabaseUrl
+        || window.AvenoraStorage?.supabaseUrl
+        || 'https://licuiqxkkfboqezzmsqu.supabase.co';
+      const anonKey = window.LU_CONFIG?.supabaseAnonKey
+        || window.AvenoraStorage?.anonKey
+        || '';
+      if (anonKey) {
+        await fetch(`${supaUrl}/rest/v1/music_library`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'apikey': anonKey,
+            'Authorization': 'Bearer ' + anonKey,
+            'Prefer': 'return=minimal',
+          },
+          body: JSON.stringify({
+            title:        record.title,
+            url:          record.url,
+            storage_path: record.storagePath,
+            file_size:    record.fileSize,
+            mime_type:    record.mimeType,
+            duration:     record.duration,
+            type:         record.type,
+            uid,
+            firestore_id: docRef.id,
+            created_at:   record.createdAt,
+          }),
+        });
+      }
+    } catch (_) { /* Supabase insert is best-effort */ }
+  }
+
+  return { id: docRef.id, item: { id: docRef.id, ...record } };
+}
+
 /** Internal: perform the actual audio upload, optionally add to channel queue. */
 window.chsDoAudioUpload = async function(uid, addToChannel) {
   const file = window._chsAudioFiles && window._chsAudioFiles[uid];
   if (!file) return;
 
-  // Disable buttons
-  const addBtn   = _chsEl('chs-upload-add-btn-' + uid);
-  const onlyBtn  = _chsEl('chs-upload-only-btn-' + uid);
-  if (addBtn)  { addBtn.disabled  = true; }
-  if (onlyBtn) { onlyBtn.disabled = true; }
+  const addBtn  = _chsEl('chs-upload-add-btn-' + uid);
+  const onlyBtn = _chsEl('chs-upload-only-btn-' + uid);
+  if (addBtn)  addBtn.disabled  = true;
+  if (onlyBtn) onlyBtn.disabled = true;
 
   try {
     if (!window.AvenoraStorage) throw new Error('Storage not available — refresh and try again');
     _chsUpdateProgress(uid, 5, 'Uploading to storage…');
 
-    // Log diagnostic info before attempting upload
     console.info('[ChannelStudio] Starting audio upload:', {
       file: file.name,
       size: Math.round(file.size / 1024) + ' KB',
       type: file.type,
-      supabaseUrl: 'https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/music/',
     });
 
     const result = await window.AvenoraStorage.upload('audio', file, pct => {
@@ -1528,12 +1507,9 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
 
     const titleVal = (_chsEl('chs-prog-title-' + uid)?.value || file.name.replace(/\.[^.]+$/, '')).trim();
 
-    // Save record to media library via backend.
-    // If the backend is offline, store locally in _chsState.myMedia as a fallback
-    // so the user can at least see the uploaded item and add it to the queue when backend recovers.
     let saveResp;
     try {
-      saveResp = await _chsApi('POST', '/media/save', {
+      saveResp = await _chsSaveMediaRecord({
         type: 'audio',
         title: titleVal,
         url: result.url,
@@ -1542,54 +1518,38 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
         mimeType: file.type,
       });
     } catch (saveErr) {
-      // Backend offline — the file IS in Supabase Storage. Don't lose the upload.
-      console.warn('[ChannelStudio] Backend /media/save failed (backend offline?):', saveErr.message);
-      console.warn('[ChannelStudio] File WAS uploaded to Supabase Storage:', result.url);
-      // Create a temporary local record so the user can add to channel even if backend is down
+      console.warn('[ChannelStudio] Firestore media save failed:', saveErr.message);
+      console.warn('[ChannelStudio] File WAS uploaded to Storage:', result.url);
       const localId = 'local_' + Date.now();
       saveResp = {
         id: localId,
         item: {
-          id: localId,
-          type: 'audio',
-          title: titleVal,
-          url: result.url,
-          storagePath: result.storagePath,
-          fileSize: file.size,
-          mimeType: file.type,
-          duration: 0,
-          status: 'ready',
-          createdAt: new Date().toISOString(),
-          _localOnly: true,
+          id: localId, type: 'audio', title: titleVal,
+          url: result.url, storagePath: result.storagePath,
+          fileSize: file.size, mimeType: file.type,
+          duration: 0, status: 'ready',
+          createdAt: new Date().toISOString(), _localOnly: true,
         },
       };
-      _chsToast(`⚠ File uploaded but backend offline — added locally. Backend error: ${saveErr.message}`, 'error');
+      _chsToast(`⚠ File uploaded but save failed — added locally. Error: ${saveErr.message}`, 'error');
     }
 
-    // Build channel program item from the saved media record (uses actual server ID)
     const savedItem = saveResp.item || {
-      id: saveResp.id,
-      type: 'audio',
-      title: titleVal,
-      url: result.url,
-      storagePath: result.storagePath,
-      duration: 0,
+      id: saveResp.id, type: 'audio', title: titleVal,
+      url: result.url, storagePath: result.storagePath, duration: 0,
     };
 
     if (addToChannel) {
       _chsUpdateProgress(uid, 98, 'Adding to channel…');
       try {
         const programItem = _chsMediaToProgramItem(savedItem);
-        await _chsApi('POST', '/channel/programming/add', programItem);
+        await _chsAddToSubcollection('programming', programItem);
         _chsSetCardComplete(uid, `✓ MUSIC UPLOADED\n✓ ADDED TO 24-HOUR CHANNEL`);
         _chsToast(`🎵 "${titleVal}" added to 24-Hour Channel`);
-        // Clean up and refresh
         if (window._chsAudioFiles) delete window._chsAudioFiles[uid];
         await chsLoadMyMedia();
         await chsLoadProgramming();
       } catch (qErr) {
-        // File uploaded + media saved, but channel add failed.
-        // Retry should only retry the channel add — store savedItem keyed by uid.
         window._chsPendingChannelAdd = window._chsPendingChannelAdd || {};
         window._chsPendingChannelAdd[uid] = savedItem;
         const retryFn = `async function(){
@@ -1597,17 +1557,14 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
             const si = window._chsPendingChannelAdd && window._chsPendingChannelAdd['${uid}'];
             if (!si) { alert('Retry data lost — use + Queue on the item in My Media'); return; }
             const pi = _chsMediaToProgramItem(si);
-            await _chsApi('POST', '/channel/programming/add', pi);
+            await _chsAddToSubcollection('programming', pi);
             delete window._chsPendingChannelAdd['${uid}'];
             _chsSetCardComplete('${uid}', '✓ MUSIC UPLOADED\\n✓ ADDED TO 24-HOUR CHANNEL');
             _chsToast('🎵 Added to 24-Hour Channel');
             await chsLoadProgramming();
           } catch(e2) { _chsToast('Retry failed: ' + e2.message, 'error'); }
         }`;
-        _chsSetCardError(uid,
-          `✓ Uploaded to My Media\n⚠ Could not add to 24-Hour Channel: ${qErr.message}`,
-          retryFn
-        );
+        _chsSetCardError(uid, `✓ Uploaded to My Media\n⚠ Could not add to channel: ${qErr.message}`, retryFn);
         _chsToast(`Audio uploaded but channel add failed: ${qErr.message}`, 'error');
         if (window._chsAudioFiles) delete window._chsAudioFiles[uid];
         await chsLoadMyMedia();
@@ -1621,8 +1578,8 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
   } catch (e) {
     _chsSetCardError(uid, e.message || 'Upload failed', `function(){chsDoAudioUpload('${uid}',${addToChannel})}`);
     console.error('[ChannelStudio] Audio upload failed:', e);
-    if (addBtn)  { addBtn.disabled  = false; }
-    if (onlyBtn) { onlyBtn.disabled = false; }
+    if (addBtn)  addBtn.disabled  = false;
+    if (onlyBtn) onlyBtn.disabled = false;
   }
 };
 
@@ -1635,7 +1592,6 @@ window.chsHandleVideoFile = function(input) {
   const err = _chsValidateMediaFile(file, 'video');
   if (err) { _chsToast(err, 'error'); return; }
 
-  // Warn about non-MP4
   const mime = (file.type || '').toLowerCase();
   const name = (file.name || '').toLowerCase();
   if (!mime.startsWith('video/mp4') && !name.endsWith('.mp4')) {
@@ -1648,7 +1604,6 @@ window.chsHandleVideoFile = function(input) {
   }
 
   const uid = Date.now() + '-' + Math.random().toString(36).slice(2, 6);
-  // Store file reference for deferred upload
   window._chsVideoFiles[uid] = file;
 
   const card = _chsMakeProgressCard(uid, file.name);
@@ -1663,7 +1618,6 @@ window.chsHandleVideoFile = function(input) {
       titleInp.value = file.name.replace(/\.[^.]+$/, '');
       infoEl.appendChild(titleInp);
     }
-    // Show "Upload + Add to Channel" and "Upload Only" buttons
     const actEl = _chsEl('chs-prog-actions-' + uid);
     if (actEl) {
       actEl.style.display = '';
@@ -1689,12 +1643,10 @@ window.chsDoVideoUpload = async function(uid, addToChannel) {
     if (!window.AvenoraStorage) throw new Error('Storage not available — refresh and try again');
     _chsUpdateProgress(uid, 3, 'Uploading video to storage…');
 
-    // Log diagnostic info before attempting upload
     console.info('[ChannelStudio] Starting video upload:', {
       file: file.name,
       size: Math.round(file.size / 1024 / 1024) + ' MB',
       type: file.type,
-      supabaseUrl: 'https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/videos/',
     });
 
     const result = await window.AvenoraStorage.upload('video', file, pct => {
@@ -1704,11 +1656,9 @@ window.chsDoVideoUpload = async function(uid, addToChannel) {
     _chsUpdateProgress(uid, 95, 'Saving to library…');
     const titleVal = (_chsEl('chs-prog-title-' + uid)?.value || file.name.replace(/\.[^.]+$/, '')).trim();
 
-    // Save record to media library via backend.
-    // If backend is offline, store locally so the upload isn't lost.
     let saveResp;
     try {
-      saveResp = await _chsApi('POST', '/media/save', {
+      saveResp = await _chsSaveMediaRecord({
         type: 'video',
         title: titleVal,
         url: result.url,
@@ -1717,50 +1667,38 @@ window.chsDoVideoUpload = async function(uid, addToChannel) {
         mimeType: file.type,
       });
     } catch (saveErr) {
-      console.warn('[ChannelStudio] Backend /media/save failed (backend offline?):', saveErr.message);
-      console.warn('[ChannelStudio] Video WAS uploaded to Supabase Storage:', result.url);
+      console.warn('[ChannelStudio] Firestore media save failed:', saveErr.message);
+      console.warn('[ChannelStudio] Video WAS uploaded to Storage:', result.url);
       const localId = 'local_' + Date.now();
       saveResp = {
         id: localId,
         item: {
-          id: localId,
-          type: 'video',
-          title: titleVal,
-          url: result.url,
-          storagePath: result.storagePath,
-          fileSize: file.size,
-          mimeType: file.type,
-          duration: 0,
-          status: 'ready',
-          createdAt: new Date().toISOString(),
-          _localOnly: true,
+          id: localId, type: 'video', title: titleVal,
+          url: result.url, storagePath: result.storagePath,
+          fileSize: file.size, mimeType: file.type,
+          duration: 0, status: 'ready',
+          createdAt: new Date().toISOString(), _localOnly: true,
         },
       };
-      _chsToast(`⚠ Video uploaded but backend offline — added locally. Error: ${saveErr.message}`, 'error');
+      _chsToast(`⚠ Video uploaded but save failed — added locally. Error: ${saveErr.message}`, 'error');
     }
 
     const savedItem = saveResp.item || {
-      id: saveResp.id,
-      type: 'video',
-      title: titleVal,
-      url: result.url,
-      storagePath: result.storagePath,
-      duration: 0,
+      id: saveResp.id, type: 'video', title: titleVal,
+      url: result.url, storagePath: result.storagePath, duration: 0,
     };
 
     if (addToChannel) {
       _chsUpdateProgress(uid, 98, 'Adding to channel…');
       try {
         const programItem = _chsMediaToProgramItem(savedItem);
-        await _chsApi('POST', '/channel/programming/add', programItem);
+        await _chsAddToSubcollection('programming', programItem);
         _chsSetCardComplete(uid, `✓ VIDEO UPLOADED\n✓ ADDED TO 24-HOUR CHANNEL`);
         _chsToast(`🎬 "${titleVal}" added to 24-Hour Channel`);
         if (window._chsVideoFiles) delete window._chsVideoFiles[uid];
         await chsLoadMyMedia();
         await chsLoadProgramming();
       } catch (qErr) {
-        // File uploaded + media saved, but channel add failed.
-        // Retry should only retry the channel add — store savedItem keyed by uid.
         window._chsPendingChannelAdd = window._chsPendingChannelAdd || {};
         window._chsPendingChannelAdd[uid] = savedItem;
         const retryFn = `async function(){
@@ -1768,17 +1706,14 @@ window.chsDoVideoUpload = async function(uid, addToChannel) {
             const si = window._chsPendingChannelAdd && window._chsPendingChannelAdd['${uid}'];
             if (!si) { alert('Retry data lost — use + Queue on the item in My Media'); return; }
             const pi = _chsMediaToProgramItem(si);
-            await _chsApi('POST', '/channel/programming/add', pi);
+            await _chsAddToSubcollection('programming', pi);
             delete window._chsPendingChannelAdd['${uid}'];
             _chsSetCardComplete('${uid}', '✓ VIDEO UPLOADED\\n✓ ADDED TO 24-HOUR CHANNEL');
             _chsToast('🎬 Added to 24-Hour Channel');
             await chsLoadProgramming();
           } catch(e2) { _chsToast('Retry failed: ' + e2.message, 'error'); }
         }`;
-        _chsSetCardError(uid,
-          `✓ Uploaded to My Media\n⚠ Could not add to 24-Hour Channel: ${qErr.message}`,
-          retryFn
-        );
+        _chsSetCardError(uid, `✓ Uploaded to My Media\n⚠ Could not add to channel: ${qErr.message}`, retryFn);
         _chsToast(`Video uploaded but channel add failed: ${qErr.message}`, 'error');
         if (window._chsVideoFiles) delete window._chsVideoFiles[uid];
         await chsLoadMyMedia();
@@ -1802,11 +1737,12 @@ window.chsLoadMyMedia = async function() {
   const el = _chsEl('chs-media-library');
   if (!el) return;
   try {
-    const data = await _chsApi('GET', '/media/library');
-    if (data.success) {
-      _chsState.myMedia = data.items || [];
-      _chsRenderMediaLibrary();
-    }
+    const uid = _chsUid();
+    if (!uid) throw new Error('Not authenticated');
+    const { db, collection, getDocs, query, orderBy } = await _chsFs();
+    const snap = await getDocs(query(collection(db, 'userMedia', uid, 'items'), orderBy('createdAt', 'desc')));
+    _chsState.myMedia = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    _chsRenderMediaLibrary();
   } catch (e) {
     if (_chsState.myMedia.length > 0) {
       _chsRenderMediaLibrary(); // show stale
@@ -1824,7 +1760,6 @@ window.chsLoadMyMedia = async function() {
 // ── Filter media ───────────────────────────────────────────────────────────
 window.chsFilterMedia = function(filter) {
   _chsState.mediaFilter = filter;
-  // Update tab active state
   const tabs = document.querySelectorAll('#chs-media-tabs .chs-media-tab');
   tabs.forEach(t => {
     t.classList.toggle('chs-media-tab-active', t.dataset.tab === filter);
@@ -1919,19 +1854,19 @@ window.chsAddMediaToQueue = async function(id) {
   if (!item) return;
   const programItem = _chsMediaToProgramItem(item);
   try {
-    await _chsApi('POST', '/channel/programming/add', programItem);
+    await _chsAddToSubcollection('programming', programItem);
     _chsToast(`✅ "${item.title}" added to programming queue`);
     await chsLoadProgramming();
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
 };
 
-// ── Add media to fallback ─────────────────────────────────────────────────
+// ── Add media to fallback ──────────────────────────────────────────────────
 window.chsAddMediaToFallback = async function(id) {
   const item = _chsState.myMedia.find(m => m.id === id);
   if (!item) return;
   const programItem = _chsMediaToProgramItem(item);
   try {
-    await _chsApi('POST', '/channel/fallback/add', programItem);
+    await _chsAddToSubcollection('fallback', programItem);
     _chsToast(`✅ "${item.title}" added to fallback`);
     await chsLoadFallback();
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
@@ -1953,19 +1888,17 @@ function _chsMediaToProgramItem(item) {
     sourceUrl:  item.url,
     duration:   item.duration || 0,
   };
-  // Slideshow
   if (item.type === 'slideshow') {
     prog.images = (item.images || []).map(img => ({ url: img.url, caption: img.caption || '' }));
     prog.perImageSecs = item.perImageSecs || 10;
     prog.duration = (item.images?.length || 0) * (item.perImageSecs || 10);
     delete prog.mediaUrl;
     delete prog.sourceUrl;
-    // If there's audio, add it as a track so the channel player can use it
     if (item.audioTrack?.url) {
       prog.tracks = [{
-        id:    item.id + '_audio',
-        title: item.audioTrack.title || item.title + ' (music)',
-        url:   item.audioTrack.url,
+        id:       item.id + '_audio',
+        title:    item.audioTrack.title || item.title + ' (music)',
+        url:      item.audioTrack.url,
         duration: item.audioTrack.duration || 0,
       }];
     }
@@ -1979,18 +1912,20 @@ window.chsDeleteMedia = async function(id) {
   if (!item) return;
   if (!confirm(`Delete "${item.title}"? This cannot be undone.`)) return;
   try {
-    await _chsApi('DELETE', '/media/' + id);
+    const uid = _chsUid();
+    if (!uid) throw new Error('Not authenticated');
+    const { db, doc, deleteDoc } = await _chsFs();
+    await deleteDoc(doc(db, 'userMedia', uid, 'items', id));
     _chsState.myMedia = _chsState.myMedia.filter(m => m.id !== id);
     _chsRenderMediaLibrary();
     _chsToast('Media deleted');
   } catch (e) { _chsToast('Delete failed: ' + e.message, 'error'); }
 };
 
-// ── Slideshow Builder ─────────────────────────────────────────────────────
+// ── Slideshow Builder ──────────────────────────────────────────────────────
 window.chsShowSlideshowBuilder = function() {
   const builder = _chsEl('chs-slideshow-builder');
   if (builder) builder.style.display = '';
-  // Make sure upload body is open
   if (!_chsState.uploadExpanded) chsToggleUpload();
   builder?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 };
@@ -2131,16 +2066,16 @@ function _chsRenderSlideAudioInfo() {
   `;
 }
 
-// ── Save slideshow ────────────────────────────────────────────────────────
+// ── Save slideshow ─────────────────────────────────────────────────────────
 window.chsSaveSlideshow = async function() {
-  const errEl = _chsEl('chs-slideshow-error');
+  const errEl   = _chsEl('chs-slideshow-error');
   const saveBtn = _chsEl('chs-slideshow-save-btn');
   if (errEl) errEl.style.display = 'none';
 
-  const images = _chsState.slideshow.images;
-  const perSecs = _chsState.slideshow.perImageSecs;
+  const images     = _chsState.slideshow.images;
+  const perSecs    = _chsState.slideshow.perImageSecs;
   const audioTrack = _chsState.slideshow.audioTrack;
-  const name = (_chsEl('chs-slideshow-name')?.value || '').trim();
+  const name       = (_chsEl('chs-slideshow-name')?.value || '').trim();
 
   if (!name) {
     if (errEl) { errEl.textContent = 'Please enter a slideshow title (Step 4)'; errEl.style.display = ''; }
@@ -2159,7 +2094,6 @@ window.chsSaveSlideshow = async function() {
     for (let i = 0; i < images.length; i++) {
       const img = images[i];
       if (img.url) {
-        // Already uploaded (from library)
         uploadedImages.push({ url: img.url, storagePath: img.storagePath || '', caption: img.caption || '' });
         continue;
       }
@@ -2181,38 +2115,43 @@ window.chsSaveSlideshow = async function() {
         audioTrack.storagePath = result.storagePath;
       }
       audioPayload = {
-        url: audioTrack.url,
+        url:         audioTrack.url,
         storagePath: audioTrack.storagePath || '',
-        title: audioTrack.title || 'Background Music',
-        duration: audioTrack.duration || 0,
+        title:       audioTrack.title || 'Background Music',
+        duration:    audioTrack.duration || 0,
       };
     }
 
     if (saveBtn) saveBtn.textContent = '⏳ Saving to library…';
 
-    // 3. Save slideshow record
-    const saved = await _chsApi('POST', '/media/slideshow', {
-      title: name,
-      images: uploadedImages,
-      perImageSecs: perSecs,
-      audioTrack: audioPayload,
-    });
-
-    // Auto-add slideshow to 24-Hour Channel using the saved item from the backend
-    // Use _chsMediaToProgramItem — the single converter for all media types
-    let addedToChannel = false;
-    const savedItem = saved?.item || {
-      id:           saved?.id,
+    // 3. Save slideshow record to Firestore userMedia
+    const uid = _chsUid();
+    if (!uid) throw new Error('Not authenticated');
+    const { db, collection, addDoc } = await _chsFs();
+    const slideshowRecord = {
+      uid,
       type:         'slideshow',
       title:        name,
+      url:          uploadedImages[0]?.url || '',
+      storagePath:  '',
+      thumbnailUrl: uploadedImages[0]?.url || null,
       images:       uploadedImages,
       perImageSecs: perSecs,
       audioTrack:   audioPayload,
       duration:     uploadedImages.length * perSecs,
+      fileSize:     0,
+      mimeType:     'slideshow',
+      status:       'ready',
+      createdAt:    new Date().toISOString(),
     };
+    const docRef = await addDoc(collection(db, 'userMedia', uid, 'items'), slideshowRecord);
+    const savedItem = { id: docRef.id, ...slideshowRecord };
+
+    // 4. Auto-add slideshow to 24-Hour Channel
+    let addedToChannel = false;
     try {
       const programItem = _chsMediaToProgramItem(savedItem);
-      await _chsApi('POST', '/channel/programming/add', programItem);
+      await _chsAddToSubcollection('programming', programItem);
       addedToChannel = true;
       await chsLoadProgramming();
     } catch (qErr) {
@@ -2257,7 +2196,7 @@ function _chsFmtSize(bytes) {
   return bytes + ' B';
 }
 
-// ── Unavailable block helper ───────────────────────────────────────────
+// ── Unavailable block helper ───────────────────────────────────────────────
 function _chsUnavailableBlock(title, technicalMsg, retryFn) {
   console.warn('[ChannelStudio]', title, '|', technicalMsg);
   return `<div class="chs-unavail-block">
@@ -2268,7 +2207,7 @@ function _chsUnavailableBlock(title, technicalMsg, retryFn) {
   </div>`;
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
 function _chsShowError(msg) {
   const el = _chsEl('chs-add-error');
   if (el) { el.textContent = msg; el.style.display = ''; }

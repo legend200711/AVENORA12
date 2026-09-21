@@ -412,12 +412,18 @@ function _chSubscribeNowPlaying() {
 }
 
 async function _chPollNowPlaying() {
+  // No backend configured — skip REST polling entirely, rely on Firestore only.
+  if (!_ch.apiBase) {
+    _chShowState('standby');
+    _chSetText('ch-np-title', 'Connecting…');
+    return;
+  }
+
   // Clear any existing poll timer to avoid duplicate polling
   clearTimeout(_ch.pollTimer);
 
   try {
-    const base = _ch.apiBase || '/api';
-    const res  = await fetch(base + '/channel/now-playing', {
+    const res = await fetch(_ch.apiBase + '/channel/now-playing', {
       cache: 'no-store',
       signal: AbortSignal.timeout ? AbortSignal.timeout(8000) : undefined,
     });
