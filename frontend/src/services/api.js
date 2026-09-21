@@ -1208,44 +1208,212 @@
 
   // ─── Users API ────────────────────────────────────────────
   const UsersAPI = {
-    async profile(username) {
-      if (window.AvenoraFirebase?.Firestore) {
-        const currentUser = LegendState.get('user');
-        // If viewing own profile, look up by UID directly (faster)
-        if (currentUser && currentUser.username === username) {
-          const fsProfile = await window.AvenoraFirebase.Firestore.getProfile(currentUser.id);
-          const merged = { ...currentUser, ...(fsProfile || {}) };
-          return {
-            user: {
-              id: merged.id || currentUser.id,
-              username: merged.username || username,
-              role: merged.role || 'user',
-              profile: merged.profile || {},
-              stats: merged.stats || {},
-              createdAt: merged.createdAt || new Date().toISOString(),
-              isOwnProfile: true,
-              isFollowing: false,
-            },
-          };
-        }
-        // Viewing another user's profile — query by username field
-        const fsProfile = await window.AvenoraFirebase.Firestore.getProfileByUsername(username);
-        if (fsProfile) {
-          return {
-            user: {
-              id: fsProfile.id,
-              username: fsProfile.username || username,
-              role: fsProfile.role || 'user',
-              profile: fsProfile.profile || {},
-              stats: fsProfile.stats || {},
-              createdAt: fsProfile.createdAt || new Date().toISOString(),
-              isOwnProfile: false,
-              isFollowing: false,
-            },
-          };
+    /**
+     * Load a profile by viewedUid (Firebase UID) or by username.
+     *
+     * Call sites:
+     *   Own profile  → loadProfile(auth.currentUser.uid)  [via profile.js]
+     *   Other user   → loadProfile(routeUid)              [via profile.js]
+     *
+     * Legacy callers that pass a username string are still supported via
+     * the username → UID lookup path below.
+     *
+     * Self-healing: if the authenticated user's Firestore document is missing
+     * (e.g. a backup/older account created before the profile schema existed),
+     * we create a minimal profile document so the page never hard-fails.
+     */
+    async loadProfile(viewedUid) {
+      // Wait for Firebase auth to be determined before querying Firestore.
+      await _waitForAuthReady(6000);
+
+      if (!window.AvenoraFirebase?.Firestore) {
+        throw new Error('Firebase is not available. Check your internet connection and reload the page.');
+      }
+
+      const currentUser = LegendState.get('user');
+      const authenticatedUid = currentUser?.uid || currentUser?.id || null;
+      const isOwn = !!(viewedUid && authenticatedUid && viewedUid === authenticatedUid);
+
+      console.debug('[AVN] loadProfile', {
+        viewedUid,
+        authenticatedUid,
+        isOwn,
+        documentPath: `users/${viewedUid}`,
+      });
+
+      let fsProfile = null;
+      try {
+        fsProfile = await window.AvenoraFirebase.Firestore.getProfile(viewedUid);
+      } catch (fsErr) {
+        console.error('[AVN] PROFILE LOAD FAILED', {
+          authenticatedUid,
+          viewedUid,
+          documentPath: `users/${viewedUid}`,
+          firebaseCode: fsErr.code,
+          message: fsErr.message,
+        });
+        throw fsErr;
+      }
+
+      // ── Self-heal: create a minimal profile document if missing ─────────
+      // This handles backup/older accounts that were created in Firebase Auth
+      // but whose Firestore users/{uid} document was never written.
+      if (!fsProfile && isOwn) {
+        console.warn('[AVN] Profile document missing for authenticated user — creating minimal profile', {
+          uid: viewedUid,
+          documentPath: `users/${viewedUid}`,
+        });
+        // Build a safe minimal document from what Firebase Auth already told us.
+        const fbAuthUser = (await window.AvenoraFirebase.getFirebaseAuth?.()
+          .catch(() => null))?.currentUser || null;
+        const safeUsername =
+          fbAuthUser?.displayName ||
+          currentUser?.username    ||
+          fbAuthUser?.email?.split('@')[0] ||
+          'AVENORAUser';
+        const safeEmail = fbAuthUser?.email || currentUser?.email || null;
+        const safePhotoURL = fbAuthUser?.photoURL || currentUser?.profile?.avatarUrl || null;
+        const minimalDoc = {
+          uid:      viewedUid,
+          username: safeUsername,
+          email:    safeEmail,
+          role:     'user',
+          profile: {
+            displayName: safeUsername,
+            avatarUrl:   safePhotoURL,
+            bio:         '',
+            location:    '',
+            website:     '',
+            bannerUrl:   null,
+          },
+          stats: { followersCount: 0, followingCount: 0, postsCount: 0 },
+          createdAt: new Date().toISOString(),
+        };
+        try {
+          await window.AvenoraFirebase.Firestore.upsertProfile(viewedUid, minimalDoc);
+          fsProfile = { id: viewedUid, ...minimalDoc };
+          console.info('[AVN] Minimal profile document created for uid:', viewedUid);
+        } catch (createErr) {
+          console.error('[AVN] Could not auto-create profile document:', {
+            uid: viewedUid,
+            firebaseCode: createErr.code,
+            message: createErr.message,
+          });
+          // Still surface what we know from Auth so the page can render
+          fsProfile = { id: viewedUid, ...minimalDoc };
         }
       }
-      return get(`/users/${username}`);
+
+      if (!fsProfile) {
+        // Profile genuinely doesn't exist and this is not the own-account case.
+        console.error('[AVN] PROFILE LOAD FAILED — document not found', {
+          authenticatedUid,
+          viewedUid,
+          documentPath: `users/${viewedUid}`,
+          reason: 'PROFILE_DOCUMENT_MISSING',
+        });
+        const err = new Error('Profile not found.');
+        err.code = 'PROFILE_NOT_FOUND';
+        throw err;
+      }
+
+      // Merge Auth-level display name / avatar as safe fallbacks for old schema
+      const safeName =
+        fsProfile.profile?.displayName ||
+        fsProfile.username             ||
+        currentUser?.profile?.displayName ||
+        currentUser?.username          ||
+        'AVENORA User';
+
+      return {
+        user: {
+          id:          fsProfile.id || viewedUid,
+          uid:         fsProfile.id || viewedUid,
+          username:    fsProfile.username    || safeName,
+          role:        fsProfile.role        || 'user',
+          email:       fsProfile.email       || null,
+          profile: {
+            displayName: fsProfile.profile?.displayName || safeName,
+            avatarUrl:   fsProfile.profile?.avatarUrl   || null,
+            bio:         fsProfile.profile?.bio         || '',
+            location:    fsProfile.profile?.location    || '',
+            website:     fsProfile.profile?.website     || '',
+            bannerUrl:   fsProfile.profile?.bannerUrl   || null,
+          },
+          stats: {
+            followersCount: fsProfile.stats?.followersCount ?? 0,
+            followingCount: fsProfile.stats?.followingCount ?? 0,
+            postsCount:     fsProfile.stats?.postsCount     ?? 0,
+          },
+          createdAt:    fsProfile.createdAt  || new Date().toISOString(),
+          isOwnProfile: isOwn,
+          isFollowing:  false,
+        },
+      };
+    },
+
+    async profile(usernameOrUid) {
+      // ── Fast path: if the caller passed a Firebase UID (44-char alphanumeric),
+      //    delegate directly to loadProfile() which is UID-first.
+      //    This covers the updated profile.js which always passes a UID.
+      const looksLikeUid = /^[A-Za-z0-9]{20,}$/.test(String(usernameOrUid || ''));
+      if (looksLikeUid && window.AvenoraFirebase?.Firestore) {
+        return this.loadProfile(usernameOrUid);
+      }
+
+      // ── Legacy / username path ────────────────────────────────────────────
+      // Wait for Firebase auth so currentUser is accurate.
+      await _waitForAuthReady(6000);
+
+      if (window.AvenoraFirebase?.Firestore) {
+        const currentUser = LegendState.get('user');
+        const authenticatedUid = currentUser?.uid || currentUser?.id || null;
+
+        // If viewing own profile — identified by matching username OR by being
+        // the only profile that could match the currently authenticated user —
+        // use UID-first lookup so old/backup accounts work even if their
+        // Firestore username field doesn't match displayName.
+        if (
+          authenticatedUid &&
+          currentUser &&
+          (
+            currentUser.username === usernameOrUid ||
+            currentUser.profile?.displayName === usernameOrUid
+          )
+        ) {
+          return this.loadProfile(authenticatedUid);
+        }
+
+        // Viewing another user's profile — query by username field.
+        let fsProfile = null;
+        try {
+          fsProfile = await window.AvenoraFirebase.Firestore.getProfileByUsername(usernameOrUid);
+        } catch (fsErr) {
+          console.error('[AVN] PROFILE LOAD FAILED (by username)', {
+            authenticatedUid,
+            username: usernameOrUid,
+            firebaseCode: fsErr.code,
+            message: fsErr.message,
+          });
+          throw fsErr;
+        }
+
+        if (fsProfile) {
+          return this.loadProfile(fsProfile.id);
+        }
+
+        // Username not found in Firestore — profile genuinely doesn't exist.
+        const err = new Error(`No profile found for username: ${usernameOrUid}`);
+        err.code = 'PROFILE_NOT_FOUND';
+        console.error('[AVN] PROFILE LOAD FAILED — username not in Firestore', {
+          authenticatedUid,
+          username: usernameOrUid,
+          reason: 'USERNAME_NOT_FOUND',
+        });
+        throw err;
+      }
+
+      return get(`/users/${usernameOrUid}`);
     },
     async posts(username, page = 1) {
       if (window.AvenoraFirebase?.Firestore) {

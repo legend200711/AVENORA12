@@ -6,26 +6,85 @@
 
 registerPage('profile', {
   async render(container) {
-    const currentUser = LegendAPI.auth.getUser();
-    const hashParts = location.hash.replace('#', '').split('/');
-    const targetUsername = hashParts[1] ? decodeURIComponent(hashParts[1]) : currentUser?.username;
+    // ── Step 1: Wait for Firebase auth to resolve ─────────────────────────
+    // Never treat a temporary auth.currentUser === null (during startup) as
+    // "not logged in" — wait for the first onAuthStateChanged to fire.
+    const authLoading = LegendState.get('authLoading');
+    if (authLoading) {
+      await new Promise(resolve => {
+        // Already resolved → fire immediately; otherwise wait up to 8 s.
+        const unsub = LegendState.subscribe('authLoading', (val) => {
+          if (!val) { unsub(); resolve(); }
+        });
+        setTimeout(() => { unsub(); resolve(); }, 8000);
+      });
+    }
 
-    if (!targetUsername) {
-      container.innerHTML = `
-        <div class="error-state" style="min-height:80vh">
-          <div class="error-icon">👤</div>
-          <h3>No profile specified</h3>
-          <p>Sign in to view your profile, or visit a user's profile link.</p>
-          <button class="btn btn-primary" onclick="Modal.open('auth-modal')">Sign In</button>
-        </div>
-      `;
-      return;
+    // ── Step 2: Resolve viewed profile UID ────────────────────────────────
+    // currentUser is the authenticated user (may be null = not signed in).
+    // viewedUid is WHO we're looking at (own profile or another user).
+    //
+    // URL: #profile          → own profile (need to be signed in)
+    //      #profile/USERNAME  → another user's profile (username in URL)
+    //      #profile/UID       → another user's profile (UID in URL)
+    const currentUser = LegendAPI.auth.getUser();
+
+    // Derive the Firebase auth currentUser directly for the most reliable UID.
+    let authenticatedUid = currentUser?.uid || currentUser?.id || null;
+
+    // Try to get the UID directly from Firebase Auth in case LegendState
+    // is still catching up after an account switch.
+    if (!authenticatedUid && window.AvenoraFirebase?.getFirebaseAuth) {
+      try {
+        const fbAuth = await window.AvenoraFirebase.getFirebaseAuth();
+        if (fbAuth?.currentUser) {
+          authenticatedUid = fbAuth.currentUser.uid;
+        }
+      } catch (_) {}
+    }
+
+    const hashParts = location.hash.replace('#', '').split('/');
+    const routeParam = hashParts[1] ? decodeURIComponent(hashParts[1]) : null;
+
+    // Determine the viewed UID:
+    //   • No route param → own profile (requires sign-in)
+    //   • Route param looks like a Firebase UID (≥20 alphanumeric chars) → use as UID
+    //   • Route param looks like a username → resolve via Firestore lookup
+    let viewedUid = null;
+
+    if (!routeParam) {
+      // Own profile
+      if (!authenticatedUid) {
+        container.innerHTML = `
+          <div class="error-state" style="min-height:80vh">
+            <div class="error-icon">👤</div>
+            <h3>No profile specified</h3>
+            <p>Sign in to view your profile, or visit a user's profile link.</p>
+            <button class="btn btn-primary" onclick="Modal.open('auth-modal')">Sign In</button>
+          </div>
+        `;
+        return;
+      }
+      viewedUid = authenticatedUid;
+    } else {
+      // Another user, or own profile navigated to by username/uid
+      viewedUid = routeParam;
     }
 
     showLoading(container, 'Loading profile…');
 
+    // ── Inner load function so "Try Again" can re-run the full flow ───────
+    const _doLoad = async () => {
     try {
-      const data = await LegendAPI.users.profile(targetUsername);
+      // Always use loadProfile(uid) when we have a UID.
+      // Fall back to profile(username) for old-style username URLs.
+      let data;
+      const looksLikeUid = /^[A-Za-z0-9]{20,}$/.test(String(viewedUid || ''));
+      if (looksLikeUid && window.AvenoraFirebase?.Firestore) {
+        data = await LegendAPI.users.loadProfile(viewedUid);
+      } else {
+        data = await LegendAPI.users.profile(viewedUid);
+      }
       const profile = data.user;
       const isOwn = !!profile.isOwnProfile;
       let isFollowing = profile.isFollowing || false;
@@ -113,15 +172,41 @@ registerPage('profile', {
         </div>
       `;
 
-      // Load posts tab by default
+      // Load posts tab by default — use UID instead of username for post lookup
+      // so the tab works even if username differs from what's in post author fields.
       SNProfile.showTab('posts', profile.username);
 
     } catch (err) {
-      console.warn('[AVN] Profile load error:', err);
-      const isNetwork = err.message === 'Failed to fetch' || err.message?.includes('NetworkError') || err.message?.includes('net::ERR');
-      showError(container, isNetwork ? 'Could not connect. Check your connection and try again.' : 'This profile is temporarily unavailable.', () => navigateTo('profile'));
-    }
+      // ── Diagnostic log: always log the real error during development ─────
+      // Production shows a friendly message; DevTools preserves the real cause.
+      const isNotFound = err.code === 'PROFILE_NOT_FOUND';
+      const isNetwork  = err.message === 'Failed to fetch'
+        || err.message?.includes('NetworkError')
+        || err.message?.includes('net::ERR');
+      const isApiUnconfigured = err.code === 'API_NOT_CONFIGURED';
 
+      console.error('[AVN] PROFILE LOAD FAILED', {
+        authenticatedUid: authenticatedUid || '(not signed in)',
+        viewedUid:        viewedUid        || '(none)',
+        documentPath:     viewedUid ? `users/${viewedUid}` : '(unknown)',
+        firebaseCode:     err.code         || '(none)',
+        message:          err.message,
+        isNotFound,
+        isNetwork,
+        isApiUnconfigured,
+      });
+
+      let friendlyMsg = 'This profile is temporarily unavailable.';
+      if (isNetwork)          friendlyMsg = 'Could not connect. Check your connection and try again.';
+      if (isNotFound)         friendlyMsg = 'This profile does not exist.';
+      if (isApiUnconfigured)  friendlyMsg = 'Service not configured. Check your internet connection and try again.';
+
+      // "Try Again" re-runs the full load — not just a cached promise.
+      showError(container, friendlyMsg, () => _doLoad());
+    }
+    }; // end _doLoad
+
+    await _doLoad();
     return () => {};
   }
 });

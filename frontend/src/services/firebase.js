@@ -204,6 +204,16 @@
           }
 
           if (fbUser) {
+            // ── Account-switch guard ──────────────────────────────────────
+            // If a different user just signed in, clear the previous user's
+            // cached state immediately so no stale UID leaks to profile queries.
+            const prevUser = LegendState.get('user');
+            const prevUid  = prevUser?.uid || prevUser?.id || null;
+            if (prevUid && prevUid !== fbUser.uid) {
+              // Clear all user-scoped cached state before loading the new account.
+              LegendState.set('user', null);
+            }
+
             _persistUid(fbUser.uid);
             let user = _mapFbUser(fbUser);
 
@@ -213,6 +223,8 @@
 
             // Then try to load the Firestore role/profile — this updates the user
             // object asynchronously without blocking the initial render.
+            // Also handles backup/older accounts whose Firestore document may not
+            // have all fields — always falls back safely to Auth data.
             try {
               const db = await getFirestore();
               const { doc, getDoc } = await loadModule('firestore');
@@ -223,6 +235,7 @@
                 if (fsData.role && typeof fsData.role === 'string') {
                   updated.role = fsData.role;
                 }
+                // Prefer Firestore username; fall back to Auth displayName / email prefix
                 if (fsData.username) updated.username = fsData.username;
                 if (fsData.profile?.displayName || fsData.profile?.avatarUrl) {
                   updated.profile = {
@@ -231,12 +244,14 @@
                     ...(fsData.profile.avatarUrl   ? { avatarUrl:   fsData.profile.avatarUrl   } : {}),
                   };
                 }
-                // Only update if role/profile actually changed — avoids unnecessary re-renders
-                if (updated.role !== user.role || updated.username !== user.username) {
-                  LegendState.set('user', updated);
-                  callback(updated);
-                }
+                // Always update after Firestore lookup so downstream profile reads
+                // see the complete merged user object (including username from Firestore).
+                LegendState.set('user', updated);
+                callback(updated);
               }
+              // If no Firestore document exists yet, the base Auth user object is
+              // still in state — profile.js will auto-create the document via
+              // UsersAPI.loadProfile() when the profile page renders.
             } catch (_) {
               // Firestore role lookup is best-effort — never block auth
             }
