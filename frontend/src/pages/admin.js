@@ -521,17 +521,24 @@ async function _adminLoadAllVideos() {
 async function renderAdminVideos(container) {
   showLoading(container, 'Loading video library…');
 
-  let videos = [], channels = [], videoError = null, backendStatus = null;
+  let videos = [], channels = [], videoError = null, backendStatus = null, backendHealth = null;
 
-  // Check backend health first (helps surface Render sleep state)
+  // Check backend health first — diagnose the exact Render state
   if (window.LU_CONFIG && window.LU_CONFIG.apiUrl) {
     try {
-      const healthRes = await fetch(
-        `${window.LU_CONFIG.apiUrl}/health`,
-        { signal: AbortSignal.timeout ? AbortSignal.timeout(8000) : new AbortController().signal }
-      ).catch(() => null);
+      const _ac = new AbortController();
+      const _tid = setTimeout(() => _ac.abort(), 12000);
+      const healthRes = await fetch(`${window.LU_CONFIG.apiUrl}/health`, { signal: _ac.signal }).catch(() => null);
+      clearTimeout(_tid);
       if (healthRes) {
-        backendStatus = healthRes.ok ? 'ok' : 'error';
+        if (healthRes.ok) {
+          backendStatus = 'ok';
+          try { backendHealth = await healthRes.json(); } catch (_) {}
+        } else if (healthRes.status === 404) {
+          backendStatus = 'no-server'; // Render x-render-routing: no-server
+        } else {
+          backendStatus = 'error';
+        }
       } else {
         backendStatus = 'unreachable';
       }
@@ -549,14 +556,18 @@ async function renderAdminVideos(container) {
     videoError = err;
   }
 
-  const backendBanner = backendStatus === 'unreachable' ? `
-    <div style="background:rgba(255,165,0,0.08);border:1px solid rgba(255,165,0,0.25);border-radius:10px;padding:14px 16px;margin-bottom:var(--space-lg);display:flex;align-items:center;gap:10px">
-      <span style="font-size:1.2rem">⚠️</span>
+  const _backendUrl = (window.LU_CONFIG && window.LU_CONFIG.apiUrl) || 'https://avenora-backend.onrender.com/api';
+  const backendBanner = (backendStatus === 'unreachable' || backendStatus === 'no-server') ? `
+    <div style="background:rgba(255,51,68,0.08);border:1px solid rgba(255,51,68,0.25);border-radius:10px;padding:14px 16px;margin-bottom:var(--space-lg);display:flex;align-items:center;gap:10px">
+      <span style="font-size:1.2rem">🔴</span>
       <span>
-        <strong style="color:var(--neon-orange)">AVENORA backend is temporarily unavailable.</strong>
-        The Render service may be starting up (cold start takes ~30 s on the free plan).
-        Video data is loaded from Supabase directly. Delete operations require the backend — please retry in a moment.
-        <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="adminSection('videos')">🔄 Retry</button>
+        <strong style="color:var(--neon-red)">AVENORA backend is not running.</strong>
+        ${backendStatus === 'no-server'
+          ? 'Render returned <code>x-render-routing: no-server</code> — the backend process has crashed or the service is suspended. <strong>Go to the Render dashboard and manually deploy the avenora-backend service.</strong>'
+          : 'Cannot reach the backend server.'
+        }
+        <br><small style="color:var(--text-muted)">URL: ${escapeHtml(_backendUrl)}</small>
+        <button class="btn btn-ghost btn-sm" style="margin-left:8px" onclick="adminSection('videos')">🔄 Check Again</button>
       </span>
     </div>
   ` : '';
@@ -589,12 +600,13 @@ async function renderAdminVideos(container) {
       </div>
       <div class="card" style="text-align:center">
         <div style="display:flex;align-items:center;justify-content:center;gap:6px">
-          <span style="width:8px;height:8px;border-radius:50%;background:${backendStatus === 'ok' ? 'var(--neon-green)' : backendStatus === 'unreachable' ? 'var(--neon-orange)' : 'var(--text-muted)'}"></span>
+          <span style="width:8px;height:8px;border-radius:50%;background:${backendStatus === 'ok' ? 'var(--neon-green)' : (backendStatus === 'no-server' || backendStatus === 'unreachable') ? '#ff3333' : 'var(--text-muted)'}"></span>
           <span style="font-size:0.82rem;color:var(--text-secondary)">
-            ${backendStatus === 'ok' ? 'Backend online' : backendStatus === 'unreachable' ? 'Backend offline' : 'Backend status unknown'}
+            ${backendStatus === 'ok' ? 'Backend online' : backendStatus === 'no-server' ? 'Backend offline (no-server)' : backendStatus === 'unreachable' ? 'Backend unreachable' : 'Backend status unknown'}
           </span>
         </div>
         <div style="font-size:0.72rem;color:var(--text-muted);margin-top:2px">avenora-backend.onrender.com</div>
+        ${backendHealth ? `<div style="font-size:0.68rem;color:var(--text-muted);margin-top:2px">v${escapeHtml(backendHealth.version || '?')} · deployed ${escapeHtml(backendHealth.deployedAt || '?')}</div>` : ''}
       </div>
     </div>
 
@@ -733,8 +745,8 @@ window.adminDeleteVideo = async function(videoId) {
   const btn = document.getElementById(`admin-del-btn-${videoId}`);
   if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
 
-  // Show a non-dismissible in-progress toast so the founder knows it's working
-  // (especially important when Render is cold-starting and takes ~30 s)
+  // Show a non-dismissible in-progress toast so the founder knows it's working.
+  // Auto-removes after 45 s to prevent it staying permanently if the backend is dead.
   const _delToastId = 'del-toast-' + videoId;
   (function _showDelProgress() {
     let existing = document.getElementById(_delToastId);
@@ -746,8 +758,9 @@ window.adminDeleteVideo = async function(videoId) {
     const t = document.createElement('div');
     t.id = _delToastId;
     t.className = 'toast info';
-    t.textContent = 'Deleting… (contacting backend — up to 30s)';
+    t.textContent = 'Deleting… (server may take up to 30s)';
     container.appendChild(t);
+    setTimeout(() => { const el = document.getElementById(_delToastId); if (el) el.remove(); }, 45000);
   })();
 
   const _removeDelToast = () => {

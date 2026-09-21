@@ -203,20 +203,31 @@ app.get('/api/themes/active', async (req, res) => {
 //   GET /health      — root-level ping for Render health checks and uptime monitors
 //   GET /api/health  — used by the frontend HealthAPI (BASE_URL already ends in /api)
 const _healthHandler = (req, res) => {
+  // Check Firestore init status without throwing
+  let firestoreOk = false;
+  try {
+    const { getDb } = require('./config/firestore');
+    firestoreOk = !!getDb();
+  } catch (_) {}
+
   res.json({
     ok: true,
     status: 'ok',
     service: 'avenora-backend',
-    version: '1.1.0',
+    version: '1.2.0',
+    deployedAt: '2026-09-21',
     timestamp: new Date().toISOString(),
     // Safe diagnostics: presence checks only — no secret values returned
     config: {
-      mongodbConfigured:     !!(process.env.MONGODB_URI && !process.env.MONGODB_URI.includes('localhost')),
-      firebaseProjectId:     process.env.FIREBASE_PROJECT_ID || null,
-      firebaseApiKeyPresent: !!(process.env.FIREBASE_WEB_API_KEY),
-      founderEmailConfigured: !!(process.env.FOUNDER_EMAIL),
-      supabaseConfigured:    !!(process.env.SUPABASE_URL && !process.env.SUPABASE_URL.includes('your-project')),
-      frontendUrl:           process.env.FRONTEND_URL || null,
+      firebaseProjectId:          process.env.FIREBASE_PROJECT_ID || null,
+      firebaseApiKeyPresent:      !!(process.env.FIREBASE_WEB_API_KEY),
+      firebaseServiceAccountSet:  !!(process.env.FIREBASE_SERVICE_ACCOUNT_JSON),
+      firestoreInitialised:       firestoreOk,
+      founderEmailConfigured:     !!(process.env.FOUNDER_EMAIL),
+      supabaseConfigured:         !!(process.env.SUPABASE_URL && !process.env.SUPABASE_URL.includes('your-project')),
+      supabaseKeyPresent:         !!(process.env.SUPABASE_SERVICE_ROLE_KEY && !process.env.SUPABASE_SERVICE_ROLE_KEY.includes('your-service-role')),
+      frontendUrl:                process.env.FRONTEND_URL || null,
+      nodeEnv:                    process.env.NODE_ENV || 'not-set',
     },
   });
 };

@@ -27,6 +27,7 @@ const logger = require('../utils/logger');
 
 let _db   = null;
 let _app  = null;
+let _initFailed = false; // set to true when credentials are unavailable — avoids repeated retries
 
 function _initAdmin() {
   if (_app) return _app;
@@ -62,9 +63,19 @@ function _initAdmin() {
   }
 
   // Option 3: ADC fallback (works on Cloud Run / GCE / local with gcloud auth)
+  // Wrap in try/catch — on Render free tier (without GCP metadata service) this
+  // throws "Could not load the default credentials" and must NOT crash the process.
   if (!credential) {
-    credential = admin.credential.applicationDefault();
-    logger.info('[Firestore] Attempting application default credentials (ADC)');
+    try {
+      credential = admin.credential.applicationDefault();
+      logger.info('[Firestore] Attempting application default credentials (ADC)');
+    } catch (adcErr) {
+      logger.warn('[Firestore] ADC not available on this host: ' + adcErr.message);
+      logger.warn('[Firestore] Set FIREBASE_SERVICE_ACCOUNT_JSON in Render dashboard to enable Firestore.');
+      // No credential available — Firebase Admin will not be initialised.
+      // Channel engine, media-save, etc. will degrade gracefully (return 503).
+      return null;
+    }
   }
 
   _app = admin.initializeApp({
@@ -84,9 +95,17 @@ function _initAdmin() {
 /**
  * Returns the Firestore db instance.
  * Initialises the Admin SDK on first call.
+ * Returns null if credentials are unavailable (callers must handle null gracefully).
  */
 function getDb() {
-  if (!_db) _initAdmin();
+  if (_initFailed) return null;
+  if (!_db) {
+    const result = _initAdmin();
+    if (result === null) {
+      _initFailed = true;
+      return null;
+    }
+  }
   return _db;
 }
 
