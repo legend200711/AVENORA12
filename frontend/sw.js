@@ -47,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v30';
-const CACHE_NAME  = 'avenora-cache-v30';
+const SW_VERSION  = 'v31';
+const CACHE_NAME  = 'avenora-cache-v31';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -83,6 +83,8 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v26', // v26 — evict: fix compat SDK calls in app.js + music.js; visibility passthrough
   'avenora-cache-v27', // v27 — evict: remove snx-gifts/cohost refs, fix channel queue loop, live pages deployed
   'avenora-cache-v28', // v28 — evict: channel upload→queue wiring, direct upload buttons, idle advance fix
+  'avenora-cache-v29', // v29 — (unused, evict for safety)
+  'avenora-cache-v30', // v30 — evict: fix video-delete key error, channel/userMedia Firestore rules, upload progress
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',

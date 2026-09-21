@@ -799,11 +799,18 @@
         throw new Error('Delete failed after multiple retries. Check your connection and try again.');
       }
 
-      // ── Path 2: no backend configured — direct Supabase DELETE for UUID rows.
-      //   Uses a direct Supabase REST DELETE with the anon key.
-      //   This works only if Supabase RLS allows the authenticated user to delete
-      //   their own rows (or if the table has permissive delete policies).
+      // ── Path 2: no backend configured — route UUID deletes through the
+      //   video-delete Supabase Edge Function, which verifies the Firebase
+      //   ID token via identitytoolkit.googleapis.com (RS256).
+      //
+      //   WHY: Supabase PostgREST only accepts Supabase JWTs (HS256 signed
+      //   with the project's JWT secret). Passing a Firebase ID token (RS256,
+      //   signed by Google) directly to PostgREST fails with:
+      //     "No suitable key or wrong key type"
+      //   The video-delete Edge Function already handles Firebase token
+      //   verification correctly — use it.
       if (_isUUID(sid)) {
+        // Get a fresh Firebase ID token for the Edge Function
         let token = null;
         if (window.AvenoraFirebase?.Auth) {
           token = await window.AvenoraFirebase.Auth.getIdToken().catch(() => null);
@@ -816,30 +823,29 @@
         }
         if (!token) throw new Error('Not authenticated — please sign in before deleting a video.');
 
+        const edgeFnUrl = `${SUPABASE_PROJECT_URL}/functions/v1/video-delete?id=${encodeURIComponent(sid)}`;
         let res;
         try {
-          res = await fetch(
-            `${SUPABASE_REST}/music_library?id=eq.${encodeURIComponent(sid)}`,
-            {
-              method: 'DELETE',
-              headers: {
-                'apikey':        SUPABASE_ANON_KEY,
-                'Authorization': `Bearer ${token}`,
-                'Content-Type':  'application/json',
-                'Prefer':        'return=minimal',
-              },
-            }
-          );
+          res = await fetch(edgeFnUrl, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+              'Content-Type':  'application/json',
+            },
+          });
         } catch (networkErr) {
-          console.error('[AVN] Supabase direct video delete network error:', networkErr);
+          console.error('[AVN] video-delete Edge Function network error:', networkErr);
           throw new Error('Network error while deleting video. Check your connection.');
         }
+        const edgeData = await res.json().catch(() => ({}));
         if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          const msg = errData.message || errData.hint || `Delete failed (HTTP ${res.status})`;
-          console.error('[AVN] Supabase direct video delete error:', { status: res.status, errData });
-          throw new Error(msg);
+          const msg = edgeData.message || `Delete failed (HTTP ${res.status})`;
+          console.error('[AVN] video-delete Edge Function error:', { status: res.status, edgeData });
+          const err = new Error(msg);
+          err.status = res.status;
+          throw err;
         }
+        console.info('[AVN] Video deleted via Edge Function:', sid);
         return { success: true };
       }
 

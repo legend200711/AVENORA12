@@ -1366,12 +1366,26 @@ function _chsSetCardComplete(id, msg) {
   setTimeout(() => { const c = _chsEl('chs-prog-card-' + id); if (c) c.remove(); }, 4000);
 }
 
-function _chsSetCardError(id, msg, retryFn) {
+/**
+ * Mark a progress card as failed without resetting the upload percentage.
+ * @param {string} id       - card UID
+ * @param {string} msg      - error message to display
+ * @param {string} retryFn  - stringified async function for the retry button
+ * @param {number} [uploadPct] - percentage to hold at (default: keep current bar width)
+ */
+function _chsSetCardError(id, msg, retryFn, uploadPct) {
   const card = _chsEl('chs-prog-card-' + id);
   if (card) card.classList.add('chs-upload-card-error');
-  _chsUpdateProgress(id, 0, '❌ ' + msg);
+  // Preserve the upload percentage — only update the bar if an explicit value is given
   const fill = _chsEl('chs-prog-fill-' + id);
-  if (fill) fill.style.background = 'var(--neon-red, #ff3333)';
+  if (fill) {
+    if (typeof uploadPct === 'number') fill.style.width = uploadPct + '%';
+    fill.style.background = 'var(--neon-red, #ff3333)';
+  }
+  const pctEl = _chsEl('chs-prog-pct-' + id);
+  if (pctEl && typeof uploadPct === 'number') pctEl.textContent = uploadPct + '%';
+  const statEl = _chsEl('chs-prog-status-' + id);
+  if (statEl) statEl.textContent = '❌ ' + msg;
   const actEl = _chsEl('chs-prog-actions-' + id);
   if (actEl && retryFn) {
     actEl.style.display = '';
@@ -1491,7 +1505,7 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
 
   try {
     if (!window.AvenoraStorage) throw new Error('Storage not available — refresh and try again');
-    _chsUpdateProgress(uid, 5, 'Uploading to storage…');
+    _chsUpdateProgress(uid, 5, 'Uploading file: 0%…');
 
     console.info('[ChannelStudio] Starting audio upload:', {
       file: file.name,
@@ -1500,14 +1514,16 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
     });
 
     const result = await window.AvenoraStorage.upload('audio', file, pct => {
-      _chsUpdateProgress(uid, pct, `Uploading… ${pct}%`);
+      _chsUpdateProgress(uid, pct, `Uploading file: ${pct}%`);
     });
 
-    _chsUpdateProgress(uid, 95, 'Saving to library…');
+    // File reached Supabase Storage — show 100% for the upload stage
+    _chsUpdateProgress(uid, 100, 'Upload complete — saving media record…');
 
     const titleVal = (_chsEl('chs-prog-title-' + uid)?.value || file.name.replace(/\.[^.]+$/, '')).trim();
 
     let saveResp;
+    let saveFailed = false;
     try {
       saveResp = await _chsSaveMediaRecord({
         type: 'audio',
@@ -1518,20 +1534,33 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
         mimeType: file.type,
       });
     } catch (saveErr) {
+      saveFailed = true;
       console.warn('[ChannelStudio] Firestore media save failed:', saveErr.message);
       console.warn('[ChannelStudio] File WAS uploaded to Storage:', result.url);
-      const localId = 'local_' + Date.now();
-      saveResp = {
-        id: localId,
-        item: {
-          id: localId, type: 'audio', title: titleVal,
-          url: result.url, storagePath: result.storagePath,
-          fileSize: file.size, mimeType: file.type,
-          duration: 0, status: 'ready',
-          createdAt: new Date().toISOString(), _localOnly: true,
-        },
-      };
-      _chsToast(`⚠ File uploaded but save failed — added locally. Error: ${saveErr.message}`, 'error');
+      // Preserve the uploaded file reference so a retry can re-attempt without re-uploading
+      const pendingId = 'pending_' + uid;
+      window._chsPendingMediaSave = window._chsPendingMediaSave || {};
+      window._chsPendingMediaSave[pendingId] = { result, titleVal, uid, file, addToChannel };
+      const retrySaveFn = `async function(){
+        const ps = window._chsPendingMediaSave && window._chsPendingMediaSave['${pendingId}'];
+        if (!ps) { _chsToast('Retry data not found — please re-select the file.', 'error'); return; }
+        try {
+          _chsUpdateProgress('${uid}', 100, 'Retrying media save…');
+          const sr = await _chsSaveMediaRecord({ type:'audio', title:ps.titleVal, url:ps.result.url, storagePath:ps.result.storagePath, fileSize:ps.file.size, mimeType:ps.file.type });
+          delete window._chsPendingMediaSave['${pendingId}'];
+          _chsSetCardComplete('${uid}', '✓ FILE UPLOADED\\n✓ MEDIA RECORD SAVED');
+          _chsToast('🎵 Media record saved.');
+          await chsLoadMyMedia();
+        } catch(e2) { _chsToast('Retry failed: ' + e2.message, 'error'); }
+      }`;
+      _chsSetCardError(uid,
+        `File uploaded successfully. Media save failed: ${saveErr.message}\n\nStorage URL: ${result.url}`,
+        retrySaveFn,
+        100  // preserve 100% upload progress
+      );
+      _chsToast(`⚠ File uploaded to Storage but media save failed. Error: ${saveErr.message}`, 'error');
+      if (window._chsAudioFiles) delete window._chsAudioFiles[uid];
+      return;
     }
 
     const savedItem = saveResp.item || {
@@ -1540,11 +1569,11 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
     };
 
     if (addToChannel) {
-      _chsUpdateProgress(uid, 98, 'Adding to channel…');
+      _chsUpdateProgress(uid, 100, 'Media saved — adding to channel…');
       try {
         const programItem = _chsMediaToProgramItem(savedItem);
         await _chsAddToSubcollection('programming', programItem);
-        _chsSetCardComplete(uid, `✓ MUSIC UPLOADED\n✓ ADDED TO 24-HOUR CHANNEL`);
+        _chsSetCardComplete(uid, `✓ FILE UPLOADED\n✓ MEDIA RECORD SAVED\n✓ ADDED TO 24-HOUR CHANNEL`);
         _chsToast(`🎵 "${titleVal}" added to 24-Hour Channel`);
         if (window._chsAudioFiles) delete window._chsAudioFiles[uid];
         await chsLoadMyMedia();
@@ -1559,13 +1588,14 @@ window.chsDoAudioUpload = async function(uid, addToChannel) {
             const pi = _chsMediaToProgramItem(si);
             await _chsAddToSubcollection('programming', pi);
             delete window._chsPendingChannelAdd['${uid}'];
-            _chsSetCardComplete('${uid}', '✓ MUSIC UPLOADED\\n✓ ADDED TO 24-HOUR CHANNEL');
+            _chsSetCardComplete('${uid}', '✓ FILE UPLOADED\\n✓ MEDIA RECORD SAVED\\n✓ ADDED TO 24-HOUR CHANNEL');
             _chsToast('🎵 Added to 24-Hour Channel');
             await chsLoadProgramming();
           } catch(e2) { _chsToast('Retry failed: ' + e2.message, 'error'); }
         }`;
-        _chsSetCardError(uid, `✓ Uploaded to My Media\n⚠ Could not add to channel: ${qErr.message}`, retryFn);
-        _chsToast(`Audio uploaded but channel add failed: ${qErr.message}`, 'error');
+        // Preserve the 100% upload bar — only the channel insertion failed
+        _chsSetCardError(uid, `Media saved successfully. Could not add to channel: ${qErr.message}`, retryFn, 100);
+        _chsToast(`Media saved. Channel add failed: ${qErr.message}`, 'error');
         if (window._chsAudioFiles) delete window._chsAudioFiles[uid];
         await chsLoadMyMedia();
       }
