@@ -233,11 +233,35 @@ router.get('/status', authenticate, (req, res, next) => {
  */
 router.post('/start', authenticate, controlLimiter, async (req, res, next) => {
   if (!isChannelAdmin(req.user)) return next(new ForbiddenError('Admin only'));
-  const ch = getChannel();
-  await ch.loadProgramming();
-  const result = ch.start();
-  logger.info(`[Channel] Started by ${req.user.id}`);
-  res.json({ success: true, ...result, status: ch.getStatus() });
+  try {
+    const ch = getChannel();
+
+    // Always reload from Firestore before starting so the engine has the latest queue.
+    await ch.loadProgramming();
+
+    // Refuse to start with an empty queue — give a clear actionable error.
+    if (ch.programQueue.length === 0 && ch.fallbackQueue.length === 0) {
+      logger.warn(`[Channel] Start refused — no programming or fallback content (user: ${req.user.id})`);
+      return res.status(422).json({
+        success: false,
+        error: 'Channel cannot start: No playable media found in the programming queue or fallback queue. Add at least one item in Channel Studio → My Media → "+ Queue".',
+      });
+    }
+
+    const result = ch.start();
+    logger.info(`[Channel] Started by ${req.user.id} — queue: ${ch.programQueue.length} items, fallback: ${ch.fallbackQueue.length} items`);
+
+    // Confirm the engine actually selected a current item before reporting success.
+    // _advance() is synchronous, so currentItem is set by the time start() returns.
+    const status = ch.getStatus();
+    if (!status.currentItem) {
+      logger.warn('[Channel] Engine started but no currentItem selected — possible queue issue');
+    }
+
+    res.json({ success: true, ...result, status });
+  } catch (err) {
+    next(err);
+  }
 });
 
 /**

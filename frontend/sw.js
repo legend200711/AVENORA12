@@ -1,5 +1,5 @@
 /**
- * AVENORA — Service Worker v30
+ * AVENORA — Service Worker v32
  *
  * Deployment-aware: detects GitHub Pages vs Firebase Hosting automatically.
  *   GitHub Pages:      https://legend200711.github.io/AVENORA12/  → BASE = /AVENORA12
@@ -47,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v31';
-const CACHE_NAME  = 'avenora-cache-v31';
+const SW_VERSION  = 'v32';
+const CACHE_NAME  = 'avenora-cache-v32';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -85,6 +85,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v28', // v28 — evict: channel upload→queue wiring, direct upload buttons, idle advance fix
   'avenora-cache-v29', // v29 — (unused, evict for safety)
   'avenora-cache-v30', // v30 — evict: fix video-delete key error, channel/userMedia Firestore rules, upload progress
+  'avenora-cache-v31', // v31 — evict: channel start false-success, queue count, viewer audio loop
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',

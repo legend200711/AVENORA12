@@ -919,11 +919,25 @@ function _chPlaySingleAudio(url, elapsed, duration) {
 }
 
 function _chOnSingleAudioEnded() {
-  // Single-track item finished — show standby and wait for server to publish next item.
+  // Single-track item finished — clear playback state and immediately re-read
+  // channelNowPlaying so we get the next item without waiting for the next
+  // heartbeat or a manual refresh.
   _chSetPlayIcon(false);
   _chStopWaveform();
   _ch.audioPlaying = false;
   _ch._audioUrl    = null;
+
+  // If there is an active Firestore subscription it will push the next state.
+  // If not (REST-poll mode), trigger a poll immediately.
+  if (!_ch.unsub && _ch.db && _ch.fsModule) {
+    // Re-subscribe: will receive the updated doc (engine already advanced).
+    _chSubscribeNowPlaying();
+  } else if (!_ch.unsub) {
+    // No Firestore at all — poll REST
+    clearTimeout(_ch.pollTimer);
+    _ch.pollTimer = setTimeout(_chPollNowPlaying, 500);
+  }
+  // Show standby briefly while the next state arrives
   _chShowState('standby');
   _chSetText('ch-np-title', 'Loading next program…');
 }

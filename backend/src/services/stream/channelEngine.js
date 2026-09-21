@@ -550,6 +550,10 @@ class ChannelEngine {
       remaining,
       duration:       dur,
       serverTime:     Date.now(),
+      // Queue / fallback counts — published so the Studio status card
+      // can show accurate counts without querying sub-collections separately.
+      queueLength:    this.programQueue.length,
+      fallbackLength: this.fallbackQueue.length,
       // Next item
       nextType:       nextItem?.type  || null,
       nextTitle:      nextItem?.title || null,
@@ -611,7 +615,8 @@ async function initChannel() {
     return ch;
   }
 
-  // Load channel config
+  // Load channel config — also read running/status from the channel doc
+  let channelDocRunning = null; // null = doc not found; true/false = explicit intent
   try {
     const snap = await db.collection('channel').doc(ch.channelId).get();
     if (!snap.exists) {
@@ -621,9 +626,16 @@ async function initChannel() {
         name:        'AVENORA 24-HOUR CHANNEL',
         description: 'The always-on AVENORA channel',
         status:      STATUS.OFFLINE,
+        running:     false,
         createdAt:   Date.now(),
       });
       logger.info('[ChannelEngine] Created channel document in Firestore');
+      channelDocRunning = false;
+    } else {
+      const d = snap.data();
+      // Respect an explicit admin stop: if the doc says running:false don't auto-start
+      channelDocRunning = d.running === true;
+      logger.info(`[ChannelEngine] Channel doc found — running:${channelDocRunning}, status:${d.status}`);
     }
   } catch (e) {
     logger.warn('[ChannelEngine] Could not read/create channel doc: ' + e.message);
@@ -631,6 +643,7 @@ async function initChannel() {
 
   // Load programming
   await ch.loadProgramming();
+  logger.info(`[ChannelEngine] Loaded — programQueue:${ch.programQueue.length}, fallbackQueue:${ch.fallbackQueue.length}`);
 
   // Restore state from Firestore (check channelNowPlaying for last known state)
   try {
@@ -639,9 +652,8 @@ async function initChannel() {
       const d = np.data();
       if (d.running && d.status !== STATUS.OFFLINE) {
         logger.info(`[ChannelEngine] Recovering running channel — last status: ${d.status}`);
-        // Restore will pick up from the correct position
         ch.isRunning   = true;
-        ch.status      = d.status === STATUS.LIVE ? STATUS.TRANSITIONING : d.status; // can't restore live safely
+        ch.status      = d.status === STATUS.LIVE ? STATUS.TRANSITIONING : d.status;
         ch.itemStartedAt = d.startedAt || Date.now();
         // Find the current item in programming
         if (d.mediaId) {
@@ -654,7 +666,6 @@ async function initChannel() {
               ch.currentItem = item;
               logger.info(`[ChannelEngine] Restored item "${item.title}", ${remaining}s remaining`);
               ch._startHeartbeat();
-              // Schedule advance for remaining duration
               clearTimeout(ch.itemTimer);
               ch.itemTimer = setTimeout(() => ch._advance(), remaining * 1000);
               await ch._publishState();
@@ -662,13 +673,26 @@ async function initChannel() {
             }
           }
         }
+        // Recovery incomplete — item expired or not found; just start fresh from queue
+        logger.info('[ChannelEngine] Recovery: current item expired or not found — advancing from queue');
+        ch.start();
+        return ch;
       }
     }
   } catch (e) {
     logger.warn('[ChannelEngine] Recovery state read failed: ' + e.message);
   }
 
-  // Fresh start
+  // Respect explicit channel stop: if the admin stopped the channel (running:false),
+  // do NOT auto-start on server restart. The channel stays OFFLINE until START is pressed.
+  if (channelDocRunning === false) {
+    logger.info('[ChannelEngine] Channel is OFFLINE (admin stopped) — waiting for manual start');
+    // Publish the offline state so viewers see OFFLINE immediately
+    await ch._publishState();
+    return ch;
+  }
+
+  // channelDocRunning is true or null (first run with content) — start normally
   ch.start();
   return ch;
 }
