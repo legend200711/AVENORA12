@@ -347,6 +347,8 @@ async function _chInit() {
     clearTimeout(_ch.pollTimer);
     clearTimeout(_ch._retryTimer);
     clearTimeout(_ch._loadingTimeoutId);
+    clearTimeout(_chSchedule.advanceTimer);
+    _chSchedule.advanceTimer = null;
     _ch._loadingTimeoutId = null;
     // Stop any YouTube embed
     const ytFrame = document.getElementById('ch-youtube-frame');
@@ -494,6 +496,104 @@ function _chHideReconnectBanner() {
   }
 }
 
+// ── Client-side schedule engine (viewer) ─────────────────────────────────
+// When channelNowPlaying contains a channelQueue + channelStartedAt,
+// the viewer computes the current programme position deterministically
+// without waiting for the next Firestore heartbeat.
+const _chSchedule = {
+  queue:            [],
+  channelStartedAt: 0,
+  advanceTimer:     null,
+};
+
+const _CH_DEFAULT_DUR_S = 180; // 3-min fallback for items with no duration
+
+function _chScheduleDuration(item) {
+  if (item.duration && item.duration > 0) return item.duration;
+  if (item.type === 'SLIDESHOW' && item.images && item.perImageSecs) {
+    return item.images.length * item.perImageSecs;
+  }
+  return _CH_DEFAULT_DUR_S;
+}
+
+/**
+ * Compute the current programme position from the schedule anchor.
+ * Returns { idx, item, nextItem, elapsed, remaining, duration } or null.
+ */
+function _chSchedulePosition(queue, channelStartedAt) {
+  if (!queue || !queue.length || !channelStartedAt) return null;
+  const durations     = queue.map(_chScheduleDuration);
+  const total         = durations.reduce((s, d) => s + d, 0);
+  if (total <= 0) return null;
+  const nowSec        = (Date.now() - channelStartedAt) / 1000;
+  const cycleElapsed  = ((nowSec % total) + total) % total; // always positive
+  let acc = 0;
+  let idx = 0;
+  for (let i = 0; i < durations.length; i++) {
+    if (cycleElapsed < acc + durations[i]) { idx = i; break; }
+    acc += durations[i];
+  }
+  const elapsed   = cycleElapsed - acc;
+  const duration  = durations[idx];
+  const remaining = Math.max(0, duration - elapsed);
+  const nextIdx   = (idx + 1) % queue.length;
+  return { idx, item: queue[idx], nextItem: queue[nextIdx], elapsed: Math.floor(elapsed), remaining: Math.floor(remaining), duration };
+}
+
+/** Schedule a client-side advance timer to switch songs locally. */
+function _chScheduleClientAdvance(queue, channelStartedAt) {
+  clearTimeout(_chSchedule.advanceTimer);
+  const pos = _chSchedulePosition(queue, channelStartedAt);
+  if (!pos || pos.remaining <= 0) {
+    _chSchedule.advanceTimer = setTimeout(() => _chClientAdvance(queue, channelStartedAt), 200);
+    return;
+  }
+  _chSchedule.advanceTimer = setTimeout(
+    () => _chClientAdvance(queue, channelStartedAt),
+    pos.remaining * 1000 + 300
+  );
+}
+
+/** Client advance: recompute position and switch to the next item locally. */
+function _chClientAdvance(queue, channelStartedAt) {
+  const pos = _chSchedulePosition(queue, channelStartedAt);
+  if (!pos) return;
+  const item = pos.item;
+  const type = (item.type || 'MUSIC').toUpperCase();
+
+  _ch.status      = 'PLAYING';
+  _ch.programType = type;
+  _ch._audioUrl   = null; // force reload
+
+  // Update now-playing UI
+  _chSetText('ch-np-title',  item.title  || '—');
+  _chSetText('ch-np-artist', item.artist || '');
+  _chSetText('ch-np-type',   _chTypeBadge(type));
+  _chUpdateInfoProgress(pos.elapsed, pos.duration);
+
+  if (pos.nextItem) {
+    const ns = document.getElementById('ch-next-section');
+    if (ns) ns.style.display = '';
+    _chSetText('ch-next-type',  _chTypeBadge((pos.nextItem.type || '').toUpperCase()));
+    _chSetText('ch-next-title', pos.nextItem.title || '—');
+  }
+
+  // Play the item
+  const sourceType = (item.sourceType || 'direct').toLowerCase();
+  if (sourceType === 'youtube' && item.youtubeId) {
+    _chShowYouTube({ ...item, programType: type, programTitle: item.title, elapsed: pos.elapsed, duration: pos.duration });
+  } else if (type === 'MUSIC' || type === 'AUDIO') {
+    if (item.mediaUrl) {
+      _chPlaySingleAudio(item.mediaUrl, pos.elapsed, pos.duration);
+    }
+  } else if (type === 'VIDEO') {
+    _chShowVideo({ ...item, programType: type, programTitle: item.title, mediaUrl: item.mediaUrl, elapsed: pos.elapsed, duration: pos.duration });
+  }
+
+  // Schedule the next advance
+  _chScheduleClientAdvance(queue, channelStartedAt);
+}
+
 // ── Render state ──────────────────────────────────────────────────────────
 function _chRenderState(ch) {
   if (!ch) return;
@@ -553,16 +653,34 @@ function _chRenderState(ch) {
     }
   }
 
-  // Track progress
-  _ch.itemStartedAt = ch.startedAt || 0;
-  _ch.itemDuration  = ch.duration  || 0;
-  _chUpdateInfoProgress(ch.elapsed || 0, ch.duration || 0);
+  // ── If Firestore doc includes the full channel schedule, activate the
+  //    client-side advance engine so songs loop independently of heartbeats.
+  if (ch.channelQueue && ch.channelQueue.length > 0 && ch.channelStartedAt) {
+    _chSchedule.queue            = ch.channelQueue;
+    _chSchedule.channelStartedAt = ch.channelStartedAt;
+    // Recompute elapsed from anchor (more accurate than server-reported elapsed)
+    const pos = _chSchedulePosition(ch.channelQueue, ch.channelStartedAt);
+    if (pos) {
+      _ch.itemStartedAt = Date.now() - pos.elapsed * 1000;
+      _ch.itemDuration  = pos.duration;
+      _chUpdateInfoProgress(pos.elapsed, pos.duration);
+      // Override server-reported elapsed with computed value for accurate seeking
+      ch = { ...ch, elapsed: pos.elapsed, remaining: pos.remaining, duration: pos.duration };
+    }
+    // (Re)schedule the client advance timer
+    _chScheduleClientAdvance(ch.channelQueue, ch.channelStartedAt);
+  } else {
+    _ch.itemStartedAt = ch.startedAt || 0;
+    _ch.itemDuration  = ch.duration  || 0;
+    _chUpdateInfoProgress(ch.elapsed || 0, ch.duration || 0);
+  }
 
   // ── Route to correct player ───────────────────────────────────────────
 
   if (status === 'OFFLINE') {
     _chShowState('offline');
     _chStopAudio();
+    clearTimeout(_chSchedule.advanceTimer);
     return;
   }
 
@@ -919,25 +1037,30 @@ function _chPlaySingleAudio(url, elapsed, duration) {
 }
 
 function _chOnSingleAudioEnded() {
-  // Single-track item finished — clear playback state and immediately re-read
-  // channelNowPlaying so we get the next item without waiting for the next
-  // heartbeat or a manual refresh.
   _chSetPlayIcon(false);
   _chStopWaveform();
   _ch.audioPlaying = false;
   _ch._audioUrl    = null;
 
-  // If there is an active Firestore subscription it will push the next state.
-  // If not (REST-poll mode), trigger a poll immediately.
+  // If we have a local client schedule, advance immediately without waiting
+  // for a Firestore heartbeat — this gives gapless advancement.
+  if (_chSchedule.queue.length > 0 && _chSchedule.channelStartedAt) {
+    // Trigger the client advance timer immediately
+    clearTimeout(_chSchedule.advanceTimer);
+    _chSchedule.advanceTimer = setTimeout(
+      () => _chClientAdvance(_chSchedule.queue, _chSchedule.channelStartedAt),
+      200
+    );
+    return;
+  }
+
+  // Fallback: wait for Firestore / REST update
   if (!_ch.unsub && _ch.db && _ch.fsModule) {
-    // Re-subscribe: will receive the updated doc (engine already advanced).
     _chSubscribeNowPlaying();
   } else if (!_ch.unsub) {
-    // No Firestore at all — poll REST
     clearTimeout(_ch.pollTimer);
     _ch.pollTimer = setTimeout(_chPollNowPlaying, 500);
   }
-  // Show standby briefly while the next state arrives
   _chShowState('standby');
   _chSetText('ch-np-title', 'Loading next program…');
 }

@@ -699,6 +699,12 @@ function _chsClearAll() {
   _chsState.liveHeartbeatTimer = null;
   clearTimeout(_chsState.retryTimer);
   _chsState.retryTimer = null;
+  // IMPORTANT: do NOT stop the engine on page navigation — the channel must
+  // keep running even when the founder navigates away from Channel Studio.
+  // The engine's timers are kept alive as long as the SPA tab is open.
+  // Clearing them here would stop the heartbeat while the tab is still open
+  // but viewing a different page. Instead only clear the UI poll timer.
+  // Engine is stopped explicitly only by chsStopChannel().
 }
 
 // ── Firebase/Supabase connectivity check ─────────────────────────────────
@@ -885,96 +891,295 @@ function _chsRenderStatus(st) {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+//  FRONTEND CHANNEL ENGINE
+//  Runs entirely in the founder's browser. Writes shared schedule state to
+//  Firestore so every viewer sees the same programme position.
+//  Architecture: timestamp-based schedule — position is derived from
+//  (channelStartedAt + queue item durations), not from a running timer.
+//  This means a viewer joining later can compute the correct position
+//  without needing the founder to be online.
+// ══════════════════════════════════════════════════════════════════════════
+
+const _chsEngine = {
+  running:       false,
+  queue:         [],        // ordered array of programme items
+  queueIndex:    0,         // index of currently playing item
+  startedAt:     0,         // Date.now() when current item started
+  heartbeatTimer: null,     // setInterval for periodic Firestore updates
+  advanceTimer:   null,     // setTimeout for item advancement
+};
+
+const _CHS_HEARTBEAT_MS  = 10_000;  // publish state every 10 s
+const _CHS_DEFAULT_DUR_S = 180;     // 3 min fallback if duration unknown
+
+/** Derive effective duration for a queue item (seconds). */
+function _chsItemDuration(item) {
+  if (item.duration && item.duration > 0) return item.duration;
+  if (item.type === 'SLIDESHOW' && item.images && item.perImageSecs) {
+    return item.images.length * item.perImageSecs;
+  }
+  return _CHS_DEFAULT_DUR_S;
+}
+
+/** Compute which item is currently playing and how far in, from a start timestamp. */
+function _chsComputePosition(queue, channelStartedAt) {
+  if (!queue.length) return null;
+  const nowMs = Date.now();
+  const totalElapsedSec = (nowMs - channelStartedAt) / 1000;
+  // Build cumulative durations
+  let acc = 0;
+  const durations = queue.map(item => _chsItemDuration(item));
+  const total = durations.reduce((s, d) => s + d, 0);
+  if (total <= 0) return null;
+  // Wrap elapsed into the total cycle length
+  const cycleElapsed = totalElapsedSec % total;
+  let idx = 0;
+  let itemStart = 0;
+  for (let i = 0; i < durations.length; i++) {
+    if (cycleElapsed < acc + durations[i]) {
+      idx = i;
+      itemStart = acc;
+      break;
+    }
+    acc += durations[i];
+  }
+  const itemElapsed  = cycleElapsed - itemStart;
+  const itemDuration = durations[idx];
+  const itemRemaining = Math.max(0, itemDuration - itemElapsed);
+  const nextIdx = (idx + 1) % queue.length;
+  return {
+    idx,
+    item:          queue[idx],
+    nextItem:      queue[nextIdx],
+    itemStartedAt: nowMs - itemElapsed * 1000,
+    elapsed:       Math.floor(itemElapsed),
+    remaining:     Math.floor(itemRemaining),
+    duration:      itemDuration,
+  };
+}
+
+/** Write the current programme state to channelNowPlaying/avenora. */
+async function _chsPublishNowPlaying(queue, channelStartedAt, running) {
+  const fs = await _chsFs();
+  const { db, doc, setDoc } = fs;
+
+  if (!running) {
+    await setDoc(doc(db, 'channelNowPlaying', 'avenora'), {
+      channelId:     'avenora',
+      status:        'OFFLINE',
+      running:       false,
+      programType:   null,
+      programTitle:  null,
+      mediaUrl:      null,
+      mediaId:       null,
+      artist:        null,
+      coverArt:      null,
+      elapsed:       0,
+      remaining:     0,
+      duration:      0,
+      startedAt:     0,
+      serverTime:    Date.now(),
+      nextType:      null,
+      nextTitle:     null,
+      queueLength:   queue.length,
+      fallbackLength: 0,
+      sourceType:    'direct',
+      youtubeId:     null,
+      recentlyPlayed: [],
+    });
+    return;
+  }
+
+  const pos = _chsComputePosition(queue, channelStartedAt);
+  if (!pos) return;
+
+  const item = pos.item;
+  const next = pos.nextItem;
+
+  const doc_ = {
+    channelId:     'avenora',
+    status:        'PLAYING',
+    running:       true,
+    programType:   item.type   || 'MUSIC',
+    programTitle:  item.title  || '—',
+    mediaUrl:      item.mediaUrl || item.sourceUrl || null,
+    mediaId:       item.id     || null,
+    artist:        item.artist || null,
+    coverArt:      item.coverArt || null,
+    images:        item.images || null,
+    perImageSecs:  item.perImageSecs || null,
+    elapsed:       pos.elapsed,
+    remaining:     pos.remaining,
+    duration:      pos.duration,
+    startedAt:     pos.itemStartedAt,
+    serverTime:    Date.now(),
+    nextType:      next?.type  || null,
+    nextTitle:     next?.title || null,
+    queueLength:   queue.length,
+    fallbackLength: 0,
+    sourceType:    item.sourceType || 'direct',
+    sourceUrl:     item.sourceUrl  || item.mediaUrl || null,
+    youtubeId:     item.youtubeId  || null,
+    recentlyPlayed: [],
+    // Store the channel schedule anchor so viewers can compute position independently
+    channelStartedAt,
+    channelQueue:  queue.map(q => ({
+      id:       q.id,
+      type:     q.type,
+      title:    q.title,
+      artist:   q.artist || null,
+      duration: _chsItemDuration(q),
+      mediaUrl: q.mediaUrl || q.sourceUrl || null,
+      sourceType: q.sourceType || 'direct',
+      youtubeId: q.youtubeId || null,
+      coverArt: q.coverArt || null,
+    })),
+  };
+
+  await setDoc(doc(db, 'channelNowPlaying', 'avenora'), doc_);
+}
+
+/** Start the advance timer for the current item. */
+function _chsScheduleAdvance(queue, channelStartedAt) {
+  clearTimeout(_chsEngine.advanceTimer);
+  const pos = _chsComputePosition(queue, channelStartedAt);
+  if (!pos || pos.remaining <= 0) {
+    // Advance immediately
+    _chsEngine.advanceTimer = setTimeout(() => _chsEngineAdvance(queue, channelStartedAt), 100);
+    return;
+  }
+  // Schedule advance for when remaining time expires (add 500ms buffer)
+  _chsEngine.advanceTimer = setTimeout(
+    () => _chsEngineAdvance(queue, channelStartedAt),
+    pos.remaining * 1000 + 500
+  );
+}
+
+/** Called when the current item's time expires — advance to next item. */
+async function _chsEngineAdvance(queue, channelStartedAt) {
+  if (!_chsEngine.running) return;
+  try {
+    // Re-read position (time has passed) and publish the new now-playing
+    await _chsPublishNowPlaying(queue, channelStartedAt, true);
+    await chsLoadStatus();
+    _chsScheduleAdvance(queue, channelStartedAt);
+  } catch (e) {
+    console.warn('[ChannelEngine] advance failed:', e.message);
+    // Retry after 5 s
+    _chsEngine.advanceTimer = setTimeout(() => _chsEngineAdvance(queue, channelStartedAt), 5000);
+  }
+}
+
+/** Stop the channel engine and clear all timers. */
+function _chsEngineStop() {
+  _chsEngine.running = false;
+  clearTimeout(_chsEngine.advanceTimer);
+  clearInterval(_chsEngine.heartbeatTimer);
+  _chsEngine.advanceTimer   = null;
+  _chsEngine.heartbeatTimer = null;
+  _chsEngine.queue          = [];
+}
+
 // ── Channel start/stop/skip ────────────────────────────────────────────────
 window.chsStartChannel = async function() {
   const btn = document.getElementById('chs-btn-start-ch');
   if (btn) { btn.disabled = true; btn.textContent = 'Starting…'; }
 
   try {
-    // ── Step 1: Verify authentication ────────────────────────────────────
+    // ── Step 1: Verify authentication ─────────────────────────────────────
     const user = _chsState.user;
     if (!user) throw new Error('Not authenticated — please sign in again.');
 
     // ── Step 2: Load the programming queue from Firestore ─────────────────
-    const { db, doc, getDoc, collection, getDocs, query, orderBy, setDoc, serverTimestamp } = await _chsFs();
+    const { db, doc, collection, getDocs, query, orderBy, setDoc, serverTimestamp } = await _chsFs();
 
     const [progSnap, fbSnap] = await Promise.all([
       getDocs(query(collection(db, 'channel', 'avenora', 'programming'), orderBy('sortOrder', 'asc'))),
       getDocs(query(collection(db, 'channel', 'avenora', 'fallback'),    orderBy('sortOrder', 'asc'))),
     ]);
 
-    const progCount = progSnap.size;
-    const fbCount   = fbSnap.size;
+    const prog = progSnap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const fb   = fbSnap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-    // ── Step 3: Confirm at least one playable item exists ─────────────────
-    if (progCount === 0 && fbCount === 0) {
+    // ── Step 3: Confirm at least one playable item exists ──────────────────
+    const queue = prog.length > 0 ? prog : fb;
+    if (queue.length === 0) {
       throw new Error(
         'Channel cannot start: No playable media found.\n\n' +
         'Go to MY MEDIA → upload music → tap "+ Queue" to add it to the channel.'
       );
     }
 
-    // Update local state immediately so queueInfo reflects reality
-    if (progCount > 0) _chsState.programming = progSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-    if (fbCount   > 0) _chsState.fallback    = fbSnap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-    // ── Step 4: Try the backend API first (preferred path) ────────────────
-    const apiBase = window.LU_CONFIG?.apiUrl || null;
-    let backendStarted = false;
-    let backendError   = null;
-
-    if (apiBase) {
-      try {
-        const token = await window.AvenoraFirebase?.Auth?.getIdToken().catch(() => null);
-        if (!token) throw new Error('Could not obtain auth token');
-        const resp = await fetch(`${apiBase}/channel/start`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-        });
-        const data = await resp.json().catch(() => ({}));
-        if (!resp.ok) {
-          backendError = data.error || data.message || `HTTP ${resp.status}`;
-        } else if (data.success === false) {
-          backendError = data.message || 'Backend refused to start channel';
-        } else {
-          backendStarted = true;
-        }
-      } catch (apiErr) {
-        backendError = apiErr.message;
-      }
+    // ── Step 4: Verify each item has a media URL ───────────────────────────
+    const playable = queue.filter(item =>
+      item.mediaUrl || item.sourceUrl ||
+      (item.sourceType === 'youtube' && item.youtubeId)
+    );
+    if (playable.length === 0) {
+      throw new Error(
+        `Channel cannot start: ${queue.length} item(s) found but none have a playable media URL. ` +
+        'Check that each programme item has a storage URL.'
+      );
     }
 
-    // ── Step 5: Persist channel state to Firestore ────────────────────────
-    // Always write the Firestore flag regardless of whether the backend is up.
-    // This allows the UI to reflect ONLINE and lets initChannel() recover on next restart.
+    // Update local state
+    _chsState.programming = prog;
+    _chsState.fallback    = fb;
+
+    // ── Step 5: Compute the schedule anchor timestamp ──────────────────────
+    // If the channel was already running, reuse the existing channelStartedAt so
+    // viewers don't get reset. Otherwise start fresh from now.
+    let channelStartedAt = Date.now();
+    try {
+      const { getDoc } = await _chsFs();
+      const existingSnap = await getDoc(doc(db, 'channelNowPlaying', 'avenora'));
+      if (existingSnap.exists()) {
+        const existing = existingSnap.data();
+        if (existing.running && existing.channelStartedAt) {
+          channelStartedAt = existing.channelStartedAt;
+        }
+      }
+    } catch (_) {}
+
+    // ── Step 6: Write channel config document ─────────────────────────────
     await setDoc(doc(db, 'channel', 'avenora'), {
-      status: 'ONLINE',
-      running: true,
-      updatedAt: serverTimestamp(),
+      status:           'ONLINE',
+      running:          true,
+      channelStartedAt,
+      updatedAt:        serverTimestamp(),
     }, { merge: true });
 
-    // ── Step 6: Read back the updated channel state ───────────────────────
+    // ── Step 7: Publish the initial now-playing state ──────────────────────
+    await _chsPublishNowPlaying(playable, channelStartedAt, true);
+
+    // ── Step 8: Start the engine ───────────────────────────────────────────
+    _chsEngineStop();
+    _chsEngine.running          = true;
+    _chsEngine.queue            = playable;
+    _chsEngine._channelStartedAt = channelStartedAt;
+
+    _chsScheduleAdvance(playable, channelStartedAt);
+
+    // Heartbeat — keep channelNowPlaying fresh while the Studio is open
+    _chsEngine.heartbeatTimer = setInterval(async () => {
+      if (!_chsEngine.running) return;
+      try {
+        await _chsPublishNowPlaying(_chsEngine.queue, _chsEngine._channelStartedAt, true);
+      } catch (_) {}
+    }, _CHS_HEARTBEAT_MS);
+
+    // ── Step 9: Read back and verify ──────────────────────────────────────
     await chsLoadStatus();
 
-    // ── Step 7: Report outcome ─────────────────────────────────────────────
-    if (backendStarted) {
-      _chsToast('Channel started successfully ✅');
-    } else if (!apiBase) {
-      // No backend configured — channel marked ONLINE in Firestore.
-      // Scheduling engine runs server-side; this write signals intent.
-      _chsToast(
-        `Channel queued with ${progCount} program${progCount !== 1 ? 's' : ''}` +
-        (fbCount > 0 ? ` + ${fbCount} fallback` : '') +
-        ` ✅ — backend will start playback.`
-      );
-    } else {
-      // Backend returned an error but we still set the Firestore flag.
-      _chsToast(
-        `Channel set to ONLINE in Firestore, but backend engine reported: ${backendError}. ` +
-        `Playback will resume when the backend is reachable.`,
-        'error'
-      );
-    }
+    const pos = _chsComputePosition(playable, channelStartedAt);
+    if (!pos) throw new Error('Could not compute programme position after start.');
+
+    _chsToast(
+      `Channel started ✅ — NOW: "${pos.item.title}" · NEXT: "${pos.nextItem.title}"`
+    );
+    console.info('[ChannelEngine] Started — queue:', playable.length, 'items · now:', pos.item.title);
+
   } catch (e) {
     _chsToast('Channel cannot start: ' + e.message, 'error');
     console.error('[ChannelStudio] chsStartChannel failed:', e);
@@ -986,22 +1191,10 @@ window.chsStartChannel = async function() {
 window.chsStopChannel = async function() {
   if (!confirm('Stop the channel? It will go offline for viewers.')) return;
   try {
-    // Call backend API first (preferred — stops the in-memory engine)
-    const apiBase = window.LU_CONFIG?.apiUrl || null;
-    if (apiBase) {
-      try {
-        const token = await window.AvenoraFirebase?.Auth?.getIdToken().catch(() => null);
-        if (token) {
-          await fetch(`${apiBase}/channel/stop`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          });
-        }
-      } catch (_) {}
-    }
-    // Always update Firestore so the viewer page reflects OFFLINE immediately
+    _chsEngineStop();
     const { db, doc, setDoc, serverTimestamp } = await _chsFs();
     await setDoc(doc(db, 'channel', 'avenora'), { status: 'OFFLINE', running: false, updatedAt: serverTimestamp() }, { merge: true });
+    await _chsPublishNowPlaying([], 0, false);
     _chsToast('Channel stopped');
     await chsLoadStatus();
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
@@ -1009,24 +1202,24 @@ window.chsStopChannel = async function() {
 
 window.chsSkip = async function() {
   try {
-    // Call backend API (preferred)
-    const apiBase = window.LU_CONFIG?.apiUrl || null;
-    if (apiBase) {
-      try {
-        const token = await window.AvenoraFirebase?.Auth?.getIdToken().catch(() => null);
-        if (token) {
-          await fetch(`${apiBase}/channel/skip`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
-          });
-        }
-      } catch (_) {}
+    if (!_chsEngine.running || !_chsEngine.queue.length) {
+      _chsToast('Channel is not running', 'error');
+      return;
     }
-    // Fallback: write skip signal directly to Firestore
+    // Shift channelStartedAt so the current item has just finished —
+    // this advances to the next item in the deterministic schedule.
+    const pos = _chsComputePosition(_chsEngine.queue, _chsEngine._channelStartedAt);
+    if (!pos) return;
+    const dursBefore = _chsEngine.queue.slice(0, pos.idx + 1)
+      .reduce((s, i) => s + _chsItemDuration(i), 0);
+    const skipTo = Date.now() - dursBefore * 1000;
+    _chsEngine._channelStartedAt = skipTo;
     const { db, doc, setDoc } = await _chsFs();
-    await setDoc(doc(db, 'channel', 'avenora'), { skipAt: Date.now() }, { merge: true });
+    await setDoc(doc(db, 'channel', 'avenora'), { channelStartedAt: skipTo }, { merge: true });
+    await _chsPublishNowPlaying(_chsEngine.queue, skipTo, true);
+    _chsScheduleAdvance(_chsEngine.queue, skipTo);
     _chsToast('Skipped to next program');
-    setTimeout(chsLoadStatus, 1000);
+    await chsLoadStatus();
   } catch (e) { _chsToast('Error: ' + e.message, 'error'); }
 };
 
