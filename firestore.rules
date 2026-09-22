@@ -288,18 +288,13 @@ service cloud.firestore {
     // ── Cloud Stream Track Library ─────────────────────────
     // Track metadata uploaded via Music Hub (musicUploadSubmit).
     // Write: only the owning user may create / delete their own tracks.
-    // Read: owner always; any authenticated user may read public tracks
-    //       so the cloud stream player can resolve download URLs.
+    // Read: any authenticated user may read — required so the Cloud Radio
+    //       resolver (_resolvePlaylistTrackUrl) can look up tracks added to
+    //       shared playlists regardless of which user uploaded them.
+    //       Unauthenticated (anonymous) access is blocked.
     match /cloudStreamTracks/{uid}/tracks/{trackId} {
       allow write: if request.auth != null && request.auth.uid == uid;
-      // Owner reads their own library unconditionally.
-      // Other authenticated users can read tracks whose visibility != 'private'
-      // so the 24-hour cloud stream player can serve them.
-      // resource == null check is moved last; short-circuit evaluation on auth.uid == uid
-      // prevents an error when resource is null and we try to access resource.data.
-      allow read: if request.auth != null
-        && (request.auth.uid == uid
-            || (resource != null && resource.data.visibility != 'private'));
+      allow read:  if request.auth != null;
     }
 
     // ── Helper functions ───────────────────────────────────

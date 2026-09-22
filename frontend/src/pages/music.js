@@ -2365,27 +2365,35 @@ window.musicOpenPlaylist = async function (id) {
       return;
     }
 
-    // Store for play/shuffle operations
-    _plResolvedTracks[id] = tracks;
+    // Store only playable tracks for play/shuffle; keep all for display
+    const playableTracks = tracks.filter(t => !t._unavailable && (t.audioUrl || t.storagePath));
+    _plResolvedTracks[id] = playableTracks.length ? playableTracks : tracks;
+
+    const allTrackObjs = tracks.map(x => ({
+      id:          x._docId || x.trackId || x.id,
+      title:       x.title || 'Untitled',
+      artistName:  x.artist || '',
+      fileUrl:     x.audioUrl || '',
+      storagePath: x.storagePath || '',
+      _isFirestore: true,
+      _unavailable: x._unavailable || false,
+    }));
 
     wrap.innerHTML = `<div class="music-track-list">${tracks.map((t, i) => {
-      // Firestore playlist track → treat as backend track with audioUrl
-      const trackObj = {
-        id:         t._docId || t.trackId || t.id,
-        title:      t.title || 'Untitled',
-        artistName: t.artist || '',
-        fileUrl:    t.audioUrl || '',
-        storagePath: t.storagePath || '',
-        _isFirestore: true,
-      };
-      return renderTrackRow(trackObj, i, tracks.map(x => ({
-        id: x._docId || x.trackId || x.id,
-        title: x.title || 'Untitled',
-        artistName: x.artist || '',
-        fileUrl: x.audioUrl || '',
-        storagePath: x.storagePath || '',
-        _isFirestore: true,
-      })), 'playlist-' + id);
+      const trackObj = allTrackObjs[i];
+      // Show unavailable tracks greyed out with an explanation, not as a hard error
+      if (t._unavailable) {
+        return `<div class="track-row" style="opacity:0.45;cursor:default" title="Track file not found">
+          <div class="track-num" style="color:var(--text-muted)">${i + 1}</div>
+          <div class="track-info">
+            <div class="track-name" style="color:var(--text-muted)">${escapeHtml(t.title || 'Unknown track')}</div>
+            <div class="track-artist" style="color:var(--text-muted)">${escapeHtml(t.artist || '')}
+              <span style="font-size:0.75rem;color:var(--neon-red);margin-left:8px">⚠ File unavailable</span>
+            </div>
+          </div>
+        </div>`;
+      }
+      return renderTrackRow(trackObj, i, allTrackObjs, 'playlist-' + id);
     }).join('')}</div>`;
   }
 
@@ -2672,35 +2680,79 @@ window.musicAddToPlaylistViaCardBtn = function (playlistId) {
 };
 
 window.musicPlayLocalPlaylist = function (id) {
+  // 1. Try pre-resolved tracks from an already-open playlist view (fastest path)
+  const pre = _plResolvedTracks[id];
+  if (pre && pre.length) {
+    const playable = pre.filter(t => !t._unavailable && (t.audioUrl || t.fileUrl || t.storagePath));
+    if (playable.length) { _playResolvedTrack(playable[0], playable, id); return; }
+  }
+
+  // 2. Try local imported queue (for tracks stored only by ID in localStorage)
   const playlists = LS.get('lu_music_playlists', []);
   const pl = playlists.find(p => p.id === id);
-  if (!pl || !pl.tracks || !pl.tracks.length) { Toast.info('Playlist is empty'); return; }
+  const localTrackIds = pl?.tracks || [];
 
-  // 1. Try local queue first (instant — no network)
-  const indices = pl.tracks
-    .map(tid => MP.queue.findIndex(t => String(t.id) === String(tid)))
-    .filter(i => i >= 0);
-  if (indices.length) { mpLoadTrack(indices[0]); return; }
+  if (localTrackIds.length) {
+    const indices = localTrackIds
+      .map(tid => MP.queue.findIndex(t => String(t.id) === String(tid)))
+      .filter(i => i >= 0);
+    if (indices.length) { mpLoadTrack(indices[0]); return; }
+  }
 
-  // 2. Try pre-resolved tracks from open playlist view
-  const pre = _plResolvedTracks[id];
-  if (pre && pre.length) { _playResolvedTrack(pre[0], pre, id); return; }
+  // 3. Firestore-backed playlist — load tracks from musicPlaylists sub-collection.
+  //    This is the normal path for the Cloud Radio and all Firestore-backed playlists
+  //    where tracks are stored in musicPlaylists/{id}/tracks, NOT as IDs in LS.
+  if (window.AvenoraFirebase?.Firestore?.getPlaylistTracks) {
+    Toast.info('Loading tracks…');
+    window.AvenoraFirebase.Firestore.getPlaylistTracks(id).then(fsTracks => {
+      if (!fsTracks || !fsTracks.length) {
+        // Finally try the legacy ID-based resolver as last resort
+        if (localTrackIds.length) {
+          return _resolvePlaylistTracks(localTrackIds).then(tracks => {
+            if (!tracks.length) {
+              Toast.error('Playlist is empty — no playable tracks found.');
+              return;
+            }
+            _plResolvedTracks[id] = tracks;
+            _playResolvedTrack(tracks[0], tracks, id);
+          });
+        }
+        Toast.info('Playlist is empty — no tracks found.');
+        return;
+      }
+      const playable = fsTracks.filter(t => !t._unavailable && (t.audioUrl || t.fileUrl || t.storagePath));
+      if (!playable.length) {
+        Toast.error('No playable tracks found. The audio files may be unavailable.');
+        return;
+      }
+      _plResolvedTracks[id] = fsTracks; // cache for subsequent PLAY ALL / Shuffle calls
+      const trackObjs = playable.map(t => ({
+        id:          t._docId || t.trackId || t.id,
+        title:       t.title || 'Untitled',
+        artistName:  t.artist || '',
+        fileUrl:     t.audioUrl || '',
+        storagePath: t.storagePath || '',
+        _isFirestore: true,
+      }));
+      mpLoadBackendTrack(trackObjs[0], 0, 'playlist-' + id, trackObjs);
+    }).catch(err => Toast.error('Could not load playlist. Check your connection.'));
+    return;
+  }
 
-  // 3. Resolve async (covers reload scenario — no pre-resolved cache)
-  // Cloud-uploaded tracks are not in MP.queue (the local import list) so this
-  // path is the normal code path for Firestore-backed tracks.
+  // 4. Legacy fallback: resolve by ID list
+  if (!localTrackIds.length) { Toast.info('Playlist is empty'); return; }
   Toast.info('Loading tracks…');
-  _resolvePlaylistTracks(pl.tracks).then(tracks => {
+  _resolvePlaylistTracks(localTrackIds).then(tracks => {
     if (!tracks.length) {
       const signedIn = !!(sessionStorage.getItem('lu_uid') || localStorage.getItem('lu_uid'));
       Toast.error(signedIn
-        ? 'MEDIA_RECORD_MISSING — track could not be resolved. Check console for details.'
-        : 'NOT_SIGNED_IN — sign in to play your cloud tracks.');
+        ? 'Could not resolve tracks. Check console for details.'
+        : 'Sign in to play your cloud tracks.');
       return;
     }
     _plResolvedTracks[id] = tracks;
     _playResolvedTrack(tracks[0], tracks, id);
-  }).catch(err => Toast.error('NETWORK_ERROR — ' + (err.message || 'Check your connection.')));
+  }).catch(err => Toast.error('Network error — ' + (err.message || 'Check your connection.')));
 };
 
 // Play a single resolved track (local or backend) and register the context for auto-advance.

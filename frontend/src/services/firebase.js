@@ -410,6 +410,130 @@
     return _db;
   }
 
+  // ─── _resolvePlaylistTrackUrl ──────────────────────────────────────────────
+  /**
+   * Resolve a single playlist track entry to a playable audio URL.
+   *
+   * This is the ONE shared resolver used by both getPlaylistTracks() and
+   * listenToPlaylist().  It handles:
+   *
+   *   1. Inline URL fields already on the entry document:
+   *        audioUrl | fileUrl | url | publicUrl | downloadURL
+   *
+   *   2. storagePath → Supabase public URL via window.AvenoraStorage.getPublicUrl
+   *
+   *   3. Secondary cloudStreamTracks lookup by trackId (the Firestore doc ID of
+   *      the original upload).  This is the primary fix for Cloud Radio entries
+   *      that were added with a blank audioUrl but a valid trackId.
+   *      Search order:
+   *        a) exact path: cloudStreamTracks/{ownerUid}/tracks/{trackId}
+   *           where ownerUid is embedded in the entry (addedByUid / ownerUid / uid)
+   *        b) collectionGroup query on 'tracks' sub-collection by __name__ == trackId
+   *           (catches cross-user uploads)
+   *
+   * Returns the input track object enriched with a resolved audioUrl.
+   * If no URL can be found, the track is returned with _unavailable:true
+   * and audioUrl:'' — it NEVER throws, so one broken entry cannot kill the batch.
+   */
+  async function _resolvePlaylistTrackUrl(db, trackEntry) {
+    // Step 1: inline URL fields
+    const inlineUrl = trackEntry.audioUrl || trackEntry.fileUrl || trackEntry.url
+                   || trackEntry.publicUrl || trackEntry.downloadURL;
+    if (inlineUrl && typeof inlineUrl === 'string' && inlineUrl.trim()) {
+      return { ...trackEntry, audioUrl: inlineUrl.trim() };
+    }
+
+    // Step 2: storagePath → Supabase public URL
+    if (trackEntry.storagePath && window.AvenoraStorage?.getPublicUrl) {
+      try {
+        const derived = window.AvenoraStorage.getPublicUrl('music', trackEntry.storagePath);
+        if (derived) {
+          console.info('[AVN] _resolvePlaylistTrackUrl — derived from storagePath:',
+            trackEntry.storagePath, derived);
+          return { ...trackEntry, audioUrl: derived };
+        }
+      } catch (_) { /* fall through */ }
+    }
+
+    // Step 3: cloudStreamTracks secondary lookup by trackId
+    // trackId is the document ID of the original upload in cloudStreamTracks/{uid}/tracks/{docId}
+    // It differs from _docId (the playlist sub-collection doc ID) — we try both.
+    const lookupId = trackEntry.trackId || trackEntry.mediaId || trackEntry.id || trackEntry._docId;
+    if (lookupId) {
+      try {
+        const { doc: fsDoc, getDoc: fsGet, collectionGroup, query: fsQuery, where: fsWhere, limit: fsLimit, getDocs: fsGetDocs } =
+          await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+
+        // 3a: exact path — ownerUid is often stored in addedByUid
+        const ownerUid = trackEntry.addedByUid || trackEntry.ownerUid || trackEntry.uid || null;
+        if (ownerUid && /^[A-Za-z0-9]{20,}$/.test(ownerUid)) {
+          try {
+            const snap = await fsGet(fsDoc(db, 'cloudStreamTracks', ownerUid, 'tracks', lookupId));
+            if (snap.exists()) {
+              const d = snap.data();
+              const foundUrl = d.url || d.audioUrl || d.fileUrl;
+              if (foundUrl) {
+                console.info('[AVN] _resolvePlaylistTrackUrl — found by exact path:',
+                  'cloudStreamTracks/' + ownerUid + '/tracks/' + lookupId, foundUrl);
+                return { ...trackEntry, ...d, audioUrl: foundUrl, _resolved: 'cloudStreamTracks-exact' };
+              }
+            }
+          } catch (_) { /* doc not found or permission — fall through */ }
+        }
+
+        // 3b: collectionGroup on 'tracks' where document ID equals lookupId
+        // (handles tracks uploaded by users whose UID is not on the playlist entry)
+        try {
+          const cgSnap = await fsGetDocs(
+            fsQuery(collectionGroup(db, 'tracks'), fsWhere('__name__', '==', lookupId), fsLimit(1))
+          );
+          if (!cgSnap.empty) {
+            const d = cgSnap.docs[0].data();
+            const foundUrl = d.url || d.audioUrl || d.fileUrl;
+            if (foundUrl) {
+              console.info('[AVN] _resolvePlaylistTrackUrl — found by collectionGroup:',
+                lookupId, foundUrl);
+              return { ...trackEntry, ...d, audioUrl: foundUrl, _resolved: 'cloudStreamTracks-cg' };
+            }
+          }
+        } catch (_) { /* collectionGroup query may lack an index — skip */ }
+
+        // 3c: if trackId looks like {uid}_{timestamp} we can parse the uid directly
+        if (typeof lookupId === 'string' && lookupId.includes('_')) {
+          const parts = lookupId.split('_');
+          const maybeUid = parts[0];
+          if (/^[A-Za-z0-9]{20,}$/.test(maybeUid)) {
+            try {
+              const snap = await fsGet(fsDoc(db, 'cloudStreamTracks', maybeUid, 'tracks', lookupId));
+              if (snap.exists()) {
+                const d = snap.data();
+                const foundUrl = d.url || d.audioUrl || d.fileUrl;
+                if (foundUrl) {
+                  console.info('[AVN] _resolvePlaylistTrackUrl — found by parsed UID path:',
+                    'cloudStreamTracks/' + maybeUid + '/tracks/' + lookupId, foundUrl);
+                  return { ...trackEntry, ...d, audioUrl: foundUrl, _resolved: 'cloudStreamTracks-parsed' };
+                }
+              }
+            } catch (_) { /* ignore */ }
+          }
+        }
+      } catch (lookupErr) {
+        console.warn('[AVN] _resolvePlaylistTrackUrl — cloudStreamTracks lookup failed:',
+          lookupId, lookupErr.message);
+      }
+    }
+
+    // All resolution strategies exhausted
+    console.warn('[AVN] _resolvePlaylistTrackUrl — UNRESOLVABLE', {
+      trackId:     lookupId,
+      trackTitle:  trackEntry.title,
+      storagePath: trackEntry.storagePath || null,
+      addedByUid:  trackEntry.addedByUid  || null,
+      fields:      Object.keys(trackEntry).join(', '),
+    });
+    return { ...trackEntry, audioUrl: '', _unavailable: true };
+  }
+
   /**
    * AvenoraFirebase.Firestore — lightweight wrappers for the collections
    * used by the app (posts, profiles, gallery items).
@@ -750,59 +874,141 @@
     /**
      * Follow targetUid as currentUserUid.
      * Structure:
-     *   followers/{targetUid}/users/{currentUid} → { uid: currentUid, username, ... }
-     *   following/{currentUid}/users/{targetUid} → { uid: targetUid, username, ... }
-     * Both document IDs and the uid field are Firebase Auth UIDs.
+     *   followers/{targetUid}/users/{currentUid}
+     *   following/{currentUid}/users/{targetUid}
+     * Both document IDs are Firebase Auth UIDs — NEVER usernames.
+     *
+     * UID resolution priority:
+     *   1. Firebase Auth currentUser.uid  (ground truth)
+     *   2. LegendState user.uid/id        (after onAuthStateChanged)
+     *   3. Persisted lu_uid               (last resort)
+     *
+     * Values shorter than 20 alphanumeric chars are rejected as invalid UIDs.
      */
     async followUser(targetUid) {
       const db = await getFirestore();
       const { doc, setDoc, serverTimestamp, getDoc, increment, updateDoc } = await loadModule('firestore');
-      const user = LegendState.get('user');
-      if (!user) throw new Error('Not authenticated');
-      const currentUid = user.uid || user.id;
-      if (!currentUid || !targetUid) throw new Error('Invalid UID for follow operation');
-      if (currentUid === targetUid) throw new Error('Cannot follow yourself');
 
-      // Write follower record
-      await setDoc(doc(db, 'followers', targetUid, 'users', currentUid), {
-        uid:       currentUid,
-        username:  user.username  || '',
-        avatarUrl: user.profile?.avatarUrl || null,
-        profile:   { displayName: user.profile?.displayName || user.username || '', avatarUrl: user.profile?.avatarUrl || null },
-        followedAt: serverTimestamp(),
+      // Layer 1: Firebase Auth (ground truth — must match what Firestore sees as request.auth.uid)
+      let currentUid = null;
+      try {
+        const fbAuth = await getFirebaseAuth();
+        if (fbAuth.currentUser) currentUid = fbAuth.currentUser.uid;
+      } catch (_) { /* fall through */ }
+
+      // Layer 2: LegendState
+      if (!currentUid) {
+        const stateUser = LegendState.get('user');
+        currentUid = stateUser?.uid || stateUser?.id || null;
+      }
+
+      // Layer 3: persisted UID written by _persistUid()
+      if (!currentUid) {
+        currentUid = sessionStorage.getItem('lu_uid') || localStorage.getItem('lu_uid') || null;
+      }
+
+      // Validate — Firebase Auth UIDs are 28 chars alphanumeric; never usernames
+      const _isUid = (v) => typeof v === 'string' && /^[A-Za-z0-9]{20,}$/.test(v);
+
+      console.debug('[AVN] followUser attempt', {
+        currentUid,
+        targetUid,
+        currentUidValid:  _isUid(currentUid),
+        targetUidValid:   _isUid(targetUid),
+        followerDocPath:  `followers/${targetUid}/users/${currentUid}`,
+        followingDocPath: `following/${currentUid}/users/${targetUid}`,
       });
 
-      // Write following record
-      // Fetch the target's username for the record
+      if (!currentUid) {
+        const e = new Error('Not authenticated — cannot follow'); e.code = 'unauthenticated'; throw e;
+      }
+      if (!_isUid(currentUid)) {
+        const e = new Error('currentUid "' + currentUid + '" is not a valid Firebase UID — follow blocked');
+        e.code = 'INVALID_UID';
+        console.error('[AVN] followUser blocked — currentUid is not a Firebase UID:', currentUid);
+        throw e;
+      }
+      if (!targetUid || !_isUid(targetUid)) {
+        const e = new Error('targetUid "' + targetUid + '" is not a valid Firebase UID — follow blocked');
+        e.code = 'INVALID_UID';
+        console.error('[AVN] followUser blocked — targetUid is not a Firebase UID:', targetUid);
+        throw e;
+      }
+      if (currentUid === targetUid) throw new Error('Cannot follow yourself');
+
+      const user = LegendState.get('user');
+
+      // Write followers/{targetUid}/users/{currentUid}
+      // Rule: request.auth.uid == followerUid — currentUid MUST equal Firebase auth.uid
+      try {
+        await setDoc(doc(db, 'followers', targetUid, 'users', currentUid), {
+          uid:       currentUid,
+          username:  user?.username  || '',
+          avatarUrl: user?.profile?.avatarUrl || null,
+          profile:   { displayName: user?.profile?.displayName || user?.username || '', avatarUrl: user?.profile?.avatarUrl || null },
+          followedAt: serverTimestamp(),
+        });
+      } catch (followerErr) {
+        console.error('[AVN] followUser — followers write FAILED', {
+          path:      'followers/' + targetUid + '/users/' + currentUid,
+          code:      followerErr.code,
+          message:   followerErr.message,
+          currentUid,
+          targetUid,
+        });
+        throw followerErr;
+      }
+
+      // Write following/{currentUid}/users/{targetUid}
+      // Rule: request.auth.uid == currentUid
       let targetUsername = '';
       try {
         const snap = await getDoc(doc(db, 'users', targetUid));
         if (snap.exists()) targetUsername = snap.data().username || '';
       } catch (_) {}
-      await setDoc(doc(db, 'following', currentUid, 'users', targetUid), {
-        uid:        targetUid,
-        username:   targetUsername,
-        followedAt: serverTimestamp(),
-      });
-
-      // Increment counters (best-effort)
       try {
-        await updateDoc(doc(db, 'users', targetUid), { 'stats.followersCount': increment(1) });
-      } catch (_) {}
-      try {
-        await updateDoc(doc(db, 'users', currentUid), { 'stats.followingCount': increment(1) });
-      } catch (_) {}
+        await setDoc(doc(db, 'following', currentUid, 'users', targetUid), {
+          uid:        targetUid,
+          username:   targetUsername,
+          followedAt: serverTimestamp(),
+        });
+      } catch (followingErr) {
+        console.error('[AVN] followUser — following write FAILED', {
+          path:      'following/' + currentUid + '/users/' + targetUid,
+          code:      followingErr.code,
+          message:   followingErr.message,
+          currentUid,
+          targetUid,
+        });
+        throw followingErr;
+      }
 
-      console.info('[AVN] followUser', { currentUid, targetUid });
+      // Counters are best-effort — never block on them
+      try { await updateDoc(doc(db, 'users', targetUid),  { 'stats.followersCount': increment(1) }); } catch (_) {}
+      try { await updateDoc(doc(db, 'users', currentUid), { 'stats.followingCount': increment(1) }); } catch (_) {}
+
+      console.info('[AVN] followUser SUCCESS', { currentUid, targetUid });
       return { followed: true };
     },
 
     async unfollowUser(targetUid) {
       const db = await getFirestore();
       const { doc, deleteDoc, increment, updateDoc } = await loadModule('firestore');
-      const user = LegendState.get('user');
-      if (!user) throw new Error('Not authenticated');
-      const currentUid = user.uid || user.id;
+
+      // Same UID resolution chain as followUser
+      let currentUid = null;
+      try {
+        const fbAuth = await getFirebaseAuth();
+        if (fbAuth.currentUser) currentUid = fbAuth.currentUser.uid;
+      } catch (_) { /* fall through */ }
+      if (!currentUid) {
+        const stateUser = LegendState.get('user');
+        currentUid = stateUser?.uid || stateUser?.id || null;
+      }
+      if (!currentUid) {
+        currentUid = sessionStorage.getItem('lu_uid') || localStorage.getItem('lu_uid') || null;
+      }
+
       if (!currentUid || !targetUid) throw new Error('Invalid UID for unfollow operation');
 
       try {
@@ -1057,7 +1263,10 @@
 
     /**
      * Get all tracks in a playlist sub-collection, ordered by position.
-     * Resolves audioUrl via MusicService.resolveAudioUrl if available.
+     * Attempts to resolve a playable audioUrl for each track — including a
+     * secondary cloudStreamTracks lookup when the playlist entry itself has
+     * no URL (the most common cause of MEDIA_RECORD_MISSING on Cloud Radio).
+     * One broken entry NEVER prevents other tracks from loading.
      */
     async getPlaylistTracks(playlistId) {
       const db = await getFirestore();
@@ -1065,14 +1274,9 @@
       const snap = await getDocs(
         query(collection(db, 'musicPlaylists', playlistId, 'tracks'), orderBy('position', 'asc'))
       );
-      return snap.docs.map(d => {
-        const data = d.data();
-        // Resolve audioUrl using the shared helper if available
-        const resolved = (typeof MusicService !== 'undefined' && MusicService.resolveAudioUrl)
-          ? MusicService.resolveAudioUrl(data)
-          : (data.audioUrl || data.fileUrl || data.url || null);
-        return { _docId: d.id, id: d.id, ...data, audioUrl: resolved || data.audioUrl || '' };
-      });
+      const rawTracks = snap.docs.map(d => ({ _docId: d.id, id: d.id, ...d.data() }));
+      // Resolve each track independently so one failure never kills the batch
+      return Promise.all(rawTracks.map(t => _resolvePlaylistTrackUrl(db, t)));
     },
 
     /**
@@ -1190,29 +1394,39 @@
     /**
      * Subscribe to real-time updates for a playlist's tracks.
      * Returns an unsubscribe function.
+     *
+     * URL resolution order per track:
+     *   1. Inline fields (audioUrl, fileUrl, url, publicUrl, downloadURL)
+     *   2. storagePath  → Supabase public URL
+     *   3. cloudStreamTracks/{ownerUid}/tracks/{trackId} secondary lookup
+     *
+     * A single broken entry MUST NOT block other tracks. Broken entries get
+     * _unavailable:true so the UI can show them greyed out rather than
+     * failing the entire playlist.
      */
     listenToPlaylist(playlistId, callback) {
       let unsubscribe = null;
-      // Lazy-load the Firestore module then set up the listener
       loadModule('firestore').then(({ collection, query, orderBy, onSnapshot }) => {
         getFirestore().then(db => {
           unsubscribe = onSnapshot(
             query(collection(db, 'musicPlaylists', playlistId, 'tracks'), orderBy('position', 'asc')),
-            (snap) => {
-              const tracks = snap.docs.map(d => {
-                const data = d.data();
-                const resolved = (typeof MusicService !== 'undefined' && MusicService.resolveAudioUrl)
-                  ? MusicService.resolveAudioUrl(data)
-                  : (data.audioUrl || data.fileUrl || data.url || null);
-                return { _docId: d.id, id: d.id, ...data, audioUrl: resolved || data.audioUrl || '' };
-              });
-              callback(tracks);
+            async (snap) => {
+              try {
+                const rawTracks = snap.docs.map(d => ({ _docId: d.id, id: d.id, ...d.data() }));
+                const resolvedTracks = await Promise.all(
+                  rawTracks.map(t => _resolvePlaylistTrackUrl(db, t))
+                );
+                callback(resolvedTracks);
+              } catch (resolveErr) {
+                console.warn('[AVN] listenToPlaylist resolve error:', resolveErr.message);
+                // Still fire the callback with unresolved data so the UI isn't frozen
+                callback(snap.docs.map(d => ({ _docId: d.id, id: d.id, ...d.data() })));
+              }
             },
             (err) => console.warn('[AVN] listenToPlaylist error:', err.message)
           );
         });
       });
-      // Return a synchronous unsubscribe handle that cancels when the listener is set up
       return () => { if (unsubscribe) unsubscribe(); };
     },
 

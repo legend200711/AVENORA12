@@ -289,6 +289,17 @@ const SNProfile = {
     if (!btn) return;
     if (!LegendAPI.auth.isLoggedIn()) { Modal.open('auth-modal'); return; }
 
+    // Validate targetUid before attempting a Firestore write.
+    // profile.id (= userId here) must be a Firebase UID, never a username.
+    const _isUid = (v) => typeof v === 'string' && /^[A-Za-z0-9]{20,}$/.test(v);
+    if (!_isUid(userId)) {
+      console.error('[AVN] toggleFollow — INVALID TARGET UID (not a Firebase UID):', userId,
+        '— this is likely a username being passed instead of a UID. ' +
+        'Check that profile.id is set from the Firestore document ID, not from profile.username.');
+      Toast.error('Cannot follow: profile identity could not be resolved. Try refreshing the page.');
+      return;
+    }
+
     btn.disabled = true;
     const wasFollowing = btn.dataset.following === 'true' || currentlyFollowing;
 
@@ -309,13 +320,39 @@ const SNProfile = {
         await LegendAPI.users.follow(userId);
       }
     } catch (err) {
-      // Roll back
+      // Roll back optimistic UI
       btn.textContent = wasFollowing ? 'Unfollow' : 'Follow';
       btn.className = wasFollowing ? 'btn btn-outline' : 'btn btn-primary';
       btn.dataset.following = String(wasFollowing);
       if (countEl) countEl.textContent = formatCount(prevCount);
-      console.warn('[AVN] Follow toggle error:', err);
-      Toast.error('Something went wrong. Please try again.');
+
+      // Log full diagnostics — never log auth tokens
+      const currentUser = LegendAPI.auth.getUser();
+      console.error('[AVN] toggleFollow FAILED', {
+        targetProfileId:   userId,
+        currentUserUid:    currentUser?.uid || currentUser?.id || '(none)',
+        currentUsername:   currentUser?.username || '(none)',
+        targetUidValid:    _isUid(userId),
+        operation:         wasFollowing ? 'unfollow' : 'follow',
+        firestorePaths:    {
+          followers: 'followers/' + userId + '/users/{currentUid}',
+          following: 'following/{currentUid}/users/' + userId,
+        },
+        firebaseErrorCode: err.code    || '(none)',
+        errorMessage:      err.message || '(unknown)',
+      });
+
+      // Show a specific error message for known failure modes
+      if (err.code === 'permission-denied') {
+        Toast.error('Follow failed: permission denied. Are you signed in?');
+      } else if (err.code === 'INVALID_UID') {
+        Toast.error('Follow failed: could not identify the target account. Try refreshing the page.');
+      } else if (err.code === 'unauthenticated') {
+        Toast.error('Follow failed: you are not signed in.');
+        Modal.open('auth-modal');
+      } else {
+        Toast.error('Follow failed. Check the browser console for details and try again.');
+      }
     } finally {
       btn.disabled = false;
     }
