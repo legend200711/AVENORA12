@@ -688,6 +688,17 @@
     async refreshSignedUrl(bucket, storagePath) {
       return _publicUrl(bucket, storagePath);
     },
+
+    /**
+     * Get the public CDN URL for a file in a given bucket.
+     * Used by MusicService.resolveAudioUrl() when only a storagePath is known.
+     * @param {string} bucket — e.g. 'music'
+     * @param {string} storagePath — e.g. 'uid/timestamp-rand.mp3'
+     * @returns {string}
+     */
+    getPublicUrl(bucket, storagePath) {
+      return _publicUrl(bucket, storagePath);
+    },
   };
 
   global.AvenoraStorage = AvenoraStorage;

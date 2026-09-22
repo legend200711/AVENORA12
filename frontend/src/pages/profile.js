@@ -161,8 +161,8 @@ registerPage('profile', {
 
           <!-- Tabs -->
           <div class="tabs sn-profile-tabs">
-            <button class="tab-btn active" id="sn-tab-posts" onclick="SNProfile.showTab('posts', '${escapeHtml(profile.username)}', this)">POSTS</button>
-            <button class="tab-btn" id="sn-tab-media" onclick="SNProfile.showTab('media', '${escapeHtml(profile.username)}', this)">MEDIA</button>
+            <button class="tab-btn active" id="sn-tab-posts" onclick="SNProfile.showTab('posts', '${escapeHtml(profile.id || profile.uid)}', this)">POSTS</button>
+            <button class="tab-btn" id="sn-tab-media" onclick="SNProfile.showTab('media', '${escapeHtml(profile.id || profile.uid)}', this)">MEDIA</button>
           </div>
 
           <!-- Tab content -->
@@ -172,9 +172,9 @@ registerPage('profile', {
         </div>
       `;
 
-      // Load posts tab by default — use UID instead of username for post lookup
-      // so the tab works even if username differs from what's in post author fields.
-      SNProfile.showTab('posts', profile.username);
+      // Load posts tab by default — always pass the UID so post queries are
+      // UID-based and can never cross-contaminate between users with similar names.
+      SNProfile.showTab('posts', profile.id || profile.uid);
 
     } catch (err) {
       // ── Diagnostic log: always log the real error during development ─────
@@ -230,7 +230,7 @@ registerPage('profile', {
 // ─── SNProfile helpers ───────────────────────────────────────
 
 const SNProfile = {
-  async showTab(tab, username, btnEl) {
+  async showTab(tab, profileUid, btnEl) {
     // Update active tab button
     document.querySelectorAll('.sn-profile-tabs .tab-btn').forEach(b => b.classList.remove('active'));
     if (btnEl) btnEl.classList.add('active');
@@ -252,12 +252,16 @@ const SNProfile = {
       return;
     }
 
-    // Posts tab
+    // Posts tab — always query by UID so we never show another user's posts
     showLoading(content, 'Loading posts…');
 
     try {
-      const data = await LegendAPI.users.posts(username);
+      const data = await LegendAPI.users.postsByUid(profileUid);
       const posts = data.posts || [];
+
+      // Update the post count stat to reflect the live query result
+      const postsCountEl = document.querySelector('.sn-profile-stats .sn-stat-btn:last-child .sn-stat-num');
+      if (postsCountEl) postsCountEl.textContent = formatCount(posts.length);
 
       if (!posts.length) {
         content.innerHTML = `
@@ -275,8 +279,8 @@ const SNProfile = {
         if (el) content.appendChild(el);
       });
     } catch (err) {
-      console.warn('[AVN] Profile posts error:', err);
-      showError(content, 'Posts could not be loaded. Please try again.', () => SNProfile.showTab('posts', username));
+      console.error('[AVN] Profile posts error:', { profileUid, code: err.code, message: err.message });
+      showError(content, 'Posts could not be loaded. Please try again.', () => SNProfile.showTab('posts', profileUid));
     }
   },
 

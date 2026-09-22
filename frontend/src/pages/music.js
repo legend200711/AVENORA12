@@ -74,13 +74,82 @@ function musicEnsureSystemPlaylists() {
         isRadio:     sp.isRadio || false,
         isSystem:    true,
         tracks:      [],
-        visibility:  sp.isRadio ? 'private' : 'private',
+        visibility:  'shared',
         createdAt:   new Date().toISOString(),
       });
       changed = true;
     }
   }
   if (changed) LS.set('lu_music_playlists', existing);
+
+  // Ensure system playlists also exist in Firestore (fire-and-forget)
+  if (window.AvenoraFirebase?.Firestore?.ensureSystemPlaylist) {
+    for (const sp of SYSTEM_PLAYLISTS) {
+      window.AvenoraFirebase.Firestore.ensureSystemPlaylist(sp).catch(e => {
+        console.warn('[AVN] ensureSystemPlaylist Firestore sync failed:', sp.sysId, e.message);
+      });
+    }
+  }
+
+  // One-time migration of localStorage playlists to Firestore
+  _migrateLocalPlaylistsToFirestore();
+}
+
+/**
+ * One-time migration: copy lu_music_playlists from localStorage to Firestore.
+ * Runs only once per device (guarded by lu_playlists_migrated_v1).
+ * Fire-and-forget — never blocks the UI.
+ */
+async function _migrateLocalPlaylistsToFirestore() {
+  if (localStorage.getItem('lu_playlists_migrated_v1') === 'true') return;
+  if (!window.AvenoraFirebase?.Firestore) return;
+
+  const user = LegendState.get('user');
+  const uid  = user?.uid || user?.id || null;
+  // Only migrate if the user is signed in — we need a createdByUid
+  if (!uid) return;
+
+  const playlists = LS.get('lu_music_playlists', []);
+  if (!playlists.length) {
+    localStorage.setItem('lu_playlists_migrated_v1', 'true');
+    return;
+  }
+
+  try {
+    const FS = window.AvenoraFirebase.Firestore;
+    // Fetch existing Firestore playlists to avoid duplicates
+    let existing = [];
+    try { existing = await FS.getSharedPlaylists(); } catch (_) {}
+    const existingByDocId = new Set(existing.map(p => p.id));
+    const existingBySysId = new Set(existing.map(p => p.sysId).filter(Boolean));
+
+    for (const pl of playlists) {
+      try {
+        // Skip if already present by document ID or sysId
+        if (existingByDocId.has(pl.id)) continue;
+        if (pl.sysId && existingBySysId.has(pl.sysId)) continue;
+
+        await FS.createPlaylist(
+          pl.name,
+          pl.description || '',
+          'shared',
+          {
+            sysId:    pl.sysId || pl.id,
+            isSystem: pl.isSystem || false,
+            icon:     pl.icon || '📂',
+            color:    pl.color || 'var(--neon-blue)',
+          }
+        );
+      } catch (e) {
+        console.warn('[AVN] Migration: failed to migrate playlist', pl.name, e.message);
+      }
+    }
+
+    localStorage.setItem('lu_playlists_migrated_v1', 'true');
+    console.info('[AVN] Playlist migration to Firestore complete');
+  } catch (err) {
+    console.warn('[AVN] Playlist migration failed (will retry on next load):', err.message);
+  }
 }
 
 // ─── Shell HTML ──────────────────────────────────────────────
@@ -273,6 +342,13 @@ window.musicTabSwitch = async function (tab, clickedBtn) {
   // Clear the open-playlist tracker when navigating to a different tab
   if (typeof _currentOpenPlaylistId !== 'undefined') _currentOpenPlaylistId = null;
 
+  // Unsubscribe from any active playlist real-time listener
+  if (typeof _playlistUnsub === 'function') {
+    try { _playlistUnsub(); } catch (_) {}
+    // eslint-disable-next-line no-global-assign
+    _playlistUnsub = null;
+  }
+
   // Clean up any active real-time listeners from previous tab
   if (typeof _radioTabCleanup === 'function') _radioTabCleanup();
 
@@ -303,6 +379,11 @@ window.musicTabSwitch = async function (tab, clickedBtn) {
 // Module-level context registry: maps context string → tracks array.
 // mpLoadBackendTrack can look up the array by context for auto-advance.
 const _mpContextTracks = {};
+
+// Active playlist Firestore listener (unsubscribe handle).
+// Set when musicOpenPlaylist() establishes a real-time listener.
+// Cleared by musicTabSwitch() when leaving the playlist view.
+let _playlistUnsub = null;
 
 async function renderDiscover() {
   let trackSection = '';
@@ -888,19 +969,24 @@ window.musicTabLibraryGenre = function (genre) {
 
 // ─── PLAYLISTS TAB ───────────────────────────────────────────
 async function renderPlaylists() {
-  let playlists = LS.get('lu_music_playlists', []);
-
-  // Try to merge with backend playlists if logged in
-  if (LegendAPI.auth.isLoggedIn()) {
+  // Primary source: Firestore shared playlists
+  let playlists = [];
+  if (window.AvenoraFirebase?.Firestore?.getSharedPlaylists) {
     try {
-      const data = await LegendAPI.music.playlists();
-      if (data.playlists) {
-        playlists = [
-          ...playlists,
-          ...data.playlists.map(p => ({ ...p, _isBackend: true })),
-        ];
-      }
-    } catch { /* not connected */ }
+      playlists = await window.AvenoraFirebase.Firestore.getSharedPlaylists();
+    } catch (e) {
+      console.warn('[AVN] renderPlaylists Firestore load failed, using localStorage:', e.message);
+    }
+  }
+
+  // Merge with localStorage fallback (adds any playlists not yet in Firestore)
+  if (!playlists.length) {
+    playlists = LS.get('lu_music_playlists', []);
+  } else {
+    // Also show local-only playlists not yet migrated
+    const fsIds = new Set(playlists.map(p => p.id));
+    const localOnly = LS.get('lu_music_playlists', []).filter(p => !fsIds.has(p.id));
+    playlists = [...playlists, ...localOnly];
   }
 
   const systemPlaylists = playlists.filter(p => p.isSystem);
@@ -1767,6 +1853,9 @@ window.musicOpenTrackMenu = function (evtOrBtn, trackData) {
     <button class="music-ctx-item" onclick="musicCtxAddToPlaylist()">
       <span>📂</span> Add to Playlist…
     </button>
+    <button class="music-ctx-item" onclick="musicCtxAddToRadio()">
+      <span>📻</span> Add to Radio
+    </button>
     <button class="music-ctx-item" onclick="musicCtxToggleLike()">
       <span>♥</span> ${new Set(LS.get('lu_mp_favorites',[])).has(trackId) ? 'Remove from Liked' : 'Add to Liked'}
     </button>
@@ -1843,6 +1932,110 @@ window.musicCtxAddToPlaylist = function () {
   if (!_trackMenuTrack) return;
   const name = _trackMenuTrack.name || _trackMenuTrack.title || 'Track';
   musicAddToPlaylistModal(String(_trackMenuTrack.id), name);
+};
+
+window.musicCtxAddToRadio = function () {
+  musicCtxClose();
+  if (!_trackMenuTrack) return;
+  window.radioAddTrack(_trackMenuTrack);
+};
+
+// ─── REPAIR 5: Add to 24-Hour Radio ───────────────────────────
+
+/**
+ * Add a track to the Avenora Radio queue.
+ * Tries the backend API first; on failure falls back to Firestore.
+ */
+window.radioAddTrack = async function (track) {
+  // 1. Check auth
+  const user = LegendState.get('user') || window.AvenoraFirebase?.Auth?.getUser?.();
+  if (!user) { Toast.error('Sign in to add tracks to radio'); return; }
+
+  // 2. Resolve URL
+  const audioUrl = (typeof MusicService !== 'undefined' && MusicService.resolveAudioUrl)
+    ? MusicService.resolveAudioUrl(track)
+    : (track.fileUrl || track.audioUrl || track.url || null);
+
+  if (!audioUrl) { Toast.error('This track has no playable URL'); return; }
+
+  const uid = user.uid || user.id;
+  const payload = {
+    stationId:   'avenoraRadio',
+    trackId:     String(track.id || `${Date.now()}`),
+    title:       track.title || track.name || 'Untitled',
+    artist:      track.artistName || track.artist || '',
+    audioUrl,
+    url:         audioUrl,
+    storagePath: track.storagePath || '',
+    coverUrl:    track.coverUrl || null,
+    duration:    track.duration || 0,
+    uid,
+  };
+
+  // 3. Try backend API first
+  try {
+    const apiUrl = window.LU_CONFIG?.apiUrl || '';
+    let token = null;
+    try {
+      const { getFirebaseAuth } = window.AvenoraFirebase || {};
+      if (getFirebaseAuth) {
+        const auth = await getFirebaseAuth();
+        if (auth.currentUser) token = await auth.currentUser.getIdToken();
+      }
+    } catch (_) {}
+
+    const res = await fetch(`${apiUrl}/radio/station/playlist/add`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    if (res.ok) {
+      Toast.success(`"${payload.title}" added to radio!`);
+      return;
+    }
+
+    const errData = await res.json().catch(() => ({}));
+    // If station hasn't started (no station), fall through to Firestore
+    if (res.status !== 404 && errData.message !== 'Station not initialised') {
+      Toast.error(`Could not add to radio: ${errData.message || `HTTP ${res.status}`}`);
+      return;
+    }
+  } catch (netErr) {
+    // Network error or backend not running — fall through to Firestore
+    console.warn('[AVN] radioAddTrack backend failed, trying Firestore:', netErr.message);
+  }
+
+  // 4. Fallback: write directly to Firestore radioQueue
+  if (!window.AvenoraFirebase?.getFirestore) {
+    Toast.error('Could not add to radio — backend unavailable and Firestore not loaded.');
+    return;
+  }
+
+  try {
+    const db = await window.AvenoraFirebase.getFirestore();
+    const { collection, addDoc, serverTimestamp } =
+      await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+    await addDoc(collection(db, 'radioQueue', 'avenoraRadio', 'tracks'), {
+      trackId:     payload.trackId,
+      title:       payload.title,
+      artist:      payload.artist,
+      audioUrl,
+      url:         audioUrl,
+      storagePath: payload.storagePath,
+      coverUrl:    payload.coverUrl,
+      duration:    payload.duration,
+      addedByUid:  uid,
+      addedAt:     serverTimestamp(),
+    });
+    Toast.success(`"${payload.title}" queued for radio!`);
+  } catch (fsErr) {
+    console.error('[AVN] radioAddTrack Firestore fallback failed:', fsErr.message);
+    Toast.error(`Could not add to radio: ${fsErr.message}`);
+  }
 };
 
 // ─── Detail views ─────────────────────────────────────────────
@@ -2082,21 +2275,36 @@ async function _resolvePlaylistTracks(trackIds) {
   return resolved;
 }
 
-window.musicOpenPlaylist = function (id) {
-  const playlists = LS.get('lu_music_playlists', []);
-  const pl = playlists.find(p => p.id === id);
-  if (!pl) { Toast.error('Playlist not found'); return; }
-
+window.musicOpenPlaylist = async function (id) {
   const el = document.getElementById('music-content');
   if (!el) return;
+
+  // Cancel any existing playlist listener
+  if (_playlistUnsub) { try { _playlistUnsub(); } catch (_) {} _playlistUnsub = null; }
+
+  // Try Firestore first, then localStorage fallback
+  let pl = null;
+  if (window.AvenoraFirebase?.Firestore) {
+    try {
+      const all = await window.AvenoraFirebase.Firestore.getSharedPlaylists();
+      pl = all.find(p => p.id === id) || null;
+    } catch (e) {
+      console.warn('[AVN] musicOpenPlaylist Firestore lookup failed:', e.message);
+    }
+  }
+  if (!pl) {
+    const playlists = LS.get('lu_music_playlists', []);
+    pl = playlists.find(p => p.id === id) || null;
+  }
+
+  if (!pl) { Toast.error('Playlist not found'); return; }
 
   // Track the currently open playlist so Import Files knows which playlist to update
   _currentOpenPlaylistId = id;
 
-  const trackIds = pl.tracks || [];
-  const sp = SYSTEM_PLAYLISTS.find(s => s.sysId === pl.sysId);
-  const icon = sp ? sp.icon : '📂';
-  const color = sp ? sp.color : 'var(--neon-blue)';
+  const sp = SYSTEM_PLAYLISTS.find(s => s.sysId === (pl.sysId || id));
+  const icon = pl.icon || (sp ? sp.icon : '📂');
+  const color = pl.color || (sp ? sp.color : 'var(--neon-blue)');
 
   const editControls = pl.isSystem ? '' : `
     <button class="btn btn-outline btn-sm"
@@ -2104,7 +2312,7 @@ window.musicOpenPlaylist = function (id) {
     <button class="btn btn-outline btn-sm" style="color:var(--neon-red);border-color:rgba(255,60,80,0.3)"
       onclick="musicDeletePlaylist('${escapeHtml(id)}','${escapeHtml(pl.name)}')">🗑 Delete</button>`;
 
-  // Render shell immediately with loading state, then fill tracks asynchronously
+  // Render shell immediately with loading state
   el.innerHTML = `
     <div>
       <button class="btn btn-ghost btn-sm" style="margin-bottom:var(--space-lg)"
@@ -2120,7 +2328,7 @@ window.musicOpenPlaylist = function (id) {
             ${escapeHtml(pl.name)}
           </h2>
           ${pl.description ? `<p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:var(--space-sm)">${escapeHtml(pl.description)}</p>` : ''}
-          <p style="color:var(--text-muted);font-size:0.8rem">${trackIds.length} track${trackIds.length!==1?'s':''}</p>
+          <p id="pl-track-count" style="color:var(--text-muted);font-size:0.8rem">Loading…</p>
           <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;margin-top:var(--space-md)">
             <button class="btn btn-green btn-sm" id="pl-play-all-btn" onclick="musicPlayLocalPlaylist('${escapeHtml(id)}')">▶ Play All</button>
             <button class="btn btn-outline btn-sm" id="pl-shuffle-btn" onclick="musicShufflePlaylist('${escapeHtml(id)}')">⇄ Shuffle</button>
@@ -2131,44 +2339,25 @@ window.musicOpenPlaylist = function (id) {
       </div>
 
       <div id="pl-track-list-wrap">
-        ${trackIds.length === 0
-          ? `<div class="music-empty">
-               <span class="music-empty-icon">${icon}</span>
-               <p>This playlist is empty.</p>
-               <p style="font-size:0.82rem;color:var(--text-muted)">Go to the Songs tab and tap ⋮ → Add to Playlist.</p>
-               <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center;margin-top:var(--space-md)">
-                 <button class="btn btn-green btn-sm" onclick="mpImport()">📂 Import Files</button>
-                 <button class="btn btn-outline btn-sm" onclick="musicTabSwitch('library')">Browse Songs</button>
-               </div>
-             </div>`
-          : `<div style="color:var(--text-muted);font-size:0.85rem;padding:var(--space-md) 0">Loading tracks…</div>`}
+        <div style="color:var(--text-muted);font-size:0.85rem;padding:var(--space-md) 0">Loading tracks…</div>
       </div>
     </div>`;
 
-  if (!trackIds.length) return;
-
-  // Asynchronously resolve & render tracks
-  _resolvePlaylistTracks(trackIds).then(tracks => {
+  // Helper to render the track list from a Firestore tracks array
+  function _renderFsTracks(tracks) {
     const wrap = document.getElementById('pl-track-list-wrap');
-    if (!wrap) return; // user navigated away
+    const countEl = document.getElementById('pl-track-count');
+    if (!wrap) return;
+
+    if (countEl) countEl.textContent = `${tracks.length} track${tracks.length !== 1 ? 's' : ''}`;
 
     if (!tracks.length) {
-      // Show a specific diagnostic rather than the generic "may have been deleted"
-      // message — auth timing, network errors, or Firestore rules failures are far
-      // more common than actual deletion, and hiding the real cause wastes time.
-      const signedIn = !!(sessionStorage.getItem('lu_uid') || localStorage.getItem('lu_uid'));
-      const diagCode = signedIn ? 'MEDIA_RECORD_MISSING' : 'NOT_SIGNED_IN';
-      const diagMsg  = signedIn
-        ? 'The track reference could not be resolved from your cloud library. Check the browser console for the specific error (DevTools → Console).'
-        : 'You must be signed in to load cloud tracks. Sign in and try again.';
-
       wrap.innerHTML = `
         <div class="music-empty">
           <span class="music-empty-icon">${icon}</span>
-          <p style="color:var(--neon-red);font-weight:600">${diagCode}</p>
-          <p style="font-size:0.82rem;color:var(--text-muted);margin-bottom:var(--space-sm)">${diagMsg}</p>
+          <p>This playlist is empty.</p>
+          <p style="font-size:0.82rem;color:var(--text-muted)">Go to the Songs tab and tap ⋮ → Add to Playlist.</p>
           <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center;margin-top:var(--space-md)">
-            <button class="btn btn-cosmic btn-sm" onclick="musicOpenPlaylist('${escapeHtml(id)}')">↺ Retry</button>
             <button class="btn btn-green btn-sm" onclick="mpImport()">📂 Import Files</button>
             <button class="btn btn-outline btn-sm" onclick="musicTabSwitch('library')">Browse Songs</button>
           </div>
@@ -2176,18 +2365,56 @@ window.musicOpenPlaylist = function (id) {
       return;
     }
 
-    // Store resolved tracks on the playlist view for play/shuffle
-    // Using a module-level map keyed by playlist id
+    // Store for play/shuffle operations
     _plResolvedTracks[id] = tracks;
 
     wrap.innerHTML = `<div class="music-track-list">${tracks.map((t, i) => {
-      if (t._isLocal) {
-        return renderLocalTrackRow(t, t._localIndex != null ? t._localIndex : MP.queue.indexOf(t));
-      }
-      return renderTrackRow(t, i, tracks, 'playlist-' + id);
+      // Firestore playlist track → treat as backend track with audioUrl
+      const trackObj = {
+        id:         t._docId || t.trackId || t.id,
+        title:      t.title || 'Untitled',
+        artistName: t.artist || '',
+        fileUrl:    t.audioUrl || '',
+        storagePath: t.storagePath || '',
+        _isFirestore: true,
+      };
+      return renderTrackRow(trackObj, i, tracks.map(x => ({
+        id: x._docId || x.trackId || x.id,
+        title: x.title || 'Untitled',
+        artistName: x.artist || '',
+        fileUrl: x.audioUrl || '',
+        storagePath: x.storagePath || '',
+        _isFirestore: true,
+      })), 'playlist-' + id);
     }).join('')}</div>`;
+  }
+
+  // Try Firestore real-time listener first
+  if (window.AvenoraFirebase?.Firestore?.listenToPlaylist) {
+    _playlistUnsub = window.AvenoraFirebase.Firestore.listenToPlaylist(id, (tracks) => {
+      _renderFsTracks(tracks);
+    });
+    return;
+  }
+
+  // Fallback: localStorage-based resolution (old path)
+  const localPl = LS.get('lu_music_playlists', []).find(p => p.id === id);
+  const trackIds = localPl?.tracks || [];
+  if (trackIds.length === 0) {
+    _renderFsTracks([]);
+    return;
+  }
+
+  _resolvePlaylistTracks(trackIds).then(tracks => {
+    _renderFsTracks(tracks.map(t => ({
+      _docId: t.id,
+      trackId: t.id,
+      title: t.title || t.name || 'Untitled',
+      artist: t.artistName || t.artist || '',
+      audioUrl: t.fileUrl || t.url || t.audioUrl || '',
+      storagePath: t.storagePath || '',
+    })));
   }).catch(err => {
-    console.warn('[AVN] Playlist track resolution failed:', err);
     const wrap = document.getElementById('pl-track-list-wrap');
     if (wrap) wrap.innerHTML = `
       <div style="padding:var(--space-md)">
@@ -2242,16 +2469,35 @@ window.musicCreatePlaylistModal = function () {
   setTimeout(() => document.getElementById('new-pl-name')?.focus(), 100);
 };
 
-window.musicConfirmCreatePlaylist = function () {
+window.musicConfirmCreatePlaylist = async function () {
   const name = document.getElementById('new-pl-name')?.value.trim();
   if (!name) { Toast.error('Please enter a playlist name'); return; }
+  const description = document.getElementById('new-pl-desc')?.value.trim() || '';
+
+  // Try Firestore first
+  if (window.AvenoraFirebase?.Firestore?.createPlaylist) {
+    try {
+      await window.AvenoraFirebase.Firestore.createPlaylist(name, description, 'shared');
+      // Also update localStorage for offline fallback
+      const newId = `pl-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const playlists = LS.get('lu_music_playlists', []);
+      playlists.push({ id: newId, name, description, tracks: [], visibility: 'shared', createdAt: new Date().toISOString() });
+      LS.set('lu_music_playlists', playlists);
+      Modal.close('create-playlist-modal');
+      Toast.success(`Playlist "${name}" created!`);
+      musicTabSwitch('playlists');
+      return;
+    } catch (e) {
+      console.warn('[AVN] Firestore createPlaylist failed, using localStorage:', e.message);
+    }
+  }
+
+  // localStorage fallback
   const playlists = LS.get('lu_music_playlists', []);
   const newPl = {
     id: `pl-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-    name,
-    description: document.getElementById('new-pl-desc')?.value.trim() || '',
-    tracks: [],
-    visibility: 'private',
+    name, description, tracks: [],
+    visibility: 'shared',
     createdAt: new Date().toISOString(),
   };
   playlists.push(newPl);
@@ -2275,9 +2521,19 @@ window.musicRenamePlaylist = function (id, currentName) {
   Modal.open('rename-pl-modal');
 };
 
-window.musicConfirmRenamePlaylist = function (id) {
+window.musicConfirmRenamePlaylist = async function (id) {
   const name = document.getElementById('rename-pl-input')?.value.trim();
   if (!name) { Toast.error('Name cannot be empty'); return; }
+
+  // Update Firestore
+  if (window.AvenoraFirebase?.Firestore?.updatePlaylist) {
+    try {
+      await window.AvenoraFirebase.Firestore.updatePlaylist(id, { name });
+    } catch (e) {
+      console.warn('[AVN] Firestore updatePlaylist failed:', e.message);
+    }
+  }
+  // Always update localStorage too
   const playlists = LS.get('lu_music_playlists', []);
   const pl = playlists.find(p => p.id === id);
   if (pl) { pl.name = name; LS.set('lu_music_playlists', playlists); }
@@ -2286,8 +2542,18 @@ window.musicConfirmRenamePlaylist = function (id) {
   musicTabSwitch('playlists');
 };
 
-window.musicDeletePlaylist = function (id, name) {
+window.musicDeletePlaylist = async function (id, name) {
   if (!confirm(`Delete playlist "${name}"? This cannot be undone.`)) return;
+
+  // Delete from Firestore
+  if (window.AvenoraFirebase?.Firestore?.deletePlaylist) {
+    try {
+      await window.AvenoraFirebase.Firestore.deletePlaylist(id);
+    } catch (e) {
+      console.warn('[AVN] Firestore deletePlaylist failed:', e.message);
+    }
+  }
+  // Always delete from localStorage too
   const playlists = LS.get('lu_music_playlists', []).filter(p => p.id !== id);
   LS.set('lu_music_playlists', playlists);
   Toast.success('Playlist deleted');
@@ -2335,28 +2601,49 @@ window.musicAddToPlaylistModal = function (trackId, trackName) {
   Modal.open('add-to-pl-modal');
 };
 
-window.musicConfirmAddToPlaylist = function (trackId) {
+window.musicConfirmAddToPlaylist = async function (trackId) {
   // Normalise to string — prevents numeric vs string type mismatches in pl.tracks
   const sid = String(trackId);
   const checked = document.querySelectorAll('#music-pl-check-list input[name="pl-check"]');
   if (!checked.length) { Modal.close('add-to-pl-modal'); return; }
 
+  // Resolve the track object for Firestore writes (need title, artist, etc.)
+  const trackObj = _trackMenuTrack || {};
+
   const playlists = LS.get('lu_music_playlists', []);
   let added = 0, removed = 0;
 
-  checked.forEach(cb => {
+  for (const cb of checked) {
     const pl = playlists.find(p => p.id === cb.value);
-    if (!pl) return;
+    if (!pl) continue;
     if (!pl.tracks) pl.tracks = [];
     // Normalise existing IDs to strings for consistent comparison
     pl.tracks = pl.tracks.map(t => String(t));
     if (cb.checked) {
-      if (!pl.tracks.includes(sid)) { pl.tracks.push(sid); added++; }
+      if (!pl.tracks.includes(sid)) {
+        pl.tracks.push(sid);
+        added++;
+        // Write to Firestore (fire-and-forget)
+        if (window.AvenoraFirebase?.Firestore?.addTrackToPlaylist) {
+          window.AvenoraFirebase.Firestore.addTrackToPlaylist(cb.value, {
+            id:          sid,
+            title:       trackObj.title || trackObj.name || 'Untitled',
+            artistName:  trackObj.artistName || trackObj.artist || '',
+            fileUrl:     trackObj.fileUrl || trackObj.url || trackObj.audioUrl || '',
+            storagePath: trackObj.storagePath || '',
+          }).catch(e => console.warn('[AVN] Firestore addTrackToPlaylist failed:', e.message));
+        }
+      }
     } else {
       const idx = pl.tracks.indexOf(sid);
-      if (idx !== -1) { pl.tracks.splice(idx, 1); removed++; }
+      if (idx !== -1) {
+        pl.tracks.splice(idx, 1);
+        removed++;
+        // Note: Firestore removal requires the _docId which we don't have here.
+        // The full Firestore removal is handled by dedicated per-track remove buttons.
+      }
     }
-  });
+  }
 
   LS.set('lu_music_playlists', playlists);
   // Invalidate resolved track cache for affected playlists so next open re-fetches
@@ -2599,7 +2886,30 @@ window.mpLoadTrack = function (index) {
   const audio     = document.getElementById('mp-audio');
   if (!audio) return;
 
-  audio.src = track.url;
+  // Resolve URL via shared helper (prefers url, then falls back to storagePath)
+  const resolvedUrl = (typeof MusicService !== 'undefined' && MusicService.resolveAudioUrl)
+    ? MusicService.resolveAudioUrl(track)
+    : (track.url || track.fileUrl || track.audioUrl || null);
+
+  console.log(
+    '[AVN Player] mpLoadTrack',
+    'id:', track.id, 'title:', track.name,
+    'resolvedUrl:', resolvedUrl,
+    'storagePath:', track.storagePath || null,
+    'audio.readyState:', audio.readyState,
+    'audio.networkState:', audio.networkState,
+  );
+
+  if (!resolvedUrl) {
+    Toast.error('This track has no playable URL.');
+    return;
+  }
+
+  audio.src = resolvedUrl;
+
+  // Ensure audio is not muted and has volume before playing
+  audio.muted = false;
+  if (audio.volume === 0) audio.volume = 0.8;
 
   // Update player UI
   document.getElementById('mp-title').textContent  = track.name;
@@ -2630,21 +2940,39 @@ window.mpLoadTrack = function (index) {
   // Notify shared music service (DJ System, Cloud Stream, etc.)
   if (typeof MusicService !== 'undefined') MusicService._notifyTrackChange(track);
 
-  audio.play().catch(err => {
-    console.warn('[AVN] Audio playback error:', err);
-    Toast.error('This track could not be played. Please try another.');
-    MP.isPlaying = false;
-    mpUpdatePlayBtn();
-  });
+  // Only update playing UI state after the play promise resolves
+  const playPromise = audio.play();
+  if (playPromise && typeof playPromise.then === 'function') {
+    playPromise.then(() => {
+      MP.isPlaying = true;
+      mpUpdatePlayBtn();
+    }).catch(err => {
+      const audioErr = audio.error;
+      console.warn(
+        '[AVN Player] mpLoadTrack play error',
+        'name:', err.name, 'message:', err.message,
+        'audio.error.code:', audioErr?.code,
+        'audio.error.message:', audioErr?.message,
+      );
+      if (err.name === 'NotAllowedError') {
+        Toast.info('Tap the play button to start playback (browser autoplay policy).');
+      } else if (err.name === 'NotSupportedError') {
+        Toast.error('This audio format is not supported by your browser.');
+      } else if (err.name === 'AbortError') {
+        // Playback was interrupted — usually by loading the next track; not an error.
+        console.info('[AVN Player] Playback aborted (likely superseded by next track).');
+      } else {
+        Toast.error('This track could not be played. Please try another.');
+      }
+      MP.isPlaying = false;
+      mpUpdatePlayBtn();
+    });
+  }
 
   mpInitVisualizer(audio);
 };
 
 window.mpLoadBackendTrack = async function (track, index, context, tracksArray) {
-  if (!track.fileUrl && !track.storagePath) {
-    Toast.error('This track is not available for playback.');
-    return;
-  }
   MP.backendQueue = context;
   MP.currentIndex = index;
   // Store the full tracks array for auto-advance.
@@ -2660,23 +2988,38 @@ window.mpLoadBackendTrack = async function (track, index, context, tracksArray) 
   const audio = document.getElementById('mp-audio');
   if (!audio) return;
 
-  // For Firestore-backed cloud tracks the music bucket is public — use fileUrl directly.
-  // For MongoDB backend tracks with a storagePath, refresh the signed URL so an expired
-  // URL does not cause a 403 on the audio element.
-  let playUrl = track.fileUrl;
-  if (track.storagePath && track.id && !track._isFirestore) {
+  // Resolve URL using shared resolveAudioUrl helper first.
+  // For MongoDB-backend tracks with a storagePath, also try to refresh the signed URL.
+  let playUrl = (typeof MusicService !== 'undefined' && MusicService.resolveAudioUrl)
+    ? MusicService.resolveAudioUrl(track)
+    : (track.fileUrl || track.url || track.audioUrl || null);
+
+  if (track.storagePath && track.id && !track._isFirestore && !playUrl) {
     try {
       const refreshed = await LegendAPI.request('GET', `/music/tracks/${track.id}/url`).catch(() => null);
       if (refreshed?.url) playUrl = refreshed.url;
     } catch (_) {}
   }
 
+  console.log(
+    '[AVN Player] mpLoadBackendTrack',
+    'id:', track.id, 'title:', track.title,
+    'resolvedUrl:', playUrl,
+    'storagePath:', track.storagePath || null,
+    'audio.readyState:', audio.readyState,
+    'audio.networkState:', audio.networkState,
+  );
+
   if (!playUrl) {
-    Toast.error('This track has no audio URL.');
+    Toast.error('This track has no playable audio URL.');
     return;
   }
 
   audio.src = playUrl;
+
+  // Ensure audio is not muted and has volume before playing
+  audio.muted = false;
+  if (audio.volume === 0) audio.volume = 0.8;
 
   document.getElementById('mp-title').textContent  = track.title || 'Unknown';
   document.getElementById('mp-artist').textContent = track.artistName || '';
@@ -2691,12 +3034,33 @@ window.mpLoadBackendTrack = async function (track, index, context, tracksArray) 
     artEl.className = 'mp-art playing';
   }
 
-  audio.play().catch(err => {
-    console.warn('[AVN] Backend track playback error:', err);
-    Toast.error('This track could not be played. Please try another.');
-    MP.isPlaying = false;
-    mpUpdatePlayBtn();
-  });
+  // Only update playing UI state after the play promise resolves
+  const playPromise = audio.play();
+  if (playPromise && typeof playPromise.then === 'function') {
+    playPromise.then(() => {
+      MP.isPlaying = true;
+      mpUpdatePlayBtn();
+    }).catch(err => {
+      const audioErr = audio.error;
+      console.warn(
+        '[AVN Player] mpLoadBackendTrack play error',
+        'name:', err.name, 'message:', err.message,
+        'audio.error.code:', audioErr?.code,
+        'audio.error.message:', audioErr?.message,
+      );
+      if (err.name === 'NotAllowedError') {
+        Toast.info('Tap the play button to start playback (browser autoplay policy).');
+      } else if (err.name === 'NotSupportedError') {
+        Toast.error('This audio format is not supported by your browser.');
+      } else if (err.name === 'AbortError') {
+        console.info('[AVN Player] Backend track playback aborted (likely superseded by next track).');
+      } else {
+        Toast.error('This track could not be played. Please try another.');
+      }
+      MP.isPlaying = false;
+      mpUpdatePlayBtn();
+    });
+  }
 
   // Record server-side play for MongoDB-backed tracks only (non-critical)
   if (track.id && !track._isFirestore) {

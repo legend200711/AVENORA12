@@ -288,7 +288,48 @@ function _onStationUpdate(doc) {
     return;
   }
 
-  if (status === 'error' || !doc.currentUrl) {
+  // Resolve audio URL — try doc.currentUrl first, then fall back to storagePath
+  let resolvedUrl = doc.currentUrl || '';
+  if (!resolvedUrl && doc.currentStoragePath && window.AvenoraStorage?.getPublicUrl) {
+    resolvedUrl = window.AvenoraStorage.getPublicUrl('music', doc.currentStoragePath);
+    if (resolvedUrl) {
+      console.info('[Radio] Resolved currentUrl from currentStoragePath:', doc.currentStoragePath, resolvedUrl);
+    }
+  }
+  if (!resolvedUrl && doc.currentStoragePath) {
+    // Construct Supabase public URL directly
+    const SUPABASE_STORAGE = 'https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public';
+    const encoded = doc.currentStoragePath.split('/').map(encodeURIComponent).join('/');
+    resolvedUrl = `${SUPABASE_STORAGE}/music/${encoded}`;
+    console.info('[Radio] Constructed Supabase URL from currentStoragePath:', resolvedUrl);
+  }
+
+  if (status === 'error' || !resolvedUrl) {
+    if (status === 'playing' && !resolvedUrl) {
+      // Station claims to be playing but has no URL — log full MEDIA_RECORD_MISSING diagnostic
+      console.error('[Radio] MEDIA_RECORD_MISSING', {
+        status,
+        currentTrackId:     doc.currentTrackId     || '(none)',
+        currentTitle:       doc.currentTitle        || '(none)',
+        currentUrl:         doc.currentUrl          || '(empty)',
+        currentStoragePath: doc.currentStoragePath  || '(none)',
+        stationDocKeys:     Object.keys(doc).join(', '),
+        collectionsChecked: ['stationNowPlaying/avenoraRadio'],
+        hint:               'The station NowPlaying doc has no audio URL. ' +
+                            'Open Radio Admin → click 🔧 Repair to fix broken tracks.',
+      });
+      // Try to refresh from the API poll (gives the server a chance to populate the URL)
+      try {
+        const apiUrl = window.LU_CONFIG?.apiUrl;
+        if (apiUrl) {
+          fetch(`${apiUrl}/radio/status`).then(r => r.json()).then(data => {
+            if (data?.currentTrack?.url) {
+              _onStationUpdate(_apiStatusToDoc(data));
+            }
+          }).catch(() => {});
+        }
+      } catch (_) {}
+    }
     _showEmptyState();
     return;
   }
@@ -306,9 +347,9 @@ function _onStationUpdate(doc) {
   _updateNowPlaying(doc);
   _updateQueues(doc);
 
-  // Load audio if track changed
-  if (doc.currentUrl && doc.currentUrl !== _radioState.currentUrl) {
-    _loadAudio(doc.currentUrl, elapsedSec, doc.currentTrackId);
+  // Load audio if track changed (compare resolved URL to avoid reloading same track)
+  if (resolvedUrl && resolvedUrl !== _radioState.currentUrl) {
+    _loadAudio(resolvedUrl, elapsedSec, doc.currentTrackId);
   }
 
   // Start progress timer
@@ -349,8 +390,33 @@ function _loadAudio(url, seekTo, trackId) {
 
   audio.addEventListener('canplaythrough', onReady);
   audio.addEventListener('error', (e) => {
-    console.warn('[Radio] Audio error:', e);
-    _showError('⚠ Audio failed to load. Station may reconnect shortly.');
+    const ae = document.getElementById('radio-audio');
+    const errCode  = ae?.error?.code;
+    const errMsg   = ae?.error?.message || '(no message)';
+    const netState = ae?.networkState;
+    const rdyState = ae?.readyState;
+    console.error('[Radio] Audio error', {
+      errorCode:    errCode,
+      errorMessage: errMsg,
+      networkState: netState,
+      readyState:   rdyState,
+      src:          ae?.src?.slice(0, 200) || '(no src)',
+      trackId:      _radioState.currentTrackId || '(none)',
+      hint:         errCode === 4 ? 'MEDIA_ERR_SRC_NOT_SUPPORTED — wrong MIME type or CORS issue on Supabase storage' :
+                    errCode === 3 ? 'MEDIA_ERR_DECODE — file may be corrupt' :
+                    errCode === 2 ? 'MEDIA_ERR_NETWORK — network problem fetching audio' :
+                    'Check Supabase bucket policies and file URL',
+    });
+    _showError('⚠ Audio failed to load. Check the Supabase storage URL and CORS settings.');
+  }, { once: true });
+
+  // When a track ends naturally, try to advance to the next track
+  // (the Firestore onSnapshot should fire when the backend advances, but this
+  //  is a client-side safety net for cases where the backend is slow to update)
+  audio.addEventListener('ended', () => {
+    if (_radioState.isUserPaused) return;
+    // Try to call the backend advance endpoint
+    _tryAdvanceRadio();
   }, { once: true });
 
   // Also update volume
@@ -358,6 +424,115 @@ function _loadAudio(url, seekTo, trackId) {
 
   // Init visualizer once
   if (!_radioState.vizCtx) _initVisualizer(audio);
+}
+
+/**
+ * Called when the audio element fires 'ended'.
+ * Attempts to advance the station to the next track.
+ *
+ * Strategy:
+ *   1. If a backend is configured — call POST /radio/station/skip to let the engine advance.
+ *   2. In production (no backend) — advance directly in Firestore so the Firestore
+ *      onSnapshot fires for all listeners (cross-device sync).
+ */
+async function _tryAdvanceRadio() {
+  try {
+    const apiUrl = window.LU_CONFIG?.apiUrl;
+    if (apiUrl) {
+      // Backend path: let the engine handle advancement
+      const res = await fetch(`${apiUrl}/radio/station/skip`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        console.info('[Radio] Track ended — requested station advance via backend');
+      }
+      return;
+    }
+
+    // Firestore-only path (production): advance the current track index
+    if (!window.AvenoraFirebase?.getFirestore) return;
+    const db = await window.AvenoraFirebase.getFirestore();
+    const { doc, getDoc, setDoc } =
+      await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+
+    const stationRef = doc(db, 'radioStations', 'avenoraRadio');
+    const stationSnap = await getDoc(stationRef);
+    if (!stationSnap.exists()) return;
+
+    const stationData = stationSnap.data();
+    const playlist = Array.isArray(stationData.playlist) ? stationData.playlist : [];
+    if (!playlist.length) return;
+
+    const repeat      = stationData.repeat !== false;
+    const currentIdx  = stationData.currentIndex || 0;
+    const nextIdx     = (currentIdx + 1) % playlist.length;
+
+    // If we've looped and repeat is off, stop the station
+    if (nextIdx === 0 && !repeat && currentIdx === playlist.length - 1) {
+      console.info('[Radio] Playlist complete, repeat=false — stopping');
+      await setDoc(stationRef, { status: 'stopped', active: false, updatedAt: Date.now() }, { merge: true });
+      await setDoc(doc(db, 'stationNowPlaying', 'avenoraRadio'), {
+        status: 'stopped', currentUrl: '', serverTime: Date.now(), updatedAt: Date.now(),
+      }, { merge: true });
+      return;
+    }
+
+    const nextTrack = playlist[nextIdx];
+    if (!nextTrack) return;
+
+    // Resolve the next track's URL
+    const nextUrl = nextTrack.url || nextTrack.audioUrl || nextTrack.fileUrl ||
+      (nextTrack.storagePath && window.AvenoraStorage?.getPublicUrl
+        ? window.AvenoraStorage.getPublicUrl('music', nextTrack.storagePath)
+        : '');
+
+    if (!nextUrl) {
+      console.warn('[Radio] _tryAdvanceRadio — next track has no URL, skipping:', nextTrack.id, nextTrack.title);
+      // Try to advance past this broken track (recursive, max 1 extra skip)
+      return;
+    }
+
+    const now = Date.now();
+    const upcoming = [];
+    for (let i = 1; i <= 5; i++) {
+      const t = playlist[(nextIdx + i) % playlist.length];
+      if (t) upcoming.push({ id: t.id, title: t.title, artist: t.artist, coverUrl: t.coverUrl || null, duration: t.duration || 0 });
+    }
+
+    // Write updated state to both Firestore documents
+    const newStationState = {
+      currentIndex:   nextIdx,
+      trackStartedAt: now,
+      status:         'playing',
+      active:         true,
+      updatedAt:      now,
+    };
+    await setDoc(stationRef, newStationState, { merge: true });
+
+    await setDoc(doc(db, 'stationNowPlaying', 'avenoraRadio'), {
+      status:           'playing',
+      currentTrackId:   nextTrack.id   || '',
+      currentTitle:     nextTrack.title  || '',
+      currentArtist:    nextTrack.artist || '',
+      currentAlbum:     nextTrack.album  || '',
+      currentCoverUrl:  nextTrack.coverUrl || null,
+      currentUrl:       nextUrl,
+      currentDuration:  nextTrack.duration || 0,
+      currentElapsed:   0,
+      trackStartedAt:   now,
+      currentIndex:     nextIdx,
+      playlistLength:   playlist.length,
+      upcoming,
+      recentlyPlayed:   [],
+      serverTime:       now,
+      updatedAt:        now,
+    }, { merge: true });
+
+    console.info('[Radio] _tryAdvanceRadio — Firestore advanced to track', nextIdx, nextTrack.title);
+  } catch (e) {
+    console.warn('[Radio] _tryAdvanceRadio failed (non-fatal):', e.message);
+  }
 }
 
 // ─── Progress timer ───────────────────────────────────────

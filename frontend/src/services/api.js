@@ -488,9 +488,19 @@
       return get(`/posts?page=${page}&limit=20`);
     },
     async feedByAuthor(authorId, page = 1) {
+      if (window.AvenoraFirebase?.Firestore?.getPostsByUid) {
+        // Use canonical UID-based query (new implementation)
+        const all = await window.AvenoraFirebase.Firestore.getPostsByUid(authorId, 200);
+        return { posts: all.slice((page - 1) * 20, page * 20) };
+      }
       if (window.AvenoraFirebase?.Firestore) {
+        // Legacy fallback: scan all posts and match by UID across all fields
         const all = await window.AvenoraFirebase.Firestore.getPosts(200);
-        const filtered = all.filter(p => p.author?.id === authorId);
+        const filtered = all.filter(p =>
+          p.authorUid === authorId ||
+          p.author?.uid === authorId ||
+          p.author?.id === authorId,
+        );
         return { posts: filtered.slice((page - 1) * 20, page * 20) };
       }
       return get(`/posts?author=${authorId}&page=${page}&limit=20`);
@@ -1274,10 +1284,11 @@
         const safeEmail = fbAuthUser?.email || currentUser?.email || null;
         const safePhotoURL = fbAuthUser?.photoURL || currentUser?.profile?.avatarUrl || null;
         const minimalDoc = {
-          uid:      viewedUid,
-          username: safeUsername,
-          email:    safeEmail,
-          role:     'user',
+          uid:           viewedUid,
+          username:      safeUsername,
+          usernameLower: safeUsername.toLowerCase(),
+          email:         safeEmail,
+          role:          'user',
           profile: {
             displayName: safeUsername,
             avatarUrl:   safePhotoURL,
@@ -1325,10 +1336,23 @@
         currentUser?.username          ||
         'AVENORA User';
 
+      // Check follow status — only meaningful for non-own profiles
+      let isFollowing = false;
+      if (!isOwn && authenticatedUid && window.AvenoraFirebase?.Firestore?.getFollowStatus) {
+        try {
+          const status = await window.AvenoraFirebase.Firestore.getFollowStatus(viewedUid);
+          isFollowing = status.isFollowing || false;
+        } catch (_) {
+          // Non-fatal — default to false
+        }
+      }
+
+      const canonicalUid = fsProfile.id || viewedUid;
+
       return {
         user: {
-          id:          fsProfile.id || viewedUid,
-          uid:         fsProfile.id || viewedUid,
+          id:          canonicalUid,
+          uid:         canonicalUid,
           username:    fsProfile.username    || safeName,
           role:        fsProfile.role        || 'user',
           email:       fsProfile.email       || null,
@@ -1347,7 +1371,7 @@
           },
           createdAt:    fsProfile.createdAt  || new Date().toISOString(),
           isOwnProfile: isOwn,
-          isFollowing:  false,
+          isFollowing,
         },
       };
     },
@@ -1430,12 +1454,20 @@
 
       return get(`/users/${usernameOrUid}`);
     },
+    /**
+     * Fetch posts for a profile identified by USERNAME.
+     * Resolves the username → UID first, then queries by UID.
+     * Prefer postsByUid(uid) whenever a UID is already known.
+     */
     async posts(username, page = 1) {
       if (window.AvenoraFirebase?.Firestore) {
         const currentUser = LegendState.get('user');
-        let authorId = (currentUser?.username === username) ? currentUser.id : null;
+        // Check if this is the current user by EXACT username match only
+        let authorId = (currentUser?.username === username) ? (currentUser.uid || currentUser.id) : null;
         if (!authorId) {
+          // Resolve username → UID via exact-match lookup
           const fsProfile = await window.AvenoraFirebase.Firestore.getProfileByUsername(username);
+          // fsProfile.id is the Firestore document ID == Firebase Auth UID
           authorId = fsProfile?.id || null;
         }
         if (authorId) {
@@ -1444,11 +1476,95 @@
       }
       return get(`/users/${username}/posts?page=${page}&limit=20`);
     },
-    follow: (id) => post(`/users/${id}/follow`, {}),
-    unfollow: (id) => del(`/social/follow/${id}`),
-    followStatus: (id) => get(`/social/follow/status/${id}`),
-    followers: (id, page = 1) => get(`/social/followers/${id}?page=${page}`),
-    following: (id, page = 1) => get(`/social/following/${id}?page=${page}`),
+
+    /**
+     * Fetch posts for a profile by Firebase Auth UID directly.
+     * This is the PREFERRED method — always use this when you have the UID.
+     */
+    async postsByUid(uid, page = 1) {
+      if (!uid) return { posts: [] };
+      if (window.AvenoraFirebase?.Firestore) {
+        try {
+          const all = await (
+            window.AvenoraFirebase.Firestore.getPostsByUid
+              ? window.AvenoraFirebase.Firestore.getPostsByUid(uid, 200)
+              : PostsAPI.feedByAuthor(uid, page).then(d => d.posts || [])
+          );
+          const posts = Array.isArray(all) ? all : (all.posts || []);
+          return { posts: posts.slice((page - 1) * 20, page * 20) };
+        } catch (err) {
+          console.error('[AVN] postsByUid error', { uid, code: err.code, message: err.message });
+          throw err;
+        }
+      }
+      return get(`/users/${uid}/posts?page=${page}&limit=20`);
+    },
+
+    /**
+     * Follow a user by their Firebase Auth UID.
+     * Uses Firestore sub-collections — no REST backend required.
+     */
+    async follow(targetUid) {
+      if (window.AvenoraFirebase?.Firestore?.followUser) {
+        try {
+          return await window.AvenoraFirebase.Firestore.followUser(targetUid);
+        } catch (err) {
+          console.error('[AVN] follow error', { targetUid, code: err.code, message: err.message });
+          throw err;
+        }
+      }
+      return post(`/users/${targetUid}/follow`, {});
+    },
+
+    /**
+     * Unfollow a user by their Firebase Auth UID.
+     */
+    async unfollow(targetUid) {
+      if (window.AvenoraFirebase?.Firestore?.unfollowUser) {
+        try {
+          return await window.AvenoraFirebase.Firestore.unfollowUser(targetUid);
+        } catch (err) {
+          console.error('[AVN] unfollow error', { targetUid, code: err.code, message: err.message });
+          throw err;
+        }
+      }
+      return del(`/social/follow/${targetUid}`);
+    },
+
+    async followStatus(targetUid) {
+      if (window.AvenoraFirebase?.Firestore?.getFollowStatus) {
+        return window.AvenoraFirebase.Firestore.getFollowStatus(targetUid);
+      }
+      return get(`/social/follow/status/${targetUid}`);
+    },
+
+    async followers(targetUid, page = 1) {
+      if (window.AvenoraFirebase?.Firestore?.getFollowers) {
+        try {
+          const users = await window.AvenoraFirebase.Firestore.getFollowers(targetUid);
+          const start = (page - 1) * 20;
+          return { users: users.slice(start, start + 20) };
+        } catch (err) {
+          console.error('[AVN] followers error', { targetUid, code: err.code, message: err.message });
+          throw err;
+        }
+      }
+      return get(`/social/followers/${targetUid}?page=${page}`);
+    },
+
+    async following(targetUid, page = 1) {
+      if (window.AvenoraFirebase?.Firestore?.getFollowing) {
+        try {
+          const users = await window.AvenoraFirebase.Firestore.getFollowing(targetUid);
+          const start = (page - 1) * 20;
+          return { users: users.slice(start, start + 20) };
+        } catch (err) {
+          console.error('[AVN] following error', { targetUid, code: err.code, message: err.message });
+          throw err;
+        }
+      }
+      return get(`/social/following/${targetUid}?page=${page}`);
+    },
     updateProfile: async (data) => {
       // Always persist to the MongoDB backend (the authoritative record for follow
       // counts, role, and profile fields like avatarUrl / bannerUrl used everywhere).

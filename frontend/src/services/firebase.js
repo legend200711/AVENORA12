@@ -85,10 +85,40 @@
       // Store username in Firebase display name
       await updateProfile(cred.user, { displayName: username });
 
+      const uid = cred.user.uid;
       const user = _mapFbUser(cred.user, username);
       LegendState.set('user', user);
       // Persist uid so TokenStore shim stays truthy
-      _persistUid(cred.user.uid);
+      _persistUid(uid);
+
+      // Write the canonical Firestore profile document at users/{uid}
+      // so the user is immediately discoverable by UID and exact username.
+      try {
+        const db = await getFirestore();
+        const { doc, setDoc, serverTimestamp } = await loadModule('firestore');
+        await setDoc(doc(db, 'users', uid), {
+          uid,
+          username:      username.trim(),
+          usernameLower: username.trim().toLowerCase(),
+          email:         cred.user.email || email,
+          role:          'user',
+          profile: {
+            displayName: username.trim(),
+            avatarUrl:   null,
+            bio:         '',
+            location:    '',
+            website:     '',
+            bannerUrl:   null,
+          },
+          stats: { followersCount: 0, followingCount: 0, postsCount: 0 },
+          createdAt: serverTimestamp(),
+        }, { merge: true });
+        console.info('[AVN] Firestore profile created for new user:', uid);
+      } catch (profileErr) {
+        // Non-fatal — auth succeeded; profile will be self-healed on next load
+        console.warn('[AVN] Could not write Firestore profile on register:', profileErr.code, profileErr.message);
+      }
+
       return { user };
     },
 
@@ -227,8 +257,69 @@
             // have all fields — always falls back safely to Auth data.
             try {
               const db = await getFirestore();
-              const { doc, getDoc } = await loadModule('firestore');
-              const snap = await getDoc(doc(db, 'users', fbUser.uid));
+              const {
+                doc, getDoc, setDoc, serverTimestamp,
+                collection, query, where, limit: fsLimit, getDocs,
+              } = await loadModule('firestore');
+
+              let snap = await getDoc(doc(db, 'users', fbUser.uid));
+
+              // ── Legacy account migration ───────────────────────────────────
+              // If the canonical users/{uid} document doesn't exist, search for
+              // a legacy document that stores this UID in a data field.
+              // When found: safely merge it into users/{uid} (never overwrite with blanks).
+              if (!snap.exists()) {
+                let legacyData = null;
+                for (const field of ['uid', 'userId', 'firebaseUid', 'ownerId']) {
+                  try {
+                    const q = query(
+                      collection(db, 'users'),
+                      where(field, '==', fbUser.uid),
+                      fsLimit(1),
+                    );
+                    const legacySnap = await getDocs(q);
+                    if (!legacySnap.empty) {
+                      legacyData = legacySnap.docs[0].data();
+                      console.info('[AVN] Legacy profile found via field:', field, { uid: fbUser.uid, docId: legacySnap.docs[0].id });
+                      break;
+                    }
+                  } catch (_) {}
+                }
+
+                // Build canonical document — prefer legacy data over Auth defaults
+                const safeUsername = legacyData?.username || fbUser.displayName || fbUser.email?.split('@')[0] || 'AVENORAUser';
+                const canonicalDoc = {
+                  uid:           fbUser.uid,
+                  username:      legacyData?.username      || safeUsername,
+                  usernameLower: (legacyData?.username     || safeUsername).toLowerCase(),
+                  email:         legacyData?.email         || fbUser.email || null,
+                  role:          legacyData?.role          || 'user',
+                  profile: {
+                    displayName: legacyData?.profile?.displayName || legacyData?.displayName || safeUsername,
+                    avatarUrl:   legacyData?.profile?.avatarUrl   || fbUser.photoURL || null,
+                    bio:         legacyData?.profile?.bio         || '',
+                    location:    legacyData?.profile?.location    || '',
+                    website:     legacyData?.profile?.website     || '',
+                    bannerUrl:   legacyData?.profile?.bannerUrl   || null,
+                  },
+                  stats: {
+                    followersCount: legacyData?.stats?.followersCount ?? legacyData?.followersCount ?? 0,
+                    followingCount: legacyData?.stats?.followingCount ?? legacyData?.followingCount ?? 0,
+                    postsCount:     legacyData?.stats?.postsCount     ?? legacyData?.postsCount     ?? 0,
+                  },
+                  createdAt: legacyData?.createdAt || new Date().toISOString(),
+                };
+
+                try {
+                  // merge:true so we never overwrite fields already set by other code
+                  await setDoc(doc(db, 'users', fbUser.uid), canonicalDoc, { merge: true });
+                  snap = await getDoc(doc(db, 'users', fbUser.uid));
+                  console.info('[AVN] Canonical profile document created/updated for uid:', fbUser.uid);
+                } catch (writeErr) {
+                  console.warn('[AVN] Could not write canonical profile:', writeErr.code, writeErr.message);
+                }
+              }
+
               if (snap.exists()) {
                 const fsData = snap.data();
                 let updated = { ...user };
@@ -249,11 +340,12 @@
                 LegendState.set('user', updated);
                 callback(updated);
               }
-              // If no Firestore document exists yet, the base Auth user object is
+              // If no Firestore document exists yet and creation failed, the base Auth user object is
               // still in state — profile.js will auto-create the document via
               // UsersAPI.loadProfile() when the profile page renders.
-            } catch (_) {
+            } catch (authLookupErr) {
               // Firestore role lookup is best-effort — never block auth
+              console.warn('[AVN] Firestore profile lookup failed in onAuthStateChanged:', authLookupErr.code, authLookupErr.message);
             }
           } else {
             _clearUid();
@@ -336,16 +428,23 @@
       const { collection, addDoc, serverTimestamp } = await loadModule('firestore');
       const user = LegendState.get('user');
       if (!user) throw new Error('Not authenticated');
+      // authorUid is the CANONICAL identity field — always the Firebase Auth UID.
+      // author.id and author.uid both store the same UID for backward compat.
+      const authorUid = user.uid || user.id;
       const ref = await addDoc(collection(db, 'posts'), {
         content,
         mediaUrls,
         tags,
+        authorUid,                // canonical UID field for ownership queries
         author: {
-          id: user.id,
-          uid: user.uid || user.id,
+          id:       authorUid,
+          uid:      authorUid,
           username: user.username,
           avatarUrl: user.profile?.avatarUrl || null,
-          profile: { displayName: user.profile?.displayName || user.username, avatarUrl: user.profile?.avatarUrl || null },
+          profile: {
+            displayName: user.profile?.displayName || user.username,
+            avatarUrl:   user.profile?.avatarUrl || null,
+          },
         },
         likes: [],
         commentCount: 0,
@@ -435,8 +534,24 @@
         } catch (_) { /* field may not exist or lack an index — skip */ }
       }
 
-      // ── 4. displayName / profile.displayName (case-insensitive fallback) ──
+      // ── 4. usernameLower field — exact lowercase match ─────────────────────
+      // Only attempt if identifier looks like a username (not a UID).
+      if (!/^[A-Za-z0-9]{20,}$/.test(identifier)) {
+        try {
+          const q4 = query(collection(db, 'users'), where('usernameLower', '==', identifier.toLowerCase()), limit(1));
+          const snap4 = await getDocs(q4);
+          if (!snap4.empty) {
+            const d = snap4.docs[0];
+            console.debug('[AVN] getProfileByUsername — found by usernameLower field', { identifier });
+            return { id: d.id, ...d.data() };
+          }
+        } catch (_) { /* field may not be indexed — skip */ }
+      }
+
+      // ── 5. displayName / profile.displayName (case-insensitive fallback) ──
       // Scan up to 200 docs and match client-side so no extra index is needed.
+      // IMPORTANT: only use EXACT equality — never use startsWith() or includes()
+      // on usernames, as "legend" must never match "legends".
       try {
         const { limit: lim } = await loadModule('firestore');
         const qAll = query(collection(db, 'users'), lim(200));
@@ -444,11 +559,17 @@
         const lower = identifier.toLowerCase();
         const matched = snapAll.docs.find(d => {
           const data = d.data();
-          const uname  = (data.username           || '').toLowerCase();
-          const dname1 = (data.displayName         || '').toLowerCase();
-          const dname2 = (data.profile?.displayName || '').toLowerCase();
-          const email  = (data.email               || '').split('@')[0].toLowerCase();
-          return uname === lower || dname1 === lower || dname2 === lower || email === lower;
+          // USERNAME: EXACT match only — never partial/prefix matching.
+          const uname      = (data.username           || '').toLowerCase();
+          const unameLower = (data.usernameLower       || '').toLowerCase();
+          const dname1     = (data.displayName         || '').toLowerCase();
+          const dname2     = (data.profile?.displayName || '').toLowerCase();
+          const email      = (data.email               || '').split('@')[0].toLowerCase();
+          // Username must be IDENTICAL — "legend" ≠ "legends", "legends" ≠ "legend"
+          const usernameMatch = uname === lower || unameLower === lower;
+          // Display name allows substring (it's not an identity key)
+          const displayNameMatch = dname1 === lower || dname2 === lower || email === lower;
+          return usernameMatch || displayNameMatch;
         });
         if (matched) {
           console.debug('[AVN] getProfileByUsername — found by displayName/email scan', { identifier });
@@ -463,7 +584,12 @@
     async upsertProfile(uid, data) {
       const db = await getFirestore();
       const { doc, setDoc, serverTimestamp } = await loadModule('firestore');
-      await setDoc(doc(db, 'users', uid), { ...data, updatedAt: serverTimestamp() }, { merge: true });
+      // Ensure uid and usernameLower are always up to date
+      const enriched = { ...data, uid, updatedAt: serverTimestamp() };
+      if (enriched.username && !enriched.usernameLower) {
+        enriched.usernameLower = enriched.username.trim().toLowerCase();
+      }
+      await setDoc(doc(db, 'users', uid), enriched, { merge: true });
     },
 
     async getGallery(limitCount = 20) {
@@ -522,12 +648,35 @@
       const { collection, addDoc, doc, updateDoc, increment, serverTimestamp } = await loadModule('firestore');
       const user = LegendState.get('user');
       if (!user) throw new Error('Not authenticated');
-      const ref = await addDoc(collection(db, 'posts', postId, 'comments'), {
-        content,
-        author: { id: user.id, username: user.username, avatarUrl: user.profile?.avatarUrl || null },
-        createdAt: serverTimestamp(),
-      });
-      await updateDoc(doc(db, 'posts', postId), { commentCount: increment(1) });
+      const authorUid = user.uid || user.id;
+      let ref;
+      try {
+        ref = await addDoc(collection(db, 'posts', postId, 'comments'), {
+          content,
+          authorUid,            // canonical UID — never a username
+          author: {
+            id:       authorUid,
+            uid:      authorUid,
+            username: user.username,
+            avatarUrl: user.profile?.avatarUrl || null,
+          },
+          createdAt: serverTimestamp(),
+        });
+      } catch (commentErr) {
+        console.error('[AVN] addComment Firestore error', {
+          postId,
+          authorUid,
+          code:    commentErr.code,
+          message: commentErr.message,
+        });
+        throw commentErr;
+      }
+      try {
+        await updateDoc(doc(db, 'posts', postId), { commentCount: increment(1) });
+      } catch (countErr) {
+        // Non-fatal — comment was saved; counter sync failed
+        console.warn('[AVN] commentCount increment failed:', countErr.code, countErr.message);
+      }
       return { id: ref.id };
     },
 
@@ -536,7 +685,15 @@
       const { collection, query, orderBy, getDocs } = await loadModule('firestore');
       const q = query(collection(db, 'posts', postId, 'comments'), orderBy('createdAt', 'asc'));
       const snap = await getDocs(q);
-      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      return snap.docs.map(d => {
+        const data = d.data();
+        // Normalise: ensure author.id / author.uid are always the canonical UID
+        if (data.author && !data.author.uid && data.authorUid) {
+          data.author.uid = data.authorUid;
+          data.author.id  = data.authorUid;
+        }
+        return { id: d.id, _id: d.id, ...data };
+      });
     },
 
     async deleteComment(postId, commentId) {
@@ -589,6 +746,176 @@
       await deleteDoc(doc(db, 'stories', storyId));
     },
 
+    // ─── Follow / Unfollow ──────────────────────────────────
+    /**
+     * Follow targetUid as currentUserUid.
+     * Structure:
+     *   followers/{targetUid}/users/{currentUid} → { uid: currentUid, username, ... }
+     *   following/{currentUid}/users/{targetUid} → { uid: targetUid, username, ... }
+     * Both document IDs and the uid field are Firebase Auth UIDs.
+     */
+    async followUser(targetUid) {
+      const db = await getFirestore();
+      const { doc, setDoc, serverTimestamp, getDoc, increment, updateDoc } = await loadModule('firestore');
+      const user = LegendState.get('user');
+      if (!user) throw new Error('Not authenticated');
+      const currentUid = user.uid || user.id;
+      if (!currentUid || !targetUid) throw new Error('Invalid UID for follow operation');
+      if (currentUid === targetUid) throw new Error('Cannot follow yourself');
+
+      // Write follower record
+      await setDoc(doc(db, 'followers', targetUid, 'users', currentUid), {
+        uid:       currentUid,
+        username:  user.username  || '',
+        avatarUrl: user.profile?.avatarUrl || null,
+        profile:   { displayName: user.profile?.displayName || user.username || '', avatarUrl: user.profile?.avatarUrl || null },
+        followedAt: serverTimestamp(),
+      });
+
+      // Write following record
+      // Fetch the target's username for the record
+      let targetUsername = '';
+      try {
+        const snap = await getDoc(doc(db, 'users', targetUid));
+        if (snap.exists()) targetUsername = snap.data().username || '';
+      } catch (_) {}
+      await setDoc(doc(db, 'following', currentUid, 'users', targetUid), {
+        uid:        targetUid,
+        username:   targetUsername,
+        followedAt: serverTimestamp(),
+      });
+
+      // Increment counters (best-effort)
+      try {
+        await updateDoc(doc(db, 'users', targetUid), { 'stats.followersCount': increment(1) });
+      } catch (_) {}
+      try {
+        await updateDoc(doc(db, 'users', currentUid), { 'stats.followingCount': increment(1) });
+      } catch (_) {}
+
+      console.info('[AVN] followUser', { currentUid, targetUid });
+      return { followed: true };
+    },
+
+    async unfollowUser(targetUid) {
+      const db = await getFirestore();
+      const { doc, deleteDoc, increment, updateDoc } = await loadModule('firestore');
+      const user = LegendState.get('user');
+      if (!user) throw new Error('Not authenticated');
+      const currentUid = user.uid || user.id;
+      if (!currentUid || !targetUid) throw new Error('Invalid UID for unfollow operation');
+
+      try {
+        await deleteDoc(doc(db, 'followers', targetUid, 'users', currentUid));
+      } catch (e) {
+        console.warn('[AVN] unfollowUser — followers delete failed:', e.code, e.message);
+      }
+      try {
+        await deleteDoc(doc(db, 'following', currentUid, 'users', targetUid));
+      } catch (e) {
+        console.warn('[AVN] unfollowUser — following delete failed:', e.code, e.message);
+      }
+
+      // Decrement counters (best-effort)
+      try {
+        await updateDoc(doc(db, 'users', targetUid), { 'stats.followersCount': increment(-1) });
+      } catch (_) {}
+      try {
+        await updateDoc(doc(db, 'users', currentUid), { 'stats.followingCount': increment(-1) });
+      } catch (_) {}
+
+      console.info('[AVN] unfollowUser', { currentUid, targetUid });
+      return { unfollowed: true };
+    },
+
+    async getFollowers(targetUid) {
+      const db = await getFirestore();
+      const { collection, getDocs } = await loadModule('firestore');
+      const snap = await getDocs(collection(db, 'followers', targetUid, 'users'));
+      return snap.docs.map(d => ({ id: d.id, uid: d.id, ...d.data() }));
+    },
+
+    async getFollowing(currentUid) {
+      const db = await getFirestore();
+      const { collection, getDocs } = await loadModule('firestore');
+      const snap = await getDocs(collection(db, 'following', currentUid, 'users'));
+      return snap.docs.map(d => ({ id: d.id, uid: d.id, ...d.data() }));
+    },
+
+    async getFollowStatus(targetUid) {
+      const db = await getFirestore();
+      const { doc, getDoc } = await loadModule('firestore');
+      const user = LegendState.get('user');
+      if (!user) return { isFollowing: false };
+      const currentUid = user.uid || user.id;
+      if (!currentUid) return { isFollowing: false };
+      const snap = await getDoc(doc(db, 'followers', targetUid, 'users', currentUid));
+      return { isFollowing: snap.exists() };
+    },
+
+    // ─── Posts by UID ───────────────────────────────────────
+    /**
+     * Fetch posts authored by a specific Firebase UID.
+     * Queries by the canonical `authorUid` field first; falls back to
+     * matching `author.uid` and `author.id` for older posts that pre-date
+     * the top-level authorUid field.
+     */
+    async getPostsByUid(authorUid, limitCount = 50) {
+      const db = await getFirestore();
+      const { collection, query, where, orderBy, limit, getDocs } = await loadModule('firestore');
+
+      // Primary: query by top-level authorUid field (set on all new posts)
+      let posts = [];
+      try {
+        const q1 = query(
+          collection(db, 'posts'),
+          where('authorUid', '==', authorUid),
+          orderBy('createdAt', 'desc'),
+          limit(limitCount),
+        );
+        const snap1 = await getDocs(q1);
+        posts = snap1.docs.map(d => ({ id: d.id, _id: d.id, ...d.data() }));
+      } catch (e) {
+        // authorUid index may not exist yet — fall through to legacy query
+        console.warn('[AVN] getPostsByUid — authorUid query failed:', e.code, e.message);
+      }
+
+      // Fallback: query by author.uid (older posts)
+      if (!posts.length) {
+        try {
+          const q2 = query(
+            collection(db, 'posts'),
+            where('author.uid', '==', authorUid),
+            orderBy('createdAt', 'desc'),
+            limit(limitCount),
+          );
+          const snap2 = await getDocs(q2);
+          posts = snap2.docs.map(d => ({ id: d.id, _id: d.id, ...d.data() }));
+        } catch (e) {
+          console.warn('[AVN] getPostsByUid — author.uid query failed:', e.code, e.message);
+        }
+      }
+
+      // Final fallback: query by author.id (oldest legacy posts)
+      if (!posts.length) {
+        try {
+          const q3 = query(
+            collection(db, 'posts'),
+            where('author.id', '==', authorUid),
+            orderBy('createdAt', 'desc'),
+            limit(limitCount),
+          );
+          const snap3 = await getDocs(q3);
+          posts = snap3.docs.map(d => ({ id: d.id, _id: d.id, ...d.data() }));
+        } catch (e) {
+          console.warn('[AVN] getPostsByUid — author.id query failed:', e.code, e.message);
+        }
+      }
+
+      console.debug('[AVN] getPostsByUid', { authorUid, count: posts.length });
+      return posts;
+    },
+
     // ─── Search ─────────────────────────────────────────────
     /**
      * Full client-side search across users, posts, and gallery items.
@@ -611,7 +938,10 @@
           const uname = (u.username || '').toLowerCase();
           const dname = (u.profile?.displayName || '').toLowerCase();
           const email = (u.email || '').toLowerCase();
-          return uname.includes(q) || dname.includes(q) || email.includes(q);
+          // EXACT prefix match on username — never allow "legend" to match "legends"
+          // We check if the stored username starts with or equals the query.
+          // For display name we allow substring (display names are not identity keys).
+          return uname === q || uname.startsWith(q) || dname.includes(q) || email.startsWith(q);
         })
         .slice(0, 20);
 
@@ -682,6 +1012,234 @@
         { ...data, updatedAt: serverTimestamp() },
         { merge: true }
       );
+    },
+
+    // ─── Music Playlists (Firestore-backed, shared) ──────────────────
+
+    /**
+     * Get all playlists that are shared OR owned by the current user.
+     * Returns array of { id, ...data }.
+     */
+    async getSharedPlaylists() {
+      const db   = await getFirestore();
+      const { collection, query, where, getDocs, or } = await loadModule('firestore');
+      const user = LegendState.get('user');
+      const uid  = user?.uid || user?.id || null;
+
+      let playlists = [];
+      // Query shared playlists (any authenticated or anonymous reader can see shared ones)
+      try {
+        const sharedSnap = await getDocs(
+          query(collection(db, 'musicPlaylists'), where('visibility', '==', 'shared'))
+        );
+        sharedSnap.forEach(d => playlists.push({ id: d.id, ...d.data() }));
+      } catch (e) {
+        console.warn('[AVN] getSharedPlaylists — shared query failed:', e.code, e.message);
+      }
+
+      // Also load private playlists owned by the current user
+      if (uid) {
+        try {
+          const mySnap = await getDocs(
+            query(collection(db, 'musicPlaylists'), where('createdByUid', '==', uid))
+          );
+          const sharedIds = new Set(playlists.map(p => p.id));
+          mySnap.forEach(d => {
+            if (!sharedIds.has(d.id)) playlists.push({ id: d.id, ...d.data() });
+          });
+        } catch (e) {
+          console.warn('[AVN] getSharedPlaylists — user query failed:', e.code, e.message);
+        }
+      }
+
+      return playlists;
+    },
+
+    /**
+     * Get all tracks in a playlist sub-collection, ordered by position.
+     * Resolves audioUrl via MusicService.resolveAudioUrl if available.
+     */
+    async getPlaylistTracks(playlistId) {
+      const db = await getFirestore();
+      const { collection, query, orderBy, getDocs } = await loadModule('firestore');
+      const snap = await getDocs(
+        query(collection(db, 'musicPlaylists', playlistId, 'tracks'), orderBy('position', 'asc'))
+      );
+      return snap.docs.map(d => {
+        const data = d.data();
+        // Resolve audioUrl using the shared helper if available
+        const resolved = (typeof MusicService !== 'undefined' && MusicService.resolveAudioUrl)
+          ? MusicService.resolveAudioUrl(data)
+          : (data.audioUrl || data.fileUrl || data.url || null);
+        return { _docId: d.id, id: d.id, ...data, audioUrl: resolved || data.audioUrl || '' };
+      });
+    },
+
+    /**
+     * Add a track to a playlist sub-collection.
+     * Also bumps the playlist's updatedAt timestamp.
+     */
+    async addTrackToPlaylist(playlistId, trackData) {
+      const db = await getFirestore();
+      const { collection, doc, addDoc, updateDoc, serverTimestamp, getDocs, query, orderBy } =
+        await loadModule('firestore');
+      const user = LegendState.get('user');
+      const uid  = user?.uid || user?.id || null;
+      if (!uid) throw new Error('Not authenticated');
+
+      // Determine next position value
+      let position = 0;
+      try {
+        const existingSnap = await getDocs(
+          query(collection(db, 'musicPlaylists', playlistId, 'tracks'), orderBy('position', 'desc'))
+        );
+        if (!existingSnap.empty) {
+          position = (existingSnap.docs[0].data().position || 0) + 1;
+        }
+      } catch (_) {}
+
+      const ref = await addDoc(collection(db, 'musicPlaylists', playlistId, 'tracks'), {
+        trackId:     String(trackData.id || trackData.trackId || ''),
+        title:       trackData.title || trackData.name || 'Untitled',
+        artist:      trackData.artistName || trackData.artist || '',
+        audioUrl:    trackData.fileUrl || trackData.audioUrl || trackData.url || '',
+        storagePath: trackData.storagePath || '',
+        addedByUid:  uid,
+        addedAt:     serverTimestamp(),
+        position,
+      });
+
+      // Bump updatedAt on the parent playlist document
+      try {
+        await updateDoc(doc(db, 'musicPlaylists', playlistId), { updatedAt: serverTimestamp() });
+      } catch (_) {}
+
+      return { id: ref.id };
+    },
+
+    /**
+     * Remove a track from a playlist.
+     * trackDocId is the Firestore document ID in the tracks sub-collection.
+     */
+    async removeTrackFromPlaylist(playlistId, trackDocId) {
+      const db = await getFirestore();
+      const { doc, deleteDoc, updateDoc, serverTimestamp } = await loadModule('firestore');
+      await deleteDoc(doc(db, 'musicPlaylists', playlistId, 'tracks', trackDocId));
+      try {
+        await updateDoc(doc(db, 'musicPlaylists', playlistId), { updatedAt: serverTimestamp() });
+      } catch (_) {}
+    },
+
+    /**
+     * Create a new playlist in Firestore.
+     * Returns { id } of the new document.
+     */
+    async createPlaylist(name, description = '', visibility = 'shared', extra = {}) {
+      const db = await getFirestore();
+      const { collection, doc, setDoc, serverTimestamp } = await loadModule('firestore');
+      const user = LegendState.get('user');
+      const uid  = user?.uid || user?.id || null;
+      if (!uid) throw new Error('Not authenticated');
+
+      const newId = extra.sysId || `pl-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      await setDoc(doc(db, 'musicPlaylists', newId), {
+        id:           newId,
+        name:         name.trim(),
+        description:  description.trim(),
+        createdByUid: uid,
+        visibility,
+        isSystem:     extra.isSystem || false,
+        sysId:        extra.sysId || '',
+        icon:         extra.icon || '📂',
+        color:        extra.color || 'var(--neon-blue)',
+        createdAt:    serverTimestamp(),
+        updatedAt:    serverTimestamp(),
+      });
+      return { id: newId };
+    },
+
+    /**
+     * Update playlist metadata (name, description, visibility).
+     */
+    async updatePlaylist(playlistId, updates) {
+      const db = await getFirestore();
+      const { doc, updateDoc, serverTimestamp } = await loadModule('firestore');
+      await updateDoc(doc(db, 'musicPlaylists', playlistId), {
+        ...updates,
+        updatedAt: serverTimestamp(),
+      });
+    },
+
+    /**
+     * Delete a playlist and its tracks sub-collection.
+     * Note: Firestore does not auto-delete sub-collections — we batch-delete tracks first.
+     */
+    async deletePlaylist(playlistId) {
+      const db = await getFirestore();
+      const { collection, getDocs, doc, deleteDoc, writeBatch } = await loadModule('firestore');
+      const batch = writeBatch(db);
+      // Delete all tracks in the sub-collection
+      try {
+        const tracksSnap = await getDocs(collection(db, 'musicPlaylists', playlistId, 'tracks'));
+        tracksSnap.forEach(d => batch.delete(d.ref));
+      } catch (_) {}
+      batch.delete(doc(db, 'musicPlaylists', playlistId));
+      await batch.commit();
+    },
+
+    /**
+     * Subscribe to real-time updates for a playlist's tracks.
+     * Returns an unsubscribe function.
+     */
+    listenToPlaylist(playlistId, callback) {
+      let unsubscribe = null;
+      // Lazy-load the Firestore module then set up the listener
+      loadModule('firestore').then(({ collection, query, orderBy, onSnapshot }) => {
+        getFirestore().then(db => {
+          unsubscribe = onSnapshot(
+            query(collection(db, 'musicPlaylists', playlistId, 'tracks'), orderBy('position', 'asc')),
+            (snap) => {
+              const tracks = snap.docs.map(d => {
+                const data = d.data();
+                const resolved = (typeof MusicService !== 'undefined' && MusicService.resolveAudioUrl)
+                  ? MusicService.resolveAudioUrl(data)
+                  : (data.audioUrl || data.fileUrl || data.url || null);
+                return { _docId: d.id, id: d.id, ...data, audioUrl: resolved || data.audioUrl || '' };
+              });
+              callback(tracks);
+            },
+            (err) => console.warn('[AVN] listenToPlaylist error:', err.message)
+          );
+        });
+      });
+      // Return a synchronous unsubscribe handle that cancels when the listener is set up
+      return () => { if (unsubscribe) unsubscribe(); };
+    },
+
+    /**
+     * Ensure a system playlist exists in Firestore (keyed by sysId).
+     * No-op if it already exists.  Called from musicEnsureSystemPlaylists().
+     */
+    async ensureSystemPlaylist(sp) {
+      const db = await getFirestore();
+      const { doc, getDoc, setDoc, serverTimestamp } = await loadModule('firestore');
+      const snap = await getDoc(doc(db, 'musicPlaylists', sp.sysId));
+      if (!snap.exists()) {
+        await setDoc(doc(db, 'musicPlaylists', sp.sysId), {
+          id:           sp.sysId,
+          name:         sp.name,
+          description:  sp.description || '',
+          createdByUid: 'system',
+          visibility:   'shared',
+          isSystem:     true,
+          sysId:        sp.sysId,
+          icon:         sp.icon || '📂',
+          color:        sp.color || 'var(--neon-blue)',
+          isRadio:      sp.isRadio || false,
+          createdAt:    serverTimestamp(),
+          updatedAt:    serverTimestamp(),
+        });
+      }
     },
   };
 

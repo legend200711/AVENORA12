@@ -5,8 +5,10 @@ service cloud.firestore {
     // ── Posts ──────────────────────────────────────────────
     match /posts/{postId} {
       allow read: if true;
+      // Accept both old schema (author.id) and new schema (authorUid) for create
       allow create: if request.auth != null
-        && request.resource.data.author.id == request.auth.uid;
+        && (request.resource.data.author.id == request.auth.uid
+            || request.resource.data.authorUid == request.auth.uid);
       allow update: if request.auth != null
         && (resource.data.author.id == request.auth.uid
             || isModeratorOrAbove());
@@ -31,6 +33,23 @@ service cloud.firestore {
       // (required for role changes and suspension from Founder Control)
       allow write: if request.auth != null
         && (request.auth.uid == userId || isFounderOrAdmin());
+    }
+
+    // ── Followers / Following ──────────────────────────────
+    // Structure: followers/{targetUid}/users/{followerUid}
+    //            following/{currentUid}/users/{followedUid}
+    // The document IDs are Firebase Auth UIDs — never usernames.
+    match /followers/{targetUid}/users/{followerUid} {
+      allow read: if true;
+      // Only the follower themselves may create or delete their own follow record
+      allow create: if request.auth != null && request.auth.uid == followerUid;
+      allow delete: if request.auth != null && request.auth.uid == followerUid;
+    }
+    match /following/{currentUid}/users/{followedUid} {
+      allow read: if true;
+      // Only the person whose following list this is may write to it
+      allow create: if request.auth != null && request.auth.uid == currentUid;
+      allow delete: if request.auth != null && request.auth.uid == currentUid;
     }
 
     // ── Gallery ────────────────────────────────────────────
@@ -199,16 +218,19 @@ service cloud.firestore {
     }
 
     // ── Avenora Radio ──────────────────────────────────────
-    // radioStations and stationNowPlaying are written exclusively by the
-    // backend Node.js process via the Firebase Admin SDK (which bypasses
-    // security rules). Clients only need read access.
+    // radioStations: written by the backend Admin SDK (which bypasses rules)
+    //   OR directly by an authenticated admin/founder browser in the
+    //   Firebase + Supabase production architecture (no backend server).
     match /radioStations/{stationId} {
       allow read: if true;
-      allow write: if false;  // backend Admin SDK only
+      // Backend Admin SDK bypasses rules; browser admin may write directly.
+      allow write: if isFounderOrAdmin();
     }
+    // stationNowPlaying: read by ALL radio listeners; written by backend or browser admin.
     match /stationNowPlaying/{stationId} {
       allow read: if true;
-      allow write: if false;  // backend Admin SDK only
+      // Backend Admin SDK bypasses rules; browser admin may write directly.
+      allow write: if isFounderOrAdmin();
     }
     // Listener favourites — each user manages their own.
     match /radioFavorites/{uid}/tracks/{trackId} {
@@ -219,6 +241,48 @@ service cloud.firestore {
     // Owners manage their own playlists; no one else can read or write.
     match /studioPlaylists/{uid}/playlists/{plId} {
       allow read, write: if request.auth != null && request.auth.uid == uid;
+    }
+
+    // ── Music Hub Shared Playlists ─────────────────────────
+    // Shared playlists readable by everyone (including unauthenticated for system playlists).
+    // Private playlists readable only by their owner.
+    // Create requires auth; update/delete by owner or moderator+.
+    match /musicPlaylists/{playlistId} {
+      allow read: if resource.data.visibility == 'shared'
+                  || (request.auth != null && resource.data.createdByUid == request.auth.uid)
+                  || resource.data.createdByUid == 'system';
+      allow create: if request.auth != null
+                    && (request.resource.data.createdByUid == request.auth.uid
+                        || request.resource.data.createdByUid == 'system');
+      allow update: if request.auth != null
+                    && (resource.data.createdByUid == request.auth.uid
+                        || resource.data.createdByUid == 'system'
+                        || isModeratorOrAbove());
+      allow delete: if request.auth != null
+                    && (resource.data.createdByUid == request.auth.uid
+                        || isModeratorOrAbove());
+
+      match /tracks/{trackId} {
+        allow read: if get(/databases/$(database)/documents/musicPlaylists/$(playlistId)).data.visibility == 'shared'
+                    || get(/databases/$(database)/documents/musicPlaylists/$(playlistId)).data.createdByUid == 'system'
+                    || (request.auth != null
+                        && get(/databases/$(database)/documents/musicPlaylists/$(playlistId)).data.createdByUid == request.auth.uid);
+        allow create: if request.auth != null
+                      && request.resource.data.addedByUid == request.auth.uid;
+        allow delete: if request.auth != null
+                      && (resource.data.addedByUid == request.auth.uid
+                          || isModeratorOrAbove());
+      }
+    }
+
+    // ── Radio Queue (Firestore fallback when backend is down) ──
+    // Anyone can read; authenticated users can add tracks to the queue;
+    // only moderator+ can delete from the queue.
+    match /radioQueue/{stationId}/tracks/{trackId} {
+      allow read: if true;
+      allow create: if request.auth != null
+                    && request.resource.data.addedByUid == request.auth.uid;
+      allow delete: if request.auth != null && isModeratorOrAbove();
     }
 
     // ── Cloud Stream Track Library ─────────────────────────

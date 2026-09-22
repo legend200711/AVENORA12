@@ -175,6 +175,79 @@
   function _notifyQueueChange(queue) { emit('queueChange', queue); }
   function _notifyPlayState(playing)  { emit('playState', { playing }); }
 
+  // ─── resolveAudioUrl ──────────────────────────────────────────
+  /**
+   * Resolve the best playable URL from a track object.
+   *
+   * Checks in order:
+   *   1. track.audioUrl
+   *   2. track.fileUrl
+   *   3. track.url
+   *   4. track.publicUrl
+   *   5. track.downloadURL
+   *   6. Derive from track.storagePath via AvenoraStorage.getPublicUrl()
+   *
+   * Logs full diagnostics for every resolved (or failed) URL.
+   * Returns the first truthy URL found, or null if nothing works.
+   */
+  function resolveAudioUrl(track) {
+    if (!track) return null;
+
+    const candidates = [
+      { field: 'audioUrl',     val: track.audioUrl     },
+      { field: 'fileUrl',      val: track.fileUrl      },
+      { field: 'url',          val: track.url          },
+      { field: 'publicUrl',    val: track.publicUrl    },
+      { field: 'downloadURL',  val: track.downloadURL  },
+    ];
+
+    for (const { field, val } of candidates) {
+      if (val && typeof val === 'string' && val.trim()) {
+        console.log(
+          '[AVN resolveAudioUrl]',
+          'id:', track.id || '(none)',
+          'title:', track.title || track.name || '(none)',
+          'resolvedUrl:', val,
+          'storagePath:', track.storagePath || null,
+          'usedField:', field,
+        );
+        return val.trim();
+      }
+    }
+
+    // Derive from storagePath — Supabase public URL for the music bucket
+    if (track.storagePath && window.AvenoraStorage) {
+      try {
+        // AvenoraStorage exposes getPublicUrl(bucket, path)
+        const derived = typeof window.AvenoraStorage.getPublicUrl === 'function'
+          ? window.AvenoraStorage.getPublicUrl('music', track.storagePath)
+          : null;
+        if (derived) {
+          console.log(
+            '[AVN resolveAudioUrl]',
+            'id:', track.id || '(none)',
+            'title:', track.title || track.name || '(none)',
+            'resolvedUrl:', derived,
+            'storagePath:', track.storagePath,
+            'usedField:', 'storagePath→derived',
+          );
+          return derived;
+        }
+      } catch (e) {
+        console.warn('[AVN resolveAudioUrl] storagePath derive failed:', e.message);
+      }
+    }
+
+    console.warn(
+      '[AVN resolveAudioUrl] NO URL FOUND',
+      'id:', track.id || '(none)',
+      'title:', track.title || track.name || '(none)',
+      'storagePath:', track.storagePath || null,
+      'keys:', Object.keys(track).join(', '),
+    );
+    return null;
+  }
+
   // ─── 24-Hour Radio / Cloud Stream interface ─────────────────
   /**
    * Returns the next track for cloud stream auto-progression.
@@ -224,6 +297,9 @@
 
     // Stream
     getNextStreamTrack,
+
+    // URL resolution
+    resolveAudioUrl,
 
     // Internal (for music.js only)
     _notifyTrackChange,
