@@ -275,6 +275,34 @@ service cloud.firestore {
       }
     }
 
+    // ── Global Music Library ──────────────────────────────────────
+    // All authenticated users can read published (isPublished=true, isDeleted=false) tracks.
+    // The uploader may create and soft-delete their own track.
+    // Moderator+ may soft-delete any track.
+    match /globalMusicLibrary/{trackId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.uploadedByUid == request.auth.uid
+                    && request.resource.data.isDeleted == false;
+      allow update: if request.auth != null
+                    && (resource.data.uploadedByUid == request.auth.uid
+                        || isModeratorOrAbove());
+      allow delete: if request.auth != null
+                    && (resource.data.uploadedByUid == request.auth.uid
+                        || isModeratorOrAbove());
+    }
+
+    // ── Community Mix ─────────────────────────────────────────────
+    // Single document: communityMix/meta — holds trackIds array.
+    // Any authenticated user may read and add to it.
+    // Only admins/founders may delete the whole document.
+    match /communityMix/{docId} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null;
+      allow update: if request.auth != null;
+      allow delete: if isFounderOrAdmin();
+    }
+
     // ── Radio Queue (Firestore fallback when backend is down) ──
     // Anyone can read; authenticated users can add tracks to the queue;
     // only moderator+ can delete from the queue.

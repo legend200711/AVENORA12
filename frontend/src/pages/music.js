@@ -50,6 +50,8 @@ const SYSTEM_PLAYLISTS = [
 ];
 
 function musicEnsureSystemPlaylists() {
+  // Ensure system playlists exist in localStorage for OFFLINE fallback only.
+  // localStorage is UI state only — Firestore is the source of truth.
   const existing = LS.get('lu_music_playlists', []);
   const existingSysIds = new Set(existing.map(p => p.sysId).filter(Boolean));
   let changed = false;
@@ -62,6 +64,7 @@ function musicEnsureSystemPlaylists() {
     }
   }
 
+  // Only add system playlists to localStorage if they are missing (for offline fallback)
   for (const sp of SYSTEM_PLAYLISTS) {
     if (!existingSysIds.has(sp.sysId)) {
       existing.push({
@@ -73,7 +76,7 @@ function musicEnsureSystemPlaylists() {
         description: sp.description,
         isRadio:     sp.isRadio || false,
         isSystem:    true,
-        tracks:      [],
+        tracks:      [],      // IMPORTANT: do NOT copy tracks from localStorage to Firestore
         visibility:  'shared',
         createdAt:   new Date().toISOString(),
       });
@@ -82,7 +85,7 @@ function musicEnsureSystemPlaylists() {
   }
   if (changed) LS.set('lu_music_playlists', existing);
 
-  // Ensure system playlists also exist in Firestore (fire-and-forget)
+  // Ensure system playlists also exist in Firestore (fire-and-forget, no-op if already exists)
   if (window.AvenoraFirebase?.Firestore?.ensureSystemPlaylist) {
     for (const sp of SYSTEM_PLAYLISTS) {
       window.AvenoraFirebase.Firestore.ensureSystemPlaylist(sp).catch(e => {
@@ -92,6 +95,7 @@ function musicEnsureSystemPlaylists() {
   }
 
   // One-time migration of localStorage playlists to Firestore
+  // IMPORTANT: migration must NOT overwrite existing Firestore playlists with stale localStorage data.
   _migrateLocalPlaylistsToFirestore();
 }
 
@@ -117,7 +121,8 @@ async function _migrateLocalPlaylistsToFirestore() {
 
   try {
     const FS = window.AvenoraFirebase.Firestore;
-    // Fetch existing Firestore playlists to avoid duplicates
+    // Fetch existing Firestore playlists to avoid duplicates AND to prevent
+    // localStorage from overwriting Firestore data (the anti-clobber guard).
     let existing = [];
     try { existing = await FS.getSharedPlaylists(); } catch (_) {}
     const existingByDocId = new Set(existing.map(p => p.id));
@@ -125,10 +130,12 @@ async function _migrateLocalPlaylistsToFirestore() {
 
     for (const pl of playlists) {
       try {
-        // Skip if already present by document ID or sysId
+        // ANTI-CLOBBER: skip if already present in Firestore.
+        // Never overwrite a Firestore playlist with localStorage data.
         if (existingByDocId.has(pl.id)) continue;
         if (pl.sysId && existingBySysId.has(pl.sysId)) continue;
 
+        // Create the playlist structure in Firestore (metadata only — no track IDs)
         await FS.createPlaylist(
           pl.name,
           pl.description || '',
@@ -140,13 +147,15 @@ async function _migrateLocalPlaylistsToFirestore() {
             color:    pl.color || 'var(--neon-blue)',
           }
         );
+        // NOTE: we deliberately do NOT migrate track IDs from localStorage.
+        // Track membership is Firestore-authoritative; localStorage is UI state only.
       } catch (e) {
         console.warn('[AVN] Migration: failed to migrate playlist', pl.name, e.message);
       }
     }
 
     localStorage.setItem('lu_playlists_migrated_v1', 'true');
-    console.info('[AVN] Playlist migration to Firestore complete');
+    console.info('[AVN] Playlist migration to Firestore complete (metadata only, tracks not copied)');
   } catch (err) {
     console.warn('[AVN] Playlist migration failed (will retry on next load):', err.message);
   }
@@ -187,35 +196,35 @@ function buildMusicShell() {
 
       <!-- ✦ Cosmic Nav Cards ✦ -->
       <div class="music-cosmic-nav" aria-label="Music sections">
-        <button class="mcn-card" onclick="musicTabSwitch('discover',document.querySelectorAll('.music-hub-tab-btn')[0])">
+        <button class="mcn-card" onclick="musicTabSwitch('discover',this)">
           <span class="mcn-icon">🌌</span>
           <span class="mcn-title">DISCOVER</span>
           <span class="mcn-sub">Explore the music universe</span>
         </button>
-        <button class="mcn-card mcn-music" onclick="musicTabSwitch('library',document.querySelectorAll('.music-hub-tab-btn')[2])">
+        <button class="mcn-card mcn-community" onclick="musicTabSwitch('community-mix',this)">
+          <span class="mcn-icon">🌌</span>
+          <span class="mcn-title">COMMUNITY MIX</span>
+          <span class="mcn-sub">Music from all AVENORA users</span>
+        </button>
+        <button class="mcn-card mcn-music" onclick="musicTabSwitch('library',this)">
           <span class="mcn-icon">🎧</span>
           <span class="mcn-title">YOUR MUSIC</span>
-          <span class="mcn-sub">Your personal collection</span>
+          <span class="mcn-sub">Your personal uploads</span>
         </button>
-        <button class="mcn-card mcn-playlists" onclick="musicTabSwitch('playlists',document.querySelectorAll('.music-hub-tab-btn')[3])">
+        <button class="mcn-card mcn-playlists" onclick="musicTabSwitch('playlists',this)">
           <span class="mcn-icon">📂</span>
           <span class="mcn-title">SOUND WORLDS</span>
           <span class="mcn-sub">Your cosmic playlists</span>
         </button>
-        <button class="mcn-card mcn-radio" onclick="musicTabSwitch('radio',document.querySelectorAll('.music-hub-tab-btn')[1])">
+        <button class="mcn-card mcn-radio" onclick="musicTabSwitch('radio',this)">
           <span class="mcn-icon">📻</span>
           <span class="mcn-title">CLOUD RADIO</span>
           <span class="mcn-sub">Non-stop music 24/7</span>
         </button>
-        <button class="mcn-card mcn-upload" onclick="musicTabSwitch('upload',document.querySelectorAll('.music-hub-tab-btn')[9])">
+        <button class="mcn-card mcn-upload" onclick="musicTabSwitch('upload',this)">
           <span class="mcn-icon">⬆</span>
           <span class="mcn-title">UPLOAD</span>
           <span class="mcn-sub">Add music to the universe</span>
-        </button>
-        <button class="mcn-card" onclick="navigateTo('channel')" style="border-color:rgba(0,204,255,0.35)">
-          <span class="mcn-icon">📡</span>
-          <span class="mcn-title">24-HOUR CHANNEL</span>
-          <span class="mcn-sub">Always-on live channel</span>
         </button>
       </div>
 
@@ -284,17 +293,18 @@ function buildMusicShell() {
       <!-- ✦ Tabs ✦ -->
       <div class="tabs music-hub-tabs" role="tablist" style="margin-bottom:var(--space-xl)">
         ${[
-          ['discover',  '🌌 Discover'],
-          ['radio',     '📻 Radio'],
-          ['library',   '🎵 Songs'],
-          ['playlists', '📂 Sound Worlds'],
-          ['albums',    '💿 Albums'],
-          ['artists',   '🎤 Artists'],
-          ['favorites', '❤️ Liked'],
-          ['recent',    '🕘 Recent'],
-          ['search',    '🔍 Search'],
-          ['upload',    '⬆ Upload'],
-          ['external',  '🔗 Services'],
+          ['discover',      '🌌 Discover'],
+          ['community-mix', '🌌 Community Mix'],
+          ['radio',         '📻 Radio'],
+          ['library',       '🎵 My Songs'],
+          ['playlists',     '📂 Sound Worlds'],
+          ['albums',        '💿 Albums'],
+          ['artists',       '🎤 Artists'],
+          ['favorites',     '❤️ Liked'],
+          ['recent',        '🕘 Recent'],
+          ['search',        '🔍 Search'],
+          ['upload',        '⬆ Upload'],
+          ['external',      '🔗 Services'],
         ].map(([id, label], i) =>
           `<button class="tab-btn music-hub-tab-btn${i===0?' active':''}" role="tab"
              onclick="musicTabSwitch('${id}',this)">${label}</button>`
@@ -329,10 +339,18 @@ function buildMusicShell() {
 window.musicTabSwitch = async function (tab, clickedBtn) {
   // Update tab active state
   document.querySelectorAll('.tab-btn[role="tab"]').forEach(b => b.classList.remove('active'));
-  if (clickedBtn) clickedBtn.classList.add('active');
-  else {
+  if (clickedBtn && clickedBtn.classList && clickedBtn.classList.contains('tab-btn')) {
+    clickedBtn.classList.add('active');
+  } else if (clickedBtn && clickedBtn.classList && clickedBtn.classList.contains('mcn-card')) {
+    // clicked from a nav card — find the matching tab button
     document.querySelectorAll('.tab-btn[role="tab"]').forEach(b => {
-      if (b.textContent.toLowerCase().includes(tab.split('_')[0].slice(0,4))) b.classList.add('active');
+      const tabId = b.getAttribute('onclick')?.match(/'([^']+)'/)?.[1] || '';
+      if (tabId === tab) b.classList.add('active');
+    });
+  } else {
+    document.querySelectorAll('.tab-btn[role="tab"]').forEach(b => {
+      const tabId = b.getAttribute('onclick')?.match(/'([^']+)'/)?.[1] || '';
+      if (tabId === tab) b.classList.add('active');
     });
   }
 
@@ -351,12 +369,15 @@ window.musicTabSwitch = async function (tab, clickedBtn) {
 
   // Clean up any active real-time listeners from previous tab
   if (typeof _radioTabCleanup === 'function') _radioTabCleanup();
+  if (typeof _communityMixCleanup === 'function') _communityMixCleanup();
+  if (typeof _globalLibCleanup === 'function') _globalLibCleanup();
 
   el.innerHTML = `<div class="loading-state" style="min-height:40vh"><div class="spinner"></div></div>`;
 
   try {
     switch (tab) {
       case 'discover':        el.innerHTML = await renderDiscover();        break;
+      case 'community-mix':   await renderCommunityMixTab(el);             break;
       case 'radio':           el.innerHTML = await renderRadioTab();        break;
       case 'library':         el.innerHTML = await renderLibrary();         break;
       case 'playlists':       el.innerHTML = await renderPlaylists();       break;
@@ -385,9 +406,21 @@ const _mpContextTracks = {};
 // Cleared by musicTabSwitch() when leaving the playlist view.
 let _playlistUnsub = null;
 
+// Global library real-time listener (Community Mix tab)
+let _communityMixUnsub = null;
+let _globalLibUnsub = null;
+
+function _communityMixCleanup() {
+  if (_communityMixUnsub) { try { _communityMixUnsub(); } catch (_) {} _communityMixUnsub = null; }
+}
+function _globalLibCleanup() {
+  if (_globalLibUnsub) { try { _globalLibUnsub(); } catch (_) {} _globalLibUnsub = null; }
+}
+
 async function renderDiscover() {
   let trackSection = '';
   let albumSection = '';
+  let communitySection = '';
 
   // Try backend
   try {
@@ -418,6 +451,28 @@ async function renderDiscover() {
     }
   } catch { /* backend not connected — show local library instead */ }
 
+  // Global community uploads (latest 12 from Firestore globalMusicLibrary)
+  if (window.AvenoraFirebase?.Firestore?.getGlobalLibraryTracks) {
+    try {
+      const globalTracks = await window.AvenoraFirebase.Firestore.getGlobalLibraryTracks({ limit: 12 });
+      if (globalTracks.length > 0) {
+        // Normalize to the shape renderTrackRow expects
+        const normalized = globalTracks.map(t => _normalizeGlobalTrack(t));
+        _mpContextTracks['global-discover'] = normalized;
+        communitySection = `
+          <div class="section-header" style="margin-top:var(--space-xl)">
+            <h2 class="section-title cosmic-section-title">🌌 FROM THE COMMUNITY</h2>
+            <button class="btn btn-cosmic-outline btn-sm" onclick="musicTabSwitch('community-mix',this)">View All →</button>
+          </div>
+          <div class="music-track-list" style="margin-bottom:var(--space-xl)">
+            ${normalized.map((t, i) => renderGlobalTrackRow(t, i, normalized, 'global-discover')).join('')}
+          </div>`;
+      }
+    } catch (glErr) {
+      console.warn('[AVN] Discover: global library fetch failed:', glErr.message);
+    }
+  }
+
   // Local imported tracks
   const localSection = MP.queue.length > 0 ? `
     <div class="section-header">
@@ -427,7 +482,7 @@ async function renderDiscover() {
       ${MP.queue.map((t, i) => renderLocalTrackRow(t, i)).join('')}
     </div>` : '';
 
-  const noContent = !trackSection && !albumSection && !localSection;
+  const noContent = !trackSection && !albumSection && !communitySection && !localSection;
 
   return `
     <div>
@@ -474,6 +529,7 @@ async function renderDiscover() {
       </div>
 
       ${noContent ? renderDiscoverEmpty() : ''}
+      ${communitySection}
       ${localSection}
       ${trackSection}
       ${albumSection}
@@ -535,18 +591,218 @@ function renderDiscoverEmpty() {
       <div class="cosmic-empty-icon">🌌</div>
       <h3 class="cosmic-empty-title">YOUR UNIVERSE AWAITS</h3>
       <p class="cosmic-empty-sub">
-        Import your own music or upload tracks to begin your journey through the sound universe.
+        Discover music from the AVENORA community, import your own tracks, or upload new music.
       </p>
       <ul style="color:var(--text-muted);font-size:0.82rem;text-align:left;margin:var(--space-sm) auto var(--space-lg);max-width:360px;line-height:2">
+        <li>🌌 Community Mix — shared music from every AVENORA user</li>
         <li>🎵 Supported: MP3, WAV, OGG, FLAC, AAC, M4A, OPUS</li>
-        <li>☁️ Upload to your cloud library from the Upload tab</li>
+        <li>☁️ Upload to the global library from the Upload tab</li>
       </ul>
       <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center">
-        <button class="btn btn-cosmic" onclick="mpImport()">📂 Import Local Files</button>
-        <button class="btn btn-cosmic-outline" onclick="musicTabSwitch('upload')">⬆ Upload Track</button>
+        <button class="btn btn-cosmic" onclick="musicTabSwitch('community-mix',this)">🌌 Community Mix</button>
+        <button class="btn btn-cosmic-outline" onclick="musicTabSwitch('upload',this)">⬆ Upload Track</button>
+        <button class="btn btn-cosmic-outline" onclick="mpImport()">📂 Import Local</button>
       </div>
     </div>`;
 }
+
+// ─── Global Track Helpers ─────────────────────────────────────
+/**
+ * Normalize a globalMusicLibrary document into the shape accepted by
+ * mpLoadBackendTrack / renderTrackRow.
+ */
+function _normalizeGlobalTrack(t) {
+  return {
+    id:          String(t.trackId || t.id),
+    trackId:     String(t.trackId || t.id),
+    title:       t.title        || 'Untitled',
+    artistName:  t.artist       || t.artistName || '',
+    albumTitle:  t.album        || t.albumTitle  || '',
+    genre:       t.genre        || '',
+    duration:    t.duration     || 0,
+    fileUrl:     t.audioUrl     || t.fileUrl     || t.url || '',
+    audioUrl:    t.audioUrl     || t.fileUrl     || t.url || '',
+    storagePath: t.storagePath  || '',
+    coverUrl:    t.coverUrl     || null,
+    uploadedByUid:   t.uploadedByUid   || '',
+    uploadedByName:  t.uploadedByName  || '',
+    uploadedByAvatar: t.uploadedByAvatar || null,
+    _isGlobal:   true,
+    _isFirestore: true,
+  };
+}
+
+/**
+ * Render a track row for globalMusicLibrary tracks.
+ * Shows uploader name instead of artistName when artist is not set.
+ */
+function renderGlobalTrackRow(track, index, queue, context) {
+  const isCurrent = MP.backendQueue === context && MP.currentIndex === index;
+  const favs = new Set(LS.get('lu_mp_favorites', []));
+  const isFav = favs.has(String(track.id));
+
+  if (Array.isArray(queue) && queue.length > 0 && context) {
+    _mpContextTracks[context] = queue;
+  }
+
+  const displayArtist = track.artistName || track.uploadedByName || '';
+  const avatarHtml = track.coverUrl
+    ? `<img src="${escapeHtml(track.coverUrl)}" alt="" loading="lazy">`
+    : (track.uploadedByAvatar
+        ? `<img src="${escapeHtml(track.uploadedByAvatar)}" alt="" loading="lazy" style="border-radius:50%">`
+        : '🎵');
+
+  const menuData = JSON.stringify({
+    id: track.id, title: track.title, artistName: displayArtist,
+    albumTitle: track.albumTitle || '', context, index,
+    fileUrl: track.fileUrl, audioUrl: track.audioUrl,
+    storagePath: track.storagePath || '', coverUrl: track.coverUrl || null,
+    uploadedByUid: track.uploadedByUid || '',
+  }).replace(/"/g, '&quot;');
+
+  const trackJson = JSON.stringify(track).replace(/"/g,'&quot;');
+
+  return `
+    <div class="mtrack-row ${isCurrent ? 'playing' : ''}"
+         onclick="mpLoadBackendTrack(${trackJson}, ${index}, '${context}')"
+         data-track-index="${index}"
+         role="button" tabindex="0">
+      <div class="mtrack-num">
+        ${isCurrent
+          ? `<span class="mtrack-playing-icon">♫</span>`
+          : `<span>${index + 1}</span>`}
+      </div>
+      <div class="mtrack-art">${avatarHtml}</div>
+      <div class="mtrack-info">
+        <div class="mtrack-title">${escapeHtml(track.title)}</div>
+        <div class="mtrack-meta">
+          ${escapeHtml(displayArtist)}
+          ${track.uploadedByName && track.uploadedByName !== displayArtist
+            ? `<span style="opacity:0.5;font-size:0.74em;margin-left:6px">by ${escapeHtml(track.uploadedByName)}</span>`
+            : ''}
+        </div>
+      </div>
+      <div class="mtrack-duration">${track.duration ? formatDuration(track.duration) : '—'}</div>
+      <div class="mtrack-actions">
+        <button class="mp-icon-btn ${isFav ? 'active' : ''}"
+          onclick="event.stopPropagation();mpToggleBackendFavorite('${track.id}')"
+          style="font-size:0.85rem" title="${isFav ? 'Unfavorite' : 'Favorite'}">♥</button>
+        <button class="mp-icon-btn"
+          onclick="event.stopPropagation();musicOpenTrackMenu(event,JSON.parse(this.dataset.t))"
+          data-t="${menuData}"
+          title="More options" style="font-size:1rem;padding:4px 6px">⋮</button>
+      </div>
+    </div>`;
+}
+
+// ─── COMMUNITY MIX TAB ─────────────────────────────────────────
+// Real-time listener driven tab. Shows all tracks added to the
+// communityMix/meta document, resolved from globalMusicLibrary.
+
+async function renderCommunityMixTab(el) {
+  el.innerHTML = `
+    <div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-lg);flex-wrap:wrap;gap:var(--space-sm)">
+        <div>
+          <h2 class="section-title cosmic-section-title" style="margin:0">🌌 AVENORA COMMUNITY MIX</h2>
+          <p style="color:var(--text-muted);font-size:0.82rem;margin-top:4px">Music uploaded by the entire AVENORA community</p>
+        </div>
+        <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap">
+          <button class="btn btn-cosmic btn-sm" id="community-mix-play-btn" onclick="musicPlayCommunityMix()">▶ Play All</button>
+          <button class="btn btn-cosmic-outline btn-sm" id="community-mix-shuffle-btn" onclick="musicShuffleCommunityMix()">⇄ Shuffle</button>
+        </div>
+      </div>
+
+      <div id="community-mix-content">
+        <div class="loading-state" style="min-height:30vh"><div class="spinner"></div>
+          <p style="color:var(--text-muted);font-size:0.85rem;margin-top:var(--space-md)">Loading Community Mix…</p>
+        </div>
+      </div>
+    </div>`;
+
+  // Start real-time listener
+  if (!window.AvenoraFirebase?.Firestore?.listenToCommunityMix) {
+    document.getElementById('community-mix-content').innerHTML = `
+      <div class="cosmic-empty-card">
+        <div class="cosmic-empty-icon">🌌</div>
+        <h3 class="cosmic-empty-title">COMMUNITY MIX</h3>
+        <p class="cosmic-empty-sub">Sign in to see the community mix.</p>
+      </div>`;
+    return;
+  }
+
+  _communityMixUnsub = window.AvenoraFirebase.Firestore.listenToCommunityMix(function(tracks) {
+    _renderCommunityMixContent(tracks);
+  });
+}
+
+function _renderCommunityMixContent(tracks) {
+  const contentEl = document.getElementById('community-mix-content');
+  if (!contentEl) return;
+
+  if (!tracks || tracks.length === 0) {
+    contentEl.innerHTML = `
+      <div class="cosmic-empty-card">
+        <div class="cosmic-empty-icon">🌌</div>
+        <h3 class="cosmic-empty-title">COMMUNITY MIX IS EMPTY</h3>
+        <p class="cosmic-empty-sub">
+          Upload music and add it to the Community Mix.<br>
+          Every AVENORA user will see it here.
+        </p>
+        <button class="btn btn-cosmic btn-sm" onclick="musicTabSwitch('upload',this)">⬆ Upload Music</button>
+      </div>`;
+    return;
+  }
+
+  const normalized = tracks.map(t => _normalizeGlobalTrack(t));
+  _mpContextTracks['community-mix'] = normalized;
+  // Cache for play/shuffle actions
+  _plResolvedTracks['community-mix'] = normalized;
+
+  contentEl.innerHTML = `
+    <div style="margin-bottom:var(--space-sm);font-size:0.8rem;color:var(--text-muted)">
+      ${normalized.length} track${normalized.length !== 1 ? 's' : ''} from the community
+    </div>
+    <div class="music-track-list">
+      ${normalized.map((t, i) => renderGlobalTrackRow(t, i, normalized, 'community-mix')).join('')}
+    </div>`;
+}
+
+window.musicPlayCommunityMix = function() {
+  const tracks = _plResolvedTracks['community-mix'];
+  if (!tracks || !tracks.length) {
+    // Fetch once and play
+    if (window.AvenoraFirebase?.Firestore?.getCommunityMixTracks) {
+      Toast.info('Loading Community Mix…');
+      window.AvenoraFirebase.Firestore.getCommunityMixTracks().then(rawTracks => {
+        if (!rawTracks.length) { Toast.info('Community Mix is empty'); return; }
+        const normalized = rawTracks.map(t => _normalizeGlobalTrack(t));
+        _plResolvedTracks['community-mix'] = normalized;
+        _mpContextTracks['community-mix'] = normalized;
+        mpLoadBackendTrack(normalized[0], 0, 'community-mix', normalized);
+      }).catch(() => Toast.error('Could not load Community Mix'));
+    } else {
+      Toast.info('Community Mix is empty');
+    }
+    return;
+  }
+  const playable = tracks.filter(t => t.audioUrl || t.fileUrl || t.storagePath);
+  if (!playable.length) { Toast.error('No playable tracks in Community Mix'); return; }
+  mpLoadBackendTrack(playable[0], 0, 'community-mix', playable);
+};
+
+window.musicShuffleCommunityMix = function() {
+  const tracks = _plResolvedTracks['community-mix'] || _mpContextTracks['community-mix'];
+  if (!tracks || !tracks.length) { Toast.info('Community Mix is empty'); return; }
+  const playable = tracks.filter(t => t.audioUrl || t.fileUrl || t.storagePath);
+  if (!playable.length) { Toast.error('No playable tracks'); return; }
+  const shuffled = [...playable].sort(() => Math.random() - 0.5);
+  // Store shuffled order so ended handler auto-advances correctly
+  _mpContextTracks['community-mix'] = shuffled;
+  _plResolvedTracks['community-mix'] = shuffled;
+  mpLoadBackendTrack(shuffled[0], 0, 'community-mix', shuffled);
+  Toast.info('Shuffled Community Mix ⇄');
+};
 
 // ─── RADIO TAB ────────────────────────────────────────────
 // Shows the Avenora Radio card inline in the Music Hub with a real-time
@@ -811,17 +1067,17 @@ function _playlistArtHtml(sysId, icon, color) {
 }
 
 function renderPlaylistCards() {
+  // Reads only from localStorage for the quick preview render on the Discover tab.
+  // Track counts shown here may not be accurate (localStorage is UI state only).
+  // The actual track count is authoritative only when the playlist is opened (Firestore).
   const playlists = LS.get('lu_music_playlists', []);
-  // Show all system playlists (including radio) + user-created playlists
   const sysCards  = SYSTEM_PLAYLISTS.map(sp => {
-    const stored = playlists.find(p => p.sysId === sp.sysId);
-    const count  = (stored?.tracks || []).length;
     return { id: sp.sysId, name: sp.name, icon: sp.icon, color: sp.color,
-             description: sp.description, count, isSystem: true, sysId: sp.sysId, isRadio: sp.isRadio || false };
+             description: sp.description, count: 0, isSystem: true, sysId: sp.sysId, isRadio: sp.isRadio || false };
   });
   const userCards = playlists
     .filter(p => !p.isSystem)
-    .map(p => ({ id: p.id, name: p.name, icon: '🌌', color: '#00ccff',
+    .map(p => ({ id: p.id, name: p.name, icon: p.icon || '🌌', color: p.color || '#00ccff',
                  description: p.description || 'Your playlist', count: (p.tracks||[]).length, isSystem: false, sysId: null }));
 
   const all = [...sysCards, ...userCards];
@@ -829,7 +1085,7 @@ function renderPlaylistCards() {
   return `
     <div class="section-header" style="margin-top:var(--space-xl)">
       <h2 class="section-title cosmic-section-title">🌌 YOUR SOUND WORLDS</h2>
-      <button class="btn btn-cosmic-outline btn-sm" onclick="musicTabSwitch('playlists',document.querySelectorAll('.music-hub-tab-btn')[3])">
+      <button class="btn btn-cosmic-outline btn-sm" onclick="musicTabSwitch('playlists',this)">
         View All →
       </button>
     </div>
@@ -853,27 +1109,46 @@ function renderPlaylistCards() {
     </div>`;
 }
 
-// ─── LIBRARY TAB ─────────────────────────────────────────────
+// ─── LIBRARY TAB (My Songs — current user's uploads only) ──────
 async function renderLibrary(genre = null) {
-  let backendTracks = [];
-  let cloudTracks   = [];   // Firestore-backed uploads (cloudStreamTracks/{uid}/tracks)
+  let myGlobalTracks = [];   // from globalMusicLibrary (new canonical store)
+  let legacyCloudTracks = []; // from cloudStreamTracks/{uid}/tracks (legacy fallback)
+  let backendTracks = [];    // from MongoDB backend
   let genres = [];
 
-  // ── 1. Try MongoDB backend (admin-uploaded / shared catalogue) ──
+  // ── 1. Try MongoDB backend genres ──
   try {
-    const [tracksData, genreData] = await Promise.all([
-      LegendAPI.music.tracks({ limit: 50, genre: genre || undefined }),
-      LegendAPI.request('GET', '/music/genres').catch(() => ({ genres: [] })),
-    ]);
-    backendTracks = tracksData.tracks || [];
+    const genreData = await LegendAPI.request('GET', '/music/genres').catch(() => ({ genres: [] }));
     genres = genreData.genres || [];
-  } catch { /* backend offline — skip silently */ }
+  } catch { /* backend offline */ }
 
-  // ── 2. Load the signed-in user's own cloud-uploaded tracks from Firestore ──
+  // ── 2. Load the signed-in user's own tracks from globalMusicLibrary ──
   const firebaseUser = window.AvenoraFirebase?.Auth?.getUser?.();
-  if (firebaseUser && window.AvenoraFirebase?.getFirestore) {
+  let uid = null;
+  try {
+    const fbAuth = await (window.AvenoraFirebase?.getFirebaseAuth?.());
+    if (fbAuth?.currentUser) uid = fbAuth.currentUser.uid;
+  } catch (_) {}
+  if (!uid && firebaseUser) uid = firebaseUser.uid || firebaseUser.id || null;
+  if (!uid) uid = sessionStorage.getItem('lu_uid') || localStorage.getItem('lu_uid') || null;
+
+  if (uid && window.AvenoraFirebase?.Firestore?.getUserTracks) {
     try {
-      const uid = firebaseUser.uid || firebaseUser.id;
+      const rawTracks = await window.AvenoraFirebase.Firestore.getUserTracks(uid, { limit: 200 });
+      myGlobalTracks = rawTracks
+        .filter(t => !genre || t.genre === genre)
+        .map(t => _normalizeGlobalTrack(t));
+      if (myGlobalTracks.length > 0) {
+        _mpContextTracks['my-library'] = myGlobalTracks;
+      }
+    } catch (glErr) {
+      console.warn('[AVN] Library: globalMusicLibrary fetch failed:', glErr.message);
+    }
+  }
+
+  // ── 3. Legacy: cloudStreamTracks (fallback for tracks uploaded before globalMusicLibrary existed) ──
+  if (uid && window.AvenoraFirebase?.getFirestore && myGlobalTracks.length === 0) {
+    try {
       const fsDb = await window.AvenoraFirebase.getFirestore();
       const { collection, query, orderBy, limit, getDocs } =
         await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
@@ -882,9 +1157,8 @@ async function renderLibrary(genre = null) {
         orderBy('createdAt', 'desc'),
         limit(200)
       ));
-      cloudTracks = snap.docs.map(d => {
+      legacyCloudTracks = snap.docs.map(d => {
         const data = d.data();
-        // Apply genre filter client-side if requested
         if (genre && data.genre !== genre) return null;
         return {
           id:          d.id,
@@ -896,20 +1170,33 @@ async function renderLibrary(genre = null) {
           storagePath: data.storagePath || null,
           coverUrl:    data.coverUrl    || null,
           duration:    data.duration    || 0,
-          visibility:  data.visibility  || 'private',
           _isFirestore: true,
         };
       }).filter(Boolean);
+      if (legacyCloudTracks.length > 0) _mpContextTracks['my-library-legacy'] = legacyCloudTracks;
     } catch (fsErr) {
-      console.warn('[AVN] Could not load cloud tracks from Firestore:', fsErr.message);
+      console.warn('[AVN] Library: legacy cloudStreamTracks fetch failed:', fsErr.message);
     }
   }
 
+  // ── 4. MongoDB backend tracks for this user (if connected) ──
+  try {
+    const tracksData = await LegendAPI.music.tracks({ limit: 50, genre: genre || undefined });
+    backendTracks = tracksData.tracks || [];
+  } catch { /* backend offline */ }
+
   const localTracks = MP.queue;
-  const hasAny = backendTracks.length > 0 || cloudTracks.length > 0 || localTracks.length > 0;
+  const hasAny = myGlobalTracks.length > 0 || legacyCloudTracks.length > 0 || backendTracks.length > 0 || localTracks.length > 0;
 
   return `
     <div>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-lg);flex-wrap:wrap;gap:var(--space-sm)">
+        <h2 class="section-title cosmic-section-title" style="margin:0">🎧 MY MUSIC</h2>
+        <p style="color:var(--text-muted);font-size:0.8rem;margin:0">Your uploaded tracks only.
+          <button class="btn btn-cosmic-outline btn-sm" onclick="musicTabSwitch('community-mix',this)" style="margin-left:8px">🌌 View Community</button>
+        </p>
+      </div>
+
       <!-- Genre filter -->
       ${genres.length ? `
         <div class="genre-filter-row" id="genre-filter-row">
@@ -926,7 +1213,7 @@ async function renderLibrary(genre = null) {
           <h3 class="cosmic-empty-title">🎧 YOUR MUSIC UNIVERSE</h3>
           <p class="cosmic-empty-sub">Upload tracks, import local files, or sign in to see your cloud library.</p>
           <div style="display:flex;gap:var(--space-sm);flex-wrap:wrap;justify-content:center">
-            <button class="btn btn-cosmic" onclick="musicTabSwitch('upload')">⬆ Upload Music</button>
+            <button class="btn btn-cosmic" onclick="musicTabSwitch('upload',this)">⬆ Upload Music</button>
             <button class="btn btn-cosmic-outline" onclick="mpImport()">📂 Import Files</button>
           </div>
         </div>` : ''}
@@ -940,18 +1227,27 @@ async function renderLibrary(genre = null) {
           ${localTracks.map((t, i) => renderLocalTrackRow(t, i)).join('')}
         </div>` : ''}
 
-      ${cloudTracks.length > 0 ? `
+      ${myGlobalTracks.length > 0 ? `
         <div class="section-header">
           <h3 class="section-title cosmic-section-title">☁️ MY CLOUD UPLOADS</h3>
-          <span style="font-size:0.8rem;color:var(--text-muted)">${cloudTracks.length} track${cloudTracks.length!==1?'s':''}</span>
+          <span style="font-size:0.8rem;color:var(--text-muted)">${myGlobalTracks.length} track${myGlobalTracks.length!==1?'s':''}</span>
         </div>
         <div class="music-track-list" style="margin-bottom:var(--space-xl)">
-          ${cloudTracks.map((t, i) => renderTrackRow(t, i, cloudTracks, 'cloud')).join('')}
+          ${myGlobalTracks.map((t, i) => renderGlobalTrackRow(t, i, myGlobalTracks, 'my-library')).join('')}
+        </div>` : ''}
+
+      ${legacyCloudTracks.length > 0 ? `
+        <div class="section-header">
+          <h3 class="section-title cosmic-section-title">☁️ CLOUD UPLOADS (LEGACY)</h3>
+          <span style="font-size:0.8rem;color:var(--text-muted)">${legacyCloudTracks.length} track${legacyCloudTracks.length!==1?'s':''}</span>
+        </div>
+        <div class="music-track-list" style="margin-bottom:var(--space-xl)">
+          ${legacyCloudTracks.map((t, i) => renderTrackRow(t, i, legacyCloudTracks, 'my-library-legacy')).join('')}
         </div>` : ''}
 
       ${backendTracks.length > 0 ? `
         <div class="section-header">
-          <h3 class="section-title cosmic-section-title">🌌 CLOUD LIBRARY</h3>
+          <h3 class="section-title cosmic-section-title">🌌 CATALOGUE</h3>
           <span style="font-size:0.8rem;color:var(--text-muted)">${backendTracks.length} track${backendTracks.length!==1?'s':''}</span>
         </div>
         <div class="music-track-list">
@@ -969,23 +1265,29 @@ window.musicTabLibraryGenre = function (genre) {
 
 // ─── PLAYLISTS TAB ───────────────────────────────────────────
 async function renderPlaylists() {
-  // Primary source: Firestore shared playlists
+  // Primary source: Firestore shared playlists (source of truth).
+  // localStorage is ONLY used when Firestore is completely unavailable (offline fallback).
+  // IMPORTANT: localStorage track membership is NEVER used — only playlist metadata.
   let playlists = [];
+  let firestoreLoaded = false;
   if (window.AvenoraFirebase?.Firestore?.getSharedPlaylists) {
     try {
       playlists = await window.AvenoraFirebase.Firestore.getSharedPlaylists();
+      firestoreLoaded = true;
     } catch (e) {
-      console.warn('[AVN] renderPlaylists Firestore load failed, using localStorage:', e.message);
+      console.warn('[AVN] renderPlaylists Firestore load failed, using localStorage as fallback:', e.message);
     }
   }
 
-  // Merge with localStorage fallback (adds any playlists not yet in Firestore)
-  if (!playlists.length) {
+  if (!firestoreLoaded) {
+    // Offline fallback: use localStorage ONLY when Firestore is unavailable
     playlists = LS.get('lu_music_playlists', []);
-  } else {
-    // Also show local-only playlists not yet migrated
+  } else if (playlists.length) {
+    // ANTI-CLOBBER: Firestore loaded successfully — merge in local-only playlists
+    // (playlists created offline that haven't been migrated yet), but NEVER
+    // overwrite existing Firestore playlists with localStorage data.
     const fsIds = new Set(playlists.map(p => p.id));
-    const localOnly = LS.get('lu_music_playlists', []).filter(p => !fsIds.has(p.id));
+    const localOnly = LS.get('lu_music_playlists', []).filter(p => !fsIds.has(p.id) && !p.isSystem);
     playlists = [...playlists, ...localOnly];
   }
 
@@ -1315,6 +1617,23 @@ window.musicSearch = function (q) {
       (t.artist || '').toLowerCase().includes(lcq)
     );
 
+    // Search global library (Firestore)
+    let globalResults = [];
+    if (window.AvenoraFirebase?.Firestore?.getGlobalLibraryTracks) {
+      try {
+        const allGlobal = await window.AvenoraFirebase.Firestore.getGlobalLibraryTracks({ limit: 200 });
+        globalResults = allGlobal
+          .filter(t => {
+            const tl = (t.title || '').toLowerCase();
+            const al = (t.artist || '').toLowerCase();
+            const gl = (t.genre || '').toLowerCase();
+            const ul = (t.uploadedByName || '').toLowerCase();
+            return tl.includes(lcq) || al.includes(lcq) || gl.includes(lcq) || ul.includes(lcq);
+          })
+          .map(t => _normalizeGlobalTrack(t));
+      } catch (_) {}
+    }
+
     // Search backend
     let backendResults = { tracks: [], albums: [], artists: [] };
     try {
@@ -1329,7 +1648,7 @@ window.musicSearch = function (q) {
     const showArtists  = _musicSearchFilter === 'all' || _musicSearchFilter === 'artists';
 
     const allEmpty =
-      (!showSongs  || (localResults.length === 0 && backendResults.tracks.length === 0)) &&
+      (!showSongs  || (localResults.length === 0 && globalResults.length === 0 && backendResults.tracks.length === 0)) &&
       (!showAlbums || backendResults.albums.length === 0) &&
       (!showArtists|| backendResults.artists.length === 0);
 
@@ -1340,9 +1659,14 @@ window.musicSearch = function (q) {
 
     let html = '';
 
-    if (showSongs && (localResults.length || backendResults.tracks.length)) {
+    if (showSongs && (localResults.length || globalResults.length || backendResults.tracks.length)) {
       html += `<div class="music-search-section"><h4>SONGS</h4><div class="music-track-list">`;
       localResults.forEach((t, i) => { html += renderLocalTrackRow(t, MP.queue.indexOf(t)); });
+      if (globalResults.length) {
+        // Register context so auto-advance works
+        _mpContextTracks['search-global'] = globalResults;
+        globalResults.forEach((t, i) => { html += renderGlobalTrackRow(t, i, globalResults, 'search-global'); });
+      }
       backendResults.tracks.forEach((t, i) => { html += renderTrackRow(t, i, backendResults.tracks, 'search'); });
       html += '</div></div>';
     }
@@ -1596,25 +1920,64 @@ window.musicUploadSubmit = async function (e) {
 
     progW?.classList.add('hidden');
 
-    // 2. Optionally save to Firestore cloudStreamTracks so the Cloud Stream
-    //    dashboard can pick it up. The backend track record is the primary store;
-    //    Firestore is a secondary index used by the stream dashboard.
+    // 2. Write to globalMusicLibrary (shared, cross-user) — PRIMARY FIRESTORE WRITE
+    //    BOTH Supabase upload AND Firestore write must succeed for "Upload complete".
+    let canonicalTrackId = data?.track?.id || data?.track?._id || null;
+    let globalLibError = null;
+    if (window.AvenoraFirebase?.Firestore?.publishTrackToGlobalLibrary) {
+      if (status) status.textContent = 'Publishing to library…';
+      try {
+        const track = data.track;
+        canonicalTrackId = await window.AvenoraFirebase.Firestore.publishTrackToGlobalLibrary({
+          id:          canonicalTrackId,
+          trackId:     canonicalTrackId,
+          title:       track?.title    || titleVal,
+          artistName:  track?.artistName || artist,
+          albumTitle:  track?.albumTitle || album,
+          genre:       track?.genre    || genre,
+          fileUrl:     track?.fileUrl  || '',
+          audioUrl:    track?.fileUrl  || '',
+          storagePath: track?.storagePath || null,
+          duration:    track?.duration || 0,
+        });
+      } catch (glErr) {
+        globalLibError = glErr.message || 'Firestore write failed';
+        console.error('[AVN] CRITICAL: globalMusicLibrary write failed:', glErr.message);
+      }
+    } else {
+      globalLibError = 'Firestore service not loaded — track not shared globally';
+      console.warn('[AVN] publishTrackToGlobalLibrary unavailable — track will be local only');
+    }
+
+    if (globalLibError) {
+      progW?.classList.add('hidden');
+      errEl.innerHTML = `<strong>Upload incomplete:</strong> Audio saved but not published to the shared library.<br>
+        Error: ${escapeHtml(globalLibError)}<br>
+        <button class="btn btn-cosmic btn-sm" style="margin-top:8px"
+          onclick="musicRetryGlobalLibWrite(${JSON.stringify({ canonicalTrackId, titleVal, artist, album, genre, fileUrl: data?.track?.fileUrl || '', storagePath: data?.track?.storagePath || null }).replace(/"/g,'&quot;')})">↺ Retry</button>`;
+      errEl.classList.remove('hidden');
+      return; // do NOT show success
+    }
+
+    // 3. Also save legacy cloudStreamTracks for backward compat (fire-and-forget)
     try {
       const track = data.track;
       if (track && window.AvenoraFirebase?.getFirestore) {
         const uid = (firebaseUser.uid || firebaseUser.id);
+        const legacyId = track.id || track._id || canonicalTrackId;
         const fsDb = await window.AvenoraFirebase.getFirestore();
         const fsModule = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
         await fsModule.setDoc(
-          fsModule.doc(fsDb, 'cloudStreamTracks', uid, 'tracks', track.id || track._id),
+          fsModule.doc(fsDb, 'cloudStreamTracks', uid, 'tracks', String(legacyId)),
           {
             uid,
-            backendTrackId: track.id || track._id,
-            title:        track.title,
+            backendTrackId: legacyId,
+            title:        track.title || titleVal,
             artist:       track.artistName || artist,
             album:        track.albumTitle || album,
             genre:        track.genre || genre,
             url:          track.fileUrl,
+            audioUrl:     track.fileUrl,
             storagePath:  track.storagePath || null,
             duration:     track.duration || 0,
             fileName:     file.name,
@@ -1627,25 +1990,23 @@ window.musicUploadSubmit = async function (e) {
         );
       }
     } catch (_fsErr) {
-      // Firestore sync is optional — log but don't fail the upload
-      console.warn('[AVN] Firestore cloudStreamTracks sync skipped:', _fsErr.message);
+      console.warn('[AVN] cloudStreamTracks legacy sync skipped:', _fsErr.message);
     }
 
-    // Show success message
+    // Show success — only after BOTH Supabase + Firestore succeeded
     if (succEl) {
-      succEl.textContent = `✓ "${titleVal}" uploaded successfully!`;
+      succEl.textContent = `✓ "${titleVal}" published to the universe!`;
       succEl.classList.remove('hidden');
     }
-    Toast.success(`Track "${titleVal}" uploaded!`);
+    Toast.success(`Track "${titleVal}" published to the universe!`);
 
     // Reset form
     form.reset();
     document.getElementById('music-upload-file-preview').innerHTML = '';
 
-    // Post-upload: offer to add to a playlist
-    const uploadedTrackId = data?.track?.id || data?.track?._id;
-    if (uploadedTrackId) {
-      setTimeout(() => musicAddToPlaylistModal(String(uploadedTrackId), titleVal), 400);
+    // Post-upload: offer to add to Community Mix and/or playlists
+    if (canonicalTrackId) {
+      setTimeout(() => _showPostUploadOptions(String(canonicalTrackId), titleVal, data?.track), 400);
     }
 
   } catch (err) {
@@ -1656,6 +2017,90 @@ window.musicUploadSubmit = async function (e) {
   } finally {
     btn.disabled = false;
     btn.textContent = '⬆ Upload Track';
+  }
+};
+
+/**
+ * Show a post-upload modal offering:
+ *  1. Add to Community Mix
+ *  2. Add to a Sound World (playlist)
+ */
+function _showPostUploadOptions(trackId, trackTitle, trackObj) {
+  Modal.create({
+    id: 'post-upload-modal',
+    title: '🎉 Track Published!',
+    body: `
+      <p style="color:#00ccff;font-family:var(--font-display);letter-spacing:0.06em;margin-bottom:var(--space-md)">${escapeHtml(trackTitle)}</p>
+      <p style="color:var(--text-secondary);font-size:0.88rem;margin-bottom:var(--space-lg)">Your track is now live in the global music library. Would you like to add it to:</p>
+      <div style="display:flex;flex-direction:column;gap:var(--space-sm)">
+        <label class="music-pl-check-row" style="cursor:pointer">
+          <input type="checkbox" id="post-upload-community-mix" value="community-mix" checked>
+          <span class="music-pl-check-icon">🌌</span>
+          <span class="music-pl-check-name">AVENORA COMMUNITY MIX</span>
+          <span class="music-pl-check-count" style="font-size:0.75rem;color:var(--text-muted)">Shared with all users</span>
+        </label>
+      </div>`,
+    actions: [
+      { label: 'Skip', class: 'btn-outline', onclick: `Modal.close('post-upload-modal')` },
+      { label: '✦ Add to Selection', class: 'btn-cosmic', onclick: `_confirmPostUploadOptions('${String(trackId)}')` },
+    ],
+  });
+  Modal.open('post-upload-modal');
+  // Store track context for the confirm handler
+  window._postUploadTrack = { id: String(trackId), title: trackTitle, trackObj };
+}
+
+window._confirmPostUploadOptions = async function(trackId) {
+  Modal.close('post-upload-modal');
+  const addToCommunity = document.getElementById('post-upload-community-mix')?.checked;
+
+  if (addToCommunity && window.AvenoraFirebase?.Firestore?.addToCommunityMix) {
+    try {
+      await window.AvenoraFirebase.Firestore.addToCommunityMix(String(trackId));
+      Toast.success('Added to Community Mix 🌌');
+    } catch (e) {
+      Toast.error('Could not add to Community Mix: ' + (e.message || 'unknown error'));
+    }
+  }
+
+  // Also offer to add to a sound world
+  const track = window._postUploadTrack?.trackObj;
+  const title = window._postUploadTrack?.title || '';
+  setTimeout(() => musicAddToPlaylistModal(String(trackId), title), 400);
+};
+
+/**
+ * Retry writing a track to globalMusicLibrary after a Firestore failure.
+ */
+window.musicRetryGlobalLibWrite = async function(payload) {
+  if (!payload || !window.AvenoraFirebase?.Firestore?.publishTrackToGlobalLibrary) {
+    Toast.error('Cannot retry — Firestore not available');
+    return;
+  }
+  const errEl = document.getElementById('music-upload-error');
+  if (errEl) { errEl.textContent = 'Retrying…'; }
+  try {
+    const canonicalId = await window.AvenoraFirebase.Firestore.publishTrackToGlobalLibrary({
+      id:          payload.canonicalTrackId,
+      trackId:     payload.canonicalTrackId,
+      title:       payload.titleVal,
+      artistName:  payload.artist || '',
+      albumTitle:  payload.album || '',
+      genre:       payload.genre || '',
+      fileUrl:     payload.fileUrl || '',
+      audioUrl:    payload.fileUrl || '',
+      storagePath: payload.storagePath || null,
+    });
+    if (errEl) { errEl.classList.add('hidden'); }
+    Toast.success('Track published to the universe!');
+    // Offer to add to Community Mix
+    setTimeout(() => _showPostUploadOptions(String(canonicalId), payload.titleVal, payload), 400);
+  } catch (e) {
+    if (errEl) {
+      errEl.innerHTML = `Retry failed: ${escapeHtml(e.message)}<br>
+        <button class="btn btn-cosmic btn-sm" style="margin-top:8px"
+          onclick="musicRetryGlobalLibWrite(${JSON.stringify(payload).replace(/"/g,'&quot;')})">↺ Retry Again</button>`;
+    }
   }
 };
 
@@ -1853,6 +2298,9 @@ window.musicOpenTrackMenu = function (evtOrBtn, trackData) {
     <button class="music-ctx-item" onclick="musicCtxAddToPlaylist()">
       <span>📂</span> Add to Playlist…
     </button>
+    <button class="music-ctx-item" onclick="musicCtxAddToCommunityMix()">
+      <span>🌌</span> Add to Community Mix
+    </button>
     <button class="music-ctx-item" onclick="musicCtxAddToRadio()">
       <span>📻</span> Add to Radio
     </button>
@@ -1932,6 +2380,22 @@ window.musicCtxAddToPlaylist = function () {
   if (!_trackMenuTrack) return;
   const name = _trackMenuTrack.name || _trackMenuTrack.title || 'Track';
   musicAddToPlaylistModal(String(_trackMenuTrack.id), name);
+};
+
+window.musicCtxAddToCommunityMix = async function () {
+  musicCtxClose();
+  if (!_trackMenuTrack) return;
+  const trackId = String(_trackMenuTrack.id || '');
+  if (!trackId) { Toast.error('No track selected'); return; }
+  if (!window.AvenoraFirebase?.Firestore?.addToCommunityMix) {
+    Toast.error('Not available — sign in first'); return;
+  }
+  try {
+    await window.AvenoraFirebase.Firestore.addToCommunityMix(trackId);
+    Toast.success('Added to Community Mix 🌌');
+  } catch (e) {
+    Toast.error('Could not add to Community Mix: ' + (e.message || 'Unknown error'));
+  }
 };
 
 window.musicCtxAddToRadio = function () {
@@ -2262,7 +2726,46 @@ async function _resolvePlaylistTracks(trackIds) {
     }
   }
 
-  // 3. Try backend API for any still-missing IDs (shared/admin catalogue, non-Firestore tracks)
+  // 3. Try globalMusicLibrary (cross-user lookup — tracks uploaded by other accounts)
+  if (window.AvenoraFirebase?.getFirestore && missing.length > 0) {
+    try {
+      const fsDb = await window.AvenoraFirebase.getFirestore();
+      const { doc: fsDoc2, getDoc: fsGet2 } =
+        await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+      const stillMissing2 = [];
+      for (const tid of missing) {
+        try {
+          const snap = await fsGet2(fsDoc2(fsDb, 'globalMusicLibrary', String(tid)));
+          if (snap.exists()) {
+            const d = snap.data();
+            const playUrl = d.audioUrl || d.fileUrl || d.url || '';
+            resolved.push({
+              id:          snap.id,
+              title:       d.title      || 'Untitled',
+              artistName:  d.artist     || '',
+              albumTitle:  d.album      || '',
+              genre:       d.genre      || '',
+              fileUrl:     playUrl,
+              audioUrl:    playUrl,
+              storagePath: d.storagePath || null,
+              coverUrl:    d.coverUrl   || null,
+              duration:    d.duration   || 0,
+              _isGlobal:   true,
+              _isFirestore: true,
+            });
+          } else {
+            stillMissing2.push(tid);
+          }
+        } catch (_) { stillMissing2.push(tid); }
+      }
+      missing.length = 0;
+      missing.push(...stillMissing2);
+    } catch (glErr) {
+      console.warn('[AVN] _resolvePlaylistTracks globalMusicLibrary lookup error:', glErr.message);
+    }
+  }
+
+  // 4. Try backend API for any still-missing IDs (shared/admin catalogue, non-Firestore tracks)
   for (const tid of missing) {
     try {
       const data = await LegendAPI.music.track(tid);
@@ -2282,17 +2785,21 @@ window.musicOpenPlaylist = async function (id) {
   // Cancel any existing playlist listener
   if (_playlistUnsub) { try { _playlistUnsub(); } catch (_) {} _playlistUnsub = null; }
 
-  // Try Firestore first, then localStorage fallback
+  // Try Firestore first (source of truth), then localStorage fallback for offline use.
+  // ANTI-CLOBBER: if Firestore returns a playlist, use it exclusively — never merge localStorage.
   let pl = null;
+  let fromFirestore = false;
   if (window.AvenoraFirebase?.Firestore) {
     try {
       const all = await window.AvenoraFirebase.Firestore.getSharedPlaylists();
       pl = all.find(p => p.id === id) || null;
+      if (pl) fromFirestore = true;
     } catch (e) {
       console.warn('[AVN] musicOpenPlaylist Firestore lookup failed:', e.message);
     }
   }
   if (!pl) {
+    // Offline fallback only — playlist metadata but NO track membership from localStorage
     const playlists = LS.get('lu_music_playlists', []);
     pl = playlists.find(p => p.id === id) || null;
   }
@@ -2568,10 +3075,28 @@ window.musicDeletePlaylist = async function (id, name) {
   musicTabSwitch('playlists');
 };
 
-window.musicAddToPlaylistModal = function (trackId, trackName) {
+window.musicAddToPlaylistModal = async function (trackId, trackName) {
   // Always work with string IDs to prevent numeric vs string type mismatches
   const sid = String(trackId);
-  const playlists = LS.get('lu_music_playlists', []);
+
+  // Load playlists from Firestore (source of truth) + localStorage fallback.
+  // NEVER let localStorage overwrite a Firestore playlist that already exists.
+  let playlists = [];
+  if (window.AvenoraFirebase?.Firestore?.getSharedPlaylists) {
+    try {
+      playlists = await window.AvenoraFirebase.Firestore.getSharedPlaylists();
+    } catch (e) {
+      console.warn('[AVN] musicAddToPlaylistModal Firestore load failed:', e.message);
+    }
+  }
+  if (!playlists.length) {
+    playlists = LS.get('lu_music_playlists', []);
+  } else {
+    // Merge in any local-only playlists that haven't been migrated yet
+    const fsIds = new Set(playlists.map(p => p.id));
+    LS.get('lu_music_playlists', []).filter(p => !fsIds.has(p.id)).forEach(p => playlists.push(p));
+  }
+
   if (!playlists.length) {
     if (confirm('No playlists yet. Create one now?')) musicCreatePlaylistModal();
     return;
@@ -2580,12 +3105,12 @@ window.musicAddToPlaylistModal = function (trackId, trackName) {
   // Build checkbox list — all playlists (system + user), mark which already contain this track
   const items = playlists.map(p => {
     const has = (p.tracks || []).some(t => String(t) === sid);
-    const sp  = SYSTEM_PLAYLISTS.find(s => s.sysId === p.sysId);
-    const icon = sp ? sp.icon : '📂';
+    const sp   = SYSTEM_PLAYLISTS.find(s => s.sysId === p.sysId);
+    const icon = p.icon || (sp ? sp.icon : '📂');
     return `
       <label class="music-pl-check-row ${has ? 'has-track' : ''}">
         <input type="checkbox" name="pl-check" value="${escapeHtml(p.id)}" ${has ? 'checked' : ''}
-               data-name="${escapeHtml(p.name)}">
+               data-name="${escapeHtml(p.name)}" data-sysid="${escapeHtml(p.sysId || '')}">
         <span class="music-pl-check-icon">${icon}</span>
         <span class="music-pl-check-name">${escapeHtml(p.name)}</span>
         <span class="music-pl-check-count">${(p.tracks||[]).length} tracks</span>
@@ -2615,15 +3140,37 @@ window.musicConfirmAddToPlaylist = async function (trackId) {
   const checked = document.querySelectorAll('#music-pl-check-list input[name="pl-check"]');
   if (!checked.length) { Modal.close('add-to-pl-modal'); return; }
 
-  // Resolve the track object for Firestore writes (need title, artist, etc.)
-  const trackObj = _trackMenuTrack || {};
+  // Resolve the track object for Firestore writes (need title, artist, audioUrl, etc.)
+  // Prefer _postUploadTrack.trackObj over _trackMenuTrack since it has fuller data.
+  const trackObj = (window._postUploadTrack?.id === sid && window._postUploadTrack?.trackObj)
+    ? window._postUploadTrack.trackObj
+    : (_trackMenuTrack || {});
+
+  // Resolve the canonical audio URL from all possible fields
+  const resolvedUrl = trackObj.fileUrl || trackObj.audioUrl || trackObj.url
+    || trackObj.publicUrl || trackObj.downloadURL || '';
 
   const playlists = LS.get('lu_music_playlists', []);
   let added = 0, removed = 0;
 
   for (const cb of checked) {
     const pl = playlists.find(p => p.id === cb.value);
-    if (!pl) continue;
+    if (!pl) {
+      // Playlist exists in Firestore but not localStorage — still write to Firestore
+      if (cb.checked && window.AvenoraFirebase?.Firestore?.addTrackToPlaylist) {
+        window.AvenoraFirebase.Firestore.addTrackToPlaylist(cb.value, {
+          id:          sid,
+          trackId:     sid,
+          title:       trackObj.title || trackObj.name || 'Untitled',
+          artistName:  trackObj.artistName || trackObj.artist || '',
+          fileUrl:     resolvedUrl,
+          audioUrl:    resolvedUrl,
+          storagePath: trackObj.storagePath || '',
+          coverUrl:    trackObj.coverUrl || null,
+        }).then(() => { added++; }).catch(e => console.warn('[AVN] Firestore addTrackToPlaylist (no-LS) failed:', e.message));
+      }
+      continue;
+    }
     if (!pl.tracks) pl.tracks = [];
     // Normalise existing IDs to strings for consistent comparison
     pl.tracks = pl.tracks.map(t => String(t));
@@ -2631,14 +3178,17 @@ window.musicConfirmAddToPlaylist = async function (trackId) {
       if (!pl.tracks.includes(sid)) {
         pl.tracks.push(sid);
         added++;
-        // Write to Firestore (fire-and-forget)
+        // Write to Firestore — include full audio URL so other users can play it
         if (window.AvenoraFirebase?.Firestore?.addTrackToPlaylist) {
           window.AvenoraFirebase.Firestore.addTrackToPlaylist(cb.value, {
             id:          sid,
+            trackId:     sid,
             title:       trackObj.title || trackObj.name || 'Untitled',
             artistName:  trackObj.artistName || trackObj.artist || '',
-            fileUrl:     trackObj.fileUrl || trackObj.url || trackObj.audioUrl || '',
+            fileUrl:     resolvedUrl,
+            audioUrl:    resolvedUrl,
             storagePath: trackObj.storagePath || '',
+            coverUrl:    trackObj.coverUrl || null,
           }).catch(e => console.warn('[AVN] Firestore addTrackToPlaylist failed:', e.message));
         }
       }
@@ -2647,8 +3197,6 @@ window.musicConfirmAddToPlaylist = async function (trackId) {
       if (idx !== -1) {
         pl.tracks.splice(idx, 1);
         removed++;
-        // Note: Firestore removal requires the _docId which we don't have here.
-        // The full Firestore removal is handled by dedicated per-track remove buttons.
       }
     }
   }

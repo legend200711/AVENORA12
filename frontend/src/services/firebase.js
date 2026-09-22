@@ -523,6 +523,27 @@
       }
     }
 
+    // Step 4: globalMusicLibrary direct lookup by trackId
+    // This resolves tracks from other users that were added to a shared playlist.
+    if (lookupId) {
+      try {
+        const { doc: gDoc, getDoc: gGet } =
+          await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+        try {
+          const gSnap = await gGet(gDoc(db, 'globalMusicLibrary', String(lookupId)));
+          if (gSnap.exists()) {
+            const gd = gSnap.data();
+            const foundUrl = gd.audioUrl || gd.fileUrl || gd.url;
+            if (foundUrl) {
+              console.info('[AVN] _resolvePlaylistTrackUrl — found in globalMusicLibrary:',
+                lookupId, foundUrl);
+              return { ...trackEntry, ...gd, audioUrl: foundUrl, _resolved: 'globalMusicLibrary' };
+            }
+          }
+        } catch (_) {}
+      } catch (_) {}
+    }
+
     // All resolution strategies exhausted
     console.warn('[AVN] _resolvePlaylistTrackUrl — UNRESOLVABLE', {
       trackId:     lookupId,
@@ -1454,6 +1475,268 @@
           updatedAt:    serverTimestamp(),
         });
       }
+    },
+
+    // ─── Global Music Library ──────────────────────────────────────
+    // Collection: globalMusicLibrary/{trackId}
+    // All authenticated users can read published tracks from any uploader.
+    // Only the uploader (or admin/founder) may delete/edit their own track.
+
+    /**
+     * Publish a track to the global music library.
+     * Called from musicUploadSubmit AFTER the Supabase upload succeeds.
+     * Returns the canonical track document ID.
+     */
+    async publishTrackToGlobalLibrary(trackData) {
+      const db = await getFirestore();
+      const { doc, setDoc, serverTimestamp } = await loadModule('firestore');
+      const user = LegendState.get('user');
+      const uid  = user?.uid || user?.id || null;
+      if (!uid) throw new Error('Not authenticated');
+
+      // Use a stable canonical ID derived from uploaderUid + timestamp so it
+      // never conflicts across devices and is deterministic for dedup.
+      const trackId = trackData.id || trackData.trackId || `${uid}_${Date.now()}`;
+      const docRef  = doc(db, 'globalMusicLibrary', String(trackId));
+
+      await setDoc(docRef, {
+        trackId:          String(trackId),
+        title:            trackData.title || 'Untitled',
+        artist:           trackData.artistName || trackData.artist || '',
+        album:            trackData.albumTitle  || trackData.album  || '',
+        genre:            trackData.genre       || '',
+        duration:         trackData.duration    || 0,
+        audioUrl:         trackData.fileUrl     || trackData.audioUrl || trackData.url || '',
+        storagePath:      trackData.storagePath  || '',
+        coverUrl:         trackData.coverUrl     || null,
+        uploadedByUid:    uid,
+        uploadedByName:   user?.profile?.displayName || user?.username || '',
+        uploadedByAvatar: user?.profile?.avatarUrl || null,
+        isPublished:      true,
+        isDeleted:        false,
+        createdAt:        serverTimestamp(),
+        updatedAt:        serverTimestamp(),
+        // Keep a copy of the legacy cloudStreamTracks doc ID for backward compat
+        legacyCloudTrackId: trackData.legacyCloudTrackId || null,
+      }, { merge: true });
+
+      return String(trackId);
+    },
+
+    /**
+     * Listen to the global music library in real time.
+     * Returns tracks from ALL authenticated uploaders, ordered by createdAt desc.
+     * Returns an unsubscribe function.
+     * @param {function} callback  Called with an array of track objects.
+     * @param {object}   [opts]    { limit: number, genre: string }
+     */
+    listenToGlobalLibrary(callback, opts) {
+      const _opts = opts || {};
+      let unsub = null;
+      loadModule('firestore').then(function(fsModule) {
+        var collection = fsModule.collection;
+        var query = fsModule.query;
+        var where = fsModule.where;
+        var orderBy = fsModule.orderBy;
+        var fsLimit = fsModule.limit;
+        var onSnapshot = fsModule.onSnapshot;
+        getFirestore().then(function(db) {
+          var q = query(
+            collection(db, 'globalMusicLibrary'),
+            where('isPublished', '==', true),
+            where('isDeleted',  '==', false),
+            orderBy('createdAt', 'desc'),
+            fsLimit(_opts.limit || 200)
+          );
+          unsub = onSnapshot(q, function(snap) {
+            var tracks = snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); });
+            if (_opts.genre) tracks = tracks.filter(function(t) { return t.genre === _opts.genre; });
+            callback(tracks);
+          }, function(err) {
+            console.warn('[AVN] listenToGlobalLibrary error:', err.message);
+            callback([]);
+          });
+        });
+      });
+      return function() { if (unsub) unsub(); };
+    },
+
+    /**
+     * Fetch the global music library once (no real-time).
+     */
+    async getGlobalLibraryTracks(opts) {
+      const _opts = opts || {};
+      const db = await getFirestore();
+      const { collection, query, where, orderBy, limit: fsLimit, getDocs } = await loadModule('firestore');
+      const q = query(
+        collection(db, 'globalMusicLibrary'),
+        where('isPublished', '==', true),
+        where('isDeleted',  '==', false),
+        orderBy('createdAt', 'desc'),
+        fsLimit(_opts.limit || 200)
+      );
+      const snap = await getDocs(q);
+      let tracks = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      if (_opts.genre) tracks = tracks.filter(t => t.genre === _opts.genre);
+      return tracks;
+    },
+
+    /**
+     * Fetch only the tracks uploaded by a specific UID.
+     */
+    async getUserTracks(uid, opts) {
+      const _opts = opts || {};
+      const db = await getFirestore();
+      const { collection, query, where, orderBy, limit: fsLimit, getDocs } = await loadModule('firestore');
+      const snap = await getDocs(query(
+        collection(db, 'globalMusicLibrary'),
+        where('uploadedByUid', '==', uid),
+        where('isDeleted', '==', false),
+        orderBy('createdAt', 'desc'),
+        fsLimit(_opts.limit || 100)
+      ));
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    },
+
+    /**
+     * Listen to tracks uploaded by a specific UID (real-time).
+     */
+    listenToUserTracks(uid, callback) {
+      let unsub = null;
+      loadModule('firestore').then(function(fsModule) {
+        var collection = fsModule.collection;
+        var query = fsModule.query;
+        var where = fsModule.where;
+        var orderBy = fsModule.orderBy;
+        var onSnapshot = fsModule.onSnapshot;
+        getFirestore().then(function(db) {
+          unsub = onSnapshot(
+            query(
+              collection(db, 'globalMusicLibrary'),
+              where('uploadedByUid', '==', uid),
+              where('isDeleted', '==', false),
+              orderBy('createdAt', 'desc')
+            ),
+            function(snap) { callback(snap.docs.map(function(d) { return Object.assign({ id: d.id }, d.data()); })); },
+            function(err) { console.warn('[AVN] listenToUserTracks error:', err.message); callback([]); }
+          );
+        });
+      });
+      return function() { if (unsub) unsub(); };
+    },
+
+    /**
+     * Soft-delete a track (sets isDeleted:true).  Only the owner may delete.
+     */
+    async softDeleteTrack(trackId) {
+      const db = await getFirestore();
+      const { doc, updateDoc, serverTimestamp } = await loadModule('firestore');
+      await updateDoc(doc(db, 'globalMusicLibrary', String(trackId)), {
+        isDeleted: true,
+        updatedAt: serverTimestamp(),
+      });
+    },
+
+    // ─── Community Mix ──────────────────────────────────────────────
+    // The Community Mix is NOT a regular musicPlaylists document.
+    // It is a virtual playlist aggregated from globalMusicLibrary.
+    // One shared Firestore doc: communityMix/meta  (trackIds membership array).
+    // The actual track data is always fetched from globalMusicLibrary.
+
+    /** Add a track's canonical ID to the Community Mix membership list. */
+    async addToCommunityMix(trackId) {
+      const db = await getFirestore();
+      const { doc, setDoc, arrayUnion, serverTimestamp } = await loadModule('firestore');
+      await setDoc(doc(db, 'communityMix', 'meta'), {
+        trackIds:  arrayUnion(String(trackId)),
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+    },
+
+    /** Remove a track from the Community Mix membership list. */
+    async removeFromCommunityMix(trackId) {
+      const db = await getFirestore();
+      const { doc, updateDoc, arrayRemove, serverTimestamp } = await loadModule('firestore');
+      await updateDoc(doc(db, 'communityMix', 'meta'), {
+        trackIds:  arrayRemove(String(trackId)),
+        updatedAt: serverTimestamp(),
+      });
+    },
+
+    /**
+     * Listen to the Community Mix in real time.
+     * Resolves the full track objects from globalMusicLibrary.
+     * Calls callback with the resolved array.
+     * Returns an unsubscribe function.
+     */
+    listenToCommunityMix(callback) {
+      let unsubMeta = null;
+      loadModule('firestore').then(function(fsModule) {
+        var fsDoc = fsModule.doc;
+        var onSnapshot = fsModule.onSnapshot;
+        var collection = fsModule.collection;
+        var fsWhere = fsModule.where;
+        var getDocs = fsModule.getDocs;
+        var fsQuery = fsModule.query;
+        getFirestore().then(function(db) {
+          unsubMeta = onSnapshot(fsDoc(db, 'communityMix', 'meta'), async function(snap) {
+            var trackIds = (snap.exists() ? (snap.data().trackIds || []) : []);
+            if (!trackIds.length) { callback([]); return; }
+            try {
+              var tracks = [];
+              for (var i = 0; i < trackIds.length; i += 10) {
+                var chunk = trackIds.slice(i, i + 10);
+                try {
+                  var chunkSnap = await getDocs(
+                    fsQuery(collection(db, 'globalMusicLibrary'),
+                            fsWhere('trackId', 'in', chunk),
+                            fsWhere('isDeleted', '==', false))
+                  );
+                  chunkSnap.forEach(function(d) { tracks.push(Object.assign({ id: d.id }, d.data())); });
+                } catch (_) {}
+              }
+              var byId = {};
+              tracks.forEach(function(t) { byId[t.id] = t; if (t.trackId) byId[t.trackId] = t; });
+              var ordered = trackIds.map(function(tid) { return byId[tid]; }).filter(Boolean);
+              callback(ordered);
+            } catch (err) {
+              console.warn('[AVN] listenToCommunityMix resolve error:', err.message);
+              callback([]);
+            }
+          }, function(err) {
+            console.warn('[AVN] listenToCommunityMix snapshot error:', err.message);
+            callback([]);
+          });
+        });
+      });
+      return function() { if (unsubMeta) unsubMeta(); };
+    },
+
+    /**
+     * Get Community Mix tracks once (no real-time).
+     */
+    async getCommunityMixTracks() {
+      const db = await getFirestore();
+      const { doc, getDoc, collection, query, where, getDocs } = await loadModule('firestore');
+      const metaSnap = await getDoc(doc(db, 'communityMix', 'meta'));
+      const trackIds  = (metaSnap.exists() ? metaSnap.data().trackIds : []) || [];
+      if (!trackIds.length) return [];
+
+      const tracks = [];
+      for (let i = 0; i < trackIds.length; i += 10) {
+        const chunk = trackIds.slice(i, i + 10);
+        try {
+          const snap = await getDocs(
+            query(collection(db, 'globalMusicLibrary'),
+                  where('trackId', 'in', chunk),
+                  where('isDeleted', '==', false))
+          );
+          snap.forEach(d => tracks.push({ id: d.id, ...d.data() }));
+        } catch (_) {}
+      }
+      const byId = {};
+      tracks.forEach(t => { byId[t.id] = t; if (t.trackId) byId[t.trackId] = t; });
+      return trackIds.map(tid => byId[tid]).filter(Boolean);
     },
   };
 

@@ -47,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v43';
-const CACHE_NAME  = 'avenora-cache-v43';
+const SW_VERSION  = 'v44';
+const CACHE_NAME  = 'avenora-cache-v44';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -98,6 +98,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v41', // v41 — evict: profile identity fix, MEDIA_RECORD_MISSING, HTTP 405 repair
   'avenora-cache-v42', // v42 — evict: (intermediate)
   'avenora-cache-v43', // v43 — evict: radio resolver cloudStreamTracks fallback, follow UID fix
+  // v44 = current — not in evict list
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',

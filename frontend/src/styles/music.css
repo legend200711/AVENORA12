@@ -1201,6 +1201,12 @@
   text-decoration: none;
 }
 
+.mcn-card.mcn-community { border-color: rgba(0,204,255,0.28); }
+.mcn-card.mcn-community:hover {
+  background: rgba(0,204,255,0.07);
+  border-color: rgba(0,204,255,0.55);
+  box-shadow: 0 0 22px rgba(0,204,255,0.15);
+}
 .mcn-card.mcn-radio { border-color: rgba(201,168,76,0.22); }
 .mcn-card.mcn-radio:hover {
   border-color: rgba(201,168,76,0.55);

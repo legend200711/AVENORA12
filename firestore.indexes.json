@@ -112,6 +112,24 @@
         { "fieldPath": "createdByUid", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "globalMusicLibrary",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "isPublished", "order": "ASCENDING" },
+        { "fieldPath": "isDeleted",   "order": "ASCENDING" },
+        { "fieldPath": "createdAt",   "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "globalMusicLibrary",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uploadedByUid", "order": "ASCENDING" },
+        { "fieldPath": "isDeleted",     "order": "ASCENDING" },
+        { "fieldPath": "createdAt",     "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
