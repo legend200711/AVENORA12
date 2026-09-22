@@ -1283,6 +1283,56 @@
     },
 
     /**
+     * Listen to the track-count for multiple playlists simultaneously.
+     * Subscribes to each playlist's tracks sub-collection and fires callback
+     * with a { [playlistId]: count } map whenever any count changes.
+     * Returns an unsubscribe function that cancels all listeners.
+     *
+     * @param {string[]} playlistIds  IDs of playlists to watch.
+     * @param {function} callback     Called with { [id]: number } map.
+     */
+    listenToPlaylistCardCounts(playlistIds, callback) {
+      if (!playlistIds || !playlistIds.length) return () => {};
+
+      const counts = {};
+      const unsubs = [];
+
+      loadModule('firestore').then(function(fsModule) {
+        var collection = fsModule.collection;
+        var query      = fsModule.query;
+        var onSnapshot = fsModule.onSnapshot;
+
+        getFirestore().then(function(db) {
+          playlistIds.forEach(function(plId) {
+            counts[plId] = null; // null = still loading
+            try {
+              var unsub = onSnapshot(
+                query(collection(db, 'musicPlaylists', plId, 'tracks')),
+                function(snap) {
+                  counts[plId] = snap.size;
+                  // Only fire callback once all requested counts have resolved
+                  // (or if we already have at least partial data — avoids blocking
+                  //  the UI when some playlists are large or newly created).
+                  callback(Object.assign({}, counts));
+                },
+                function(err) {
+                  console.warn('[AVN] listenToPlaylistCardCounts error for', plId, err.message);
+                  counts[plId] = 0; // treat error as 0 so the card isn't stuck loading
+                  callback(Object.assign({}, counts));
+                }
+              );
+              unsubs.push(unsub);
+            } catch (e) {
+              counts[plId] = 0;
+            }
+          });
+        });
+      });
+
+      return function() { unsubs.forEach(function(u) { try { u(); } catch (_) {} }); };
+    },
+
+    /**
      * Get all tracks in a playlist sub-collection, ordered by position.
      * Attempts to resolve a playable audioUrl for each track — including a
      * secondary cloudStreamTracks lookup when the playlist entry itself has

@@ -258,7 +258,7 @@ function buildMusicShell() {
             </div>
             <div class="mp-volume-row">
               <span title="Volume">🔊</span>
-              <input type="range" min="0" max="100" value="80" id="mp-vol-slider"
+              <input type="range" min="0" max="100" value="100" id="mp-vol-slider"
                      oninput="mpSetVolume(this.value)" aria-label="Volume">
             </div>
           </div>
@@ -284,7 +284,7 @@ function buildMusicShell() {
           </div>
           <div class="mp-volume-row">
             <span>🔊</span>
-            <input type="range" min="0" max="100" value="80"
+            <input type="range" min="0" max="100" value="100"
                    oninput="mpSetVolume(this.value)" aria-label="Volume" style="flex:1;accent-color:#00ccff">
           </div>
         </div>
@@ -371,6 +371,8 @@ window.musicTabSwitch = async function (tab, clickedBtn) {
   if (typeof _radioTabCleanup === 'function') _radioTabCleanup();
   if (typeof _communityMixCleanup === 'function') _communityMixCleanup();
   if (typeof _globalLibCleanup === 'function') _globalLibCleanup();
+  if (typeof _playlistCardCountsCleanup === 'function') _playlistCardCountsCleanup();
+  if (typeof _playlistTabCountsCleanup === 'function') _playlistTabCountsCleanup();
 
   el.innerHTML = `<div class="loading-state" style="min-height:40vh"><div class="spinner"></div></div>`;
 
@@ -1066,21 +1068,56 @@ function _playlistArtHtml(sysId, icon, color) {
   </div>`;
 }
 
+// Module-level cleanup handle for the discover-tab playlist card count listeners.
+let _playlistCardCountsUnsub = null;
+
+function _playlistCardCountsCleanup() {
+  if (_playlistCardCountsUnsub) {
+    try { _playlistCardCountsUnsub(); } catch (_) {}
+    _playlistCardCountsUnsub = null;
+  }
+}
+
 function renderPlaylistCards() {
-  // Reads only from localStorage for the quick preview render on the Discover tab.
-  // Track counts shown here may not be accurate (localStorage is UI state only).
-  // The actual track count is authoritative only when the playlist is opened (Firestore).
+  // Build cards from system playlist definitions + user playlists from localStorage metadata.
+  // Track counts are fetched from Firestore and injected into the DOM asynchronously so
+  // the cards render immediately (loading state) and update without a full re-render.
   const playlists = LS.get('lu_music_playlists', []);
-  const sysCards  = SYSTEM_PLAYLISTS.map(sp => {
-    return { id: sp.sysId, name: sp.name, icon: sp.icon, color: sp.color,
-             description: sp.description, count: 0, isSystem: true, sysId: sp.sysId, isRadio: sp.isRadio || false };
-  });
+  const sysCards  = SYSTEM_PLAYLISTS.map(sp => ({
+    id: sp.sysId, name: sp.name, icon: sp.icon, color: sp.color,
+    description: sp.description, isSystem: true, sysId: sp.sysId, isRadio: sp.isRadio || false
+  }));
   const userCards = playlists
     .filter(p => !p.isSystem)
-    .map(p => ({ id: p.id, name: p.name, icon: p.icon || '🌌', color: p.color || '#00ccff',
-                 description: p.description || 'Your playlist', count: (p.tracks||[]).length, isSystem: false, sysId: null }));
+    .map(p => ({
+      id: p.id, name: p.name, icon: p.icon || '🌌', color: p.color || '#00ccff',
+      description: p.description || 'Your playlist', isSystem: false, sysId: null
+    }));
 
   const all = [...sysCards, ...userCards];
+
+  // Kick off Firestore realtime count listeners after the HTML is injected into the DOM.
+  // Cancel any previous listener set first to avoid leaking subscriptions.
+  _playlistCardCountsCleanup();
+
+  if (window.AvenoraFirebase?.Firestore?.listenToPlaylistCardCounts) {
+    const ids = all.map(p => p.id);
+    _playlistCardCountsUnsub = window.AvenoraFirebase.Firestore.listenToPlaylistCardCounts(
+      ids,
+      function(countsMap) {
+        for (const [plId, count] of Object.entries(countsMap)) {
+          const countEl = document.getElementById('cosmic-pl-count-' + plId);
+          if (!countEl) continue;
+          if (count === null) {
+            // Still loading — keep the spinner text
+            countEl.textContent = 'Loading…';
+          } else {
+            countEl.textContent = count + ' track' + (count !== 1 ? 's' : '');
+          }
+        }
+      }
+    );
+  }
 
   return `
     <div class="section-header" style="margin-top:var(--space-xl)">
@@ -1097,7 +1134,7 @@ function renderPlaylistCards() {
             <div class="cosmic-pl-name" style="color:${p.color}">${escapeHtml(p.name)}</div>
             <div class="cosmic-pl-desc">${escapeHtml(p.description || '')}</div>
             <div class="cosmic-pl-meta">
-              <span class="cosmic-pl-count">${p.count} track${p.count!==1?'s':''}</span>
+              <span class="cosmic-pl-count" id="cosmic-pl-count-${p.id}">Loading…</span>
               ${p.isRadio ? '<span class="cosmic-pl-radio-badge">📻 RADIO</span>' : ''}
             </div>
             <div class="cosmic-pl-actions" onclick="event.stopPropagation()">
@@ -1294,6 +1331,22 @@ async function renderPlaylists() {
   const systemPlaylists = playlists.filter(p => p.isSystem);
   const userPlaylists   = playlists.filter(p => !p.isSystem);
 
+  // Start Firestore count listeners for all playlist cards (fired async after HTML is in DOM)
+  _playlistTabCountsCleanup();
+  if (window.AvenoraFirebase?.Firestore?.listenToPlaylistCardCounts && playlists.length) {
+    const ids = playlists.map(p => p.id);
+    _playlistTabCountsUnsub = window.AvenoraFirebase.Firestore.listenToPlaylistCardCounts(
+      ids,
+      function(countsMap) {
+        for (const [plId, count] of Object.entries(countsMap)) {
+          const countEl = document.getElementById('cosmic-pl-count-' + plId);
+          if (!countEl) continue;
+          countEl.textContent = count === null ? 'Loading…' : (count + ' track' + (count !== 1 ? 's' : ''));
+        }
+      }
+    );
+  }
+
   return `
     <div>
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-lg);flex-wrap:wrap;gap:var(--space-sm)">
@@ -1324,8 +1377,17 @@ async function renderPlaylists() {
     </div>`;
 }
 
+// Module-level cleanup handle for the playlists-tab count listeners.
+let _playlistTabCountsUnsub = null;
+
+function _playlistTabCountsCleanup() {
+  if (_playlistTabCountsUnsub) {
+    try { _playlistTabCountsUnsub(); } catch (_) {}
+    _playlistTabCountsUnsub = null;
+  }
+}
+
 function renderPlaylistCard(p) {
-  const trackCount = (p.tracks || []).length;
   const pid    = escapeHtml(p.id || p._id || '');
   const pname  = escapeHtml(p.name);
   const sp     = SYSTEM_PLAYLISTS.find(s => s.sysId === p.sysId);
@@ -1349,7 +1411,7 @@ function renderPlaylistCard(p) {
         <div class="cosmic-pl-name" style="color:${color}">${pname}</div>
         <div class="cosmic-pl-desc">${escapeHtml(sp?.description || p.description || (p.isSystem ? 'Cosmic collection' : (p.visibility === 'public' ? 'Public' : 'Private')))}</div>
         <div class="cosmic-pl-meta">
-          <span class="cosmic-pl-count">${trackCount} track${trackCount!==1?'s':''}</span>
+          <span class="cosmic-pl-count" id="cosmic-pl-count-${p.id}">Loading…</span>
           ${isRadio ? '<span class="cosmic-pl-radio-badge">📻 RADIO</span>' : ''}
           ${p.isSystem && !isRadio ? '<span class="cosmic-pl-sys-badge">✦ COSMIC</span>' : ''}
         </div>
@@ -3315,45 +3377,64 @@ function _playResolvedTrack(track, allTracks, contextId) {
 }
 
 window.musicShufflePlaylist = function (id) {
-  const playlists = LS.get('lu_music_playlists', []);
-  const pl = playlists.find(p => p.id === id);
-  if (!pl || !pl.tracks || !pl.tracks.length) { Toast.info('Nothing to shuffle'); return; }
-
-  // 1. Try local queue
-  const indices = pl.tracks
-    .map(tid => MP.queue.findIndex(t => String(t.id) === String(tid)))
-    .filter(i => i >= 0);
-  if (indices.length) {
-    const shuffled = [...indices].sort(() => Math.random() - 0.5);
-    mpLoadTrack(shuffled[0]);
-    Toast.info('Shuffled — playing a random track');
-    return;
-  }
-
-  // 2. Try pre-resolved
+  // 1. Try pre-resolved tracks (fastest path — already fetched from Firestore)
   const pre = _plResolvedTracks[id];
   if (pre && pre.length) {
-    const pick = pre[Math.floor(Math.random() * pre.length)];
-    _playResolvedTrack(pick, pre, id);
-    Toast.info('Shuffled — playing a random track');
+    const playable = pre.filter(t => !t._unavailable && (t.audioUrl || t.fileUrl || t.storagePath));
+    if (playable.length) {
+      const pick = playable[Math.floor(Math.random() * playable.length)];
+      _playResolvedTrack(pick, playable, id);
+      Toast.info('Shuffled — playing a random track');
+      return;
+    }
+  }
+
+  // 2. Try local imported queue (for tracks with IDs in localStorage only)
+  const playlists = LS.get('lu_music_playlists', []);
+  const pl = playlists.find(p => p.id === id);
+  const localTrackIds = pl?.tracks || [];
+  if (localTrackIds.length) {
+    const indices = localTrackIds
+      .map(tid => MP.queue.findIndex(t => String(t.id) === String(tid)))
+      .filter(i => i >= 0);
+    if (indices.length) {
+      const shuffled = [...indices].sort(() => Math.random() - 0.5);
+      mpLoadTrack(shuffled[0]);
+      Toast.info('Shuffled — playing a random track');
+      return;
+    }
+  }
+
+  // 3. Firestore-backed playlist — load from musicPlaylists/{id}/tracks
+  if (window.AvenoraFirebase?.Firestore?.getPlaylistTracks) {
+    Toast.info('Loading tracks…');
+    window.AvenoraFirebase.Firestore.getPlaylistTracks(id).then(fsTracks => {
+      if (!fsTracks || !fsTracks.length) {
+        Toast.info('Playlist is empty — no tracks found.');
+        return;
+      }
+      const playable = fsTracks.filter(t => !t._unavailable && (t.audioUrl || t.fileUrl || t.storagePath));
+      if (!playable.length) {
+        Toast.error('No playable tracks found. The audio files may be unavailable.');
+        return;
+      }
+      _plResolvedTracks[id] = fsTracks;
+      const trackObjs = playable.map(t => ({
+        id:          t._docId || t.trackId || t.id,
+        title:       t.title || 'Untitled',
+        artistName:  t.artist || '',
+        fileUrl:     t.audioUrl || '',
+        storagePath: t.storagePath || '',
+        _isFirestore: true,
+      }));
+      const shuffled = [...trackObjs].sort(() => Math.random() - 0.5);
+      mpLoadBackendTrack(shuffled[0], 0, 'playlist-' + id, shuffled);
+      Toast.info('Shuffled — playing a random track');
+    }).catch(() => Toast.error('Could not load playlist. Check your connection.'));
     return;
   }
 
-  // 3. Resolve async
-  Toast.info('Loading tracks…');
-  _resolvePlaylistTracks(pl.tracks).then(tracks => {
-    if (!tracks.length) {
-      const signedIn = !!(sessionStorage.getItem('lu_uid') || localStorage.getItem('lu_uid'));
-      Toast.error(signedIn
-        ? 'MEDIA_RECORD_MISSING — track could not be resolved. Check console for details.'
-        : 'NOT_SIGNED_IN — sign in to play your cloud tracks.');
-      return;
-    }
-    _plResolvedTracks[id] = tracks;
-    const pick = tracks[Math.floor(Math.random() * tracks.length)];
-    _playResolvedTrack(pick, tracks, id);
-    Toast.info('Shuffled — playing a random track');
-  }).catch(err => Toast.error('NETWORK_ERROR — ' + (err.message || 'Check your connection.')));
+  Toast.info('Nothing to shuffle');
 };
 
 window.mpShufflePlaylist = function (indices) {
@@ -3388,7 +3469,27 @@ function initMusicPlayer() {
   if (!audio) return;
 
   MP.favorites = LS.get('lu_mp_favorites', []);
-  audio.volume = 0.8;
+
+  // Restore saved volume (stored as 0.0–1.0 normalised float).
+  // Default to 1.0 (full volume) when no preference exists.
+  audio.muted = false;
+  const savedVol = localStorage.getItem('lu_mp_volume');
+  let initVolume = 1.0;
+  if (savedVol !== null) {
+    const parsed = Number(savedVol);
+    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
+      initVolume = parsed;
+    }
+  }
+  audio.volume = initVolume;
+
+  // Sync the slider(s) to match the restored volume (0–100 scale for the range input)
+  const sliderVal = Math.round(initVolume * 100);
+  const desktopSlider = document.getElementById('mp-vol-slider');
+  if (desktopSlider) desktopSlider.value = sliderVal;
+  document.querySelectorAll('input[oninput*="mpSetVolume"]').forEach(function(s) {
+    s.value = sliderVal;
+  });
 
   audio.addEventListener('ended',        mpHandleEnded);
   audio.addEventListener('timeupdate',   mpUpdateProgress);
@@ -3408,7 +3509,13 @@ function destroyMusicPlayer() {
   if (audio) { audio.pause(); audio.src = ''; }
   document.removeEventListener('keydown', mpKeyHandler);
   mpStopVisualizer();
-  if (MP._audioCtx) { MP._audioCtx.close(); MP._audioCtx = null; }
+  if (MP._audioCtx) { MP._audioCtx.close(); MP._audioCtx = null; MP._vizSource = null; }
+  // Cancel any lingering Firestore listeners
+  _playlistCardCountsCleanup();
+  _playlistTabCountsCleanup();
+  _communityMixCleanup();
+  _globalLibCleanup();
+  _radioTabCleanup();
 }
 
 function mpKeyHandler(e) {
@@ -3456,26 +3563,27 @@ function mpHandleAudioError(e) {
 function mpHandleEnded() {
   if (MP.repeat) { document.getElementById('mp-audio')?.play().catch(()=>{}); return; }
 
-  // Backend tracks mode: auto-advance through backendTracks array
+  // Backend tracks mode: auto-advance through backendTracks array.
+  // Always loops — when the last track ends, wrap to index 0 so playlists
+  // play continuously without requiring manual interaction.
   if (MP.backendTracks && MP.backendTracks.length > 0) {
-    const next = MP.currentIndex + 1;
     if (MP.shuffle) {
       const randIdx = Math.floor(Math.random() * MP.backendTracks.length);
       window.mpLoadBackendTrack(MP.backendTracks[randIdx], randIdx, MP.backendQueue, MP.backendTracks);
       return;
     }
-    if (next < MP.backendTracks.length) {
-      window.mpLoadBackendTrack(MP.backendTracks[next], next, MP.backendQueue, MP.backendTracks);
-    }
-    // else end of backend queue — stop
+    // Wrap around: (last + 1) % length = 0 → loops the playlist
+    const next = (MP.currentIndex + 1) % MP.backendTracks.length;
+    window.mpLoadBackendTrack(MP.backendTracks[next], next, MP.backendQueue, MP.backendTracks);
     return;
   }
 
-  // Local queue mode
+  // Local queue mode — also loops
   if (MP.shuffle) { mpLoadTrack(Math.floor(Math.random() * MP.queue.length)); return; }
-  const next = MP.currentIndex + 1;
-  if (next < MP.queue.length) mpLoadTrack(next);
-  // else end of queue — stop
+  if (MP.queue.length > 0) {
+    const next = (MP.currentIndex + 1) % MP.queue.length;
+    mpLoadTrack(next);
+  }
 }
 
 window.mpLoadTrack = function (index) {
@@ -3507,9 +3615,14 @@ window.mpLoadTrack = function (index) {
 
   audio.src = resolvedUrl;
 
-  // Ensure audio is not muted and has volume before playing
+  // Ensure audio is not muted and has a proper volume before playing.
+  // Use the persisted preference; fall back to 1.0 if none is saved.
   audio.muted = false;
-  if (audio.volume === 0) audio.volume = 0.8;
+  if (audio.volume === 0) {
+    const sv = localStorage.getItem('lu_mp_volume');
+    const pv = sv !== null ? Number(sv) : NaN;
+    audio.volume = (Number.isFinite(pv) && pv > 0 && pv <= 1) ? pv : 1.0;
+  }
 
   // Update player UI
   document.getElementById('mp-title').textContent  = track.name;
@@ -3540,12 +3653,19 @@ window.mpLoadTrack = function (index) {
   // Notify shared music service (DJ System, Cloud Stream, etc.)
   if (typeof MusicService !== 'undefined') MusicService._notifyTrackChange(track);
 
+  // Resume AudioContext if it was suspended (mobile autoplay policy requires a user gesture).
+  if (MP._audioCtx && MP._audioCtx.state === 'suspended') {
+    MP._audioCtx.resume().catch(() => {});
+  }
+
   // Only update playing UI state after the play promise resolves
   const playPromise = audio.play();
   if (playPromise && typeof playPromise.then === 'function') {
     playPromise.then(() => {
       MP.isPlaying = true;
       mpUpdatePlayBtn();
+      // Ensure AudioContext is running after play starts (needed on some mobile browsers)
+      if (MP._audioCtx && MP._audioCtx.state === 'suspended') MP._audioCtx.resume().catch(() => {});
     }).catch(err => {
       const audioErr = audio.error;
       console.warn(
@@ -3617,9 +3737,14 @@ window.mpLoadBackendTrack = async function (track, index, context, tracksArray) 
 
   audio.src = playUrl;
 
-  // Ensure audio is not muted and has volume before playing
+  // Ensure audio is not muted and has a proper volume before playing.
+  // Use the persisted preference; fall back to 1.0 if none is saved.
   audio.muted = false;
-  if (audio.volume === 0) audio.volume = 0.8;
+  if (audio.volume === 0) {
+    const sv2 = localStorage.getItem('lu_mp_volume');
+    const pv2 = sv2 !== null ? Number(sv2) : NaN;
+    audio.volume = (Number.isFinite(pv2) && pv2 > 0 && pv2 <= 1) ? pv2 : 1.0;
+  }
 
   document.getElementById('mp-title').textContent  = track.title || 'Unknown';
   document.getElementById('mp-artist').textContent = track.artistName || '';
@@ -3634,12 +3759,19 @@ window.mpLoadBackendTrack = async function (track, index, context, tracksArray) 
     artEl.className = 'mp-art playing';
   }
 
+  // Resume AudioContext if it was suspended (mobile autoplay policy requires a user gesture).
+  if (MP._audioCtx && MP._audioCtx.state === 'suspended') {
+    MP._audioCtx.resume().catch(() => {});
+  }
+
   // Only update playing UI state after the play promise resolves
   const playPromise = audio.play();
   if (playPromise && typeof playPromise.then === 'function') {
     playPromise.then(() => {
       MP.isPlaying = true;
       mpUpdatePlayBtn();
+      // Ensure AudioContext is running after play starts
+      if (MP._audioCtx && MP._audioCtx.state === 'suspended') MP._audioCtx.resume().catch(() => {});
     }).catch(err => {
       const audioErr = audio.error;
       console.warn(
@@ -3737,7 +3869,13 @@ window.mpToggleRepeat = function () {
 
 window.mpSetVolume = function (val) {
   const audio = document.getElementById('mp-audio');
-  if (audio) audio.volume = parseFloat(val) / 100;
+  if (!audio) return;
+  // val comes from a range input with min=0 max=100 — convert to 0.0–1.0
+  const normalized = Math.max(0, Math.min(1, parseFloat(val) / 100));
+  audio.volume = normalized;
+  audio.muted  = false;
+  // Persist so the next session restores the same volume
+  try { localStorage.setItem('lu_mp_volume', String(normalized)); } catch (_) {}
 };
 
 window.mpSeek = function (e, bar) {
@@ -3967,7 +4105,13 @@ function mpInitVisualizer(audioEl) {
 
     if (!MP._vizSource) {
       MP._vizSource = MP._audioCtx.createMediaElementSource(audioEl);
+      // Connect the source directly to the destination so audio is always audible
+      // regardless of whether the analyser chain is set up correctly.
+      // The analyser is inserted in parallel (source → analyser → destination),
+      // NOT in series, so a broken analyser can never silence playback.
+      MP._vizSource.connect(MP._audioCtx.destination);
     }
+
     MP._vizAnalyser = MP._audioCtx.createAnalyser();
     MP._vizAnalyser.fftSize = 64;
     MP._vizSource.connect(MP._vizAnalyser);
@@ -3976,7 +4120,7 @@ function mpInitVisualizer(audioEl) {
     MP._vizCtx = canvas.getContext('2d');
     mpDrawVisualizer();
   } catch {
-    // AudioContext blocked or unsupported — silent fallback
+    // AudioContext blocked or unsupported — silent fallback (audio still plays normally)
   }
 }
 
