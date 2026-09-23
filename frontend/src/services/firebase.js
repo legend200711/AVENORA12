@@ -1014,7 +1014,7 @@
 
     async unfollowUser(targetUid) {
       const db = await getFirestore();
-      const { doc, deleteDoc, increment, updateDoc } = await loadModule('firestore');
+      const { doc, deleteDoc, writeBatch, increment, updateDoc } = await loadModule('firestore');
 
       // Same UID resolution chain as followUser
       let currentUid = null;
@@ -1032,18 +1032,20 @@
 
       if (!currentUid || !targetUid) throw new Error('Invalid UID for unfollow operation');
 
+      // Use a batch to delete both follow docs atomically — either both succeed or neither does.
+      // This prevents the state where followers/{target}/users/{me} is deleted but
+      // following/{me}/users/{target} is not (or vice versa).
       try {
-        await deleteDoc(doc(db, 'followers', targetUid, 'users', currentUid));
-      } catch (e) {
-        console.warn('[AVN] unfollowUser — followers delete failed:', e.code, e.message);
-      }
-      try {
-        await deleteDoc(doc(db, 'following', currentUid, 'users', targetUid));
-      } catch (e) {
-        console.warn('[AVN] unfollowUser — following delete failed:', e.code, e.message);
+        const batch = writeBatch(db);
+        batch.delete(doc(db, 'followers', targetUid, 'users', currentUid));
+        batch.delete(doc(db, 'following', currentUid, 'users', targetUid));
+        await batch.commit();
+      } catch (batchErr) {
+        console.error('[AVN] unfollowUser — batch delete failed:', batchErr.code, batchErr.message);
+        throw batchErr;
       }
 
-      // Decrement counters (best-effort)
+      // Decrement counters (best-effort — never block on counter sync)
       try {
         await updateDoc(doc(db, 'users', targetUid), { 'stats.followersCount': increment(-1) });
       } catch (_) {}
@@ -1051,7 +1053,7 @@
         await updateDoc(doc(db, 'users', currentUid), { 'stats.followingCount': increment(-1) });
       } catch (_) {}
 
-      console.info('[AVN] unfollowUser', { currentUid, targetUid });
+      console.info('[AVN] unfollowUser SUCCESS', { currentUid, targetUid });
       return { unfollowed: true };
     },
 

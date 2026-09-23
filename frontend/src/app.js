@@ -1,7 +1,17 @@
 /**
  * AVENORA - Main App Router & Bootstrap
  * Hash-based SPA routing. Each page module registers itself.
+ *
+ * BUILD: v47 — 2025-01-01
+ * radio.js: _resetRadioState on re-open, _pollInterval null fix, AF cancel on reset
+ * radioEngine.js: loop-overflow guard in recoverStation
+ * firestore.rules: globalMusicLibrary public read for published tracks; communityMix public read
  */
+
+// Build identifier — visible in DevTools console for version verification
+const AVENORA_BUILD = 'v47-2025-01-01';
+console.info('[AVENORA] Build:', AVENORA_BUILD, '— SW: avenora-cache-v47');
+window.AVENORA_BUILD = AVENORA_BUILD;
 
 (function () {
   'use strict';

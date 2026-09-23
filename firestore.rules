@@ -282,7 +282,13 @@ service cloud.firestore {
     // The uploader may create and soft-delete their own track.
     // Moderator+ may soft-delete any track.
     match /globalMusicLibrary/{trackId} {
-      allow read: if request.auth != null;
+      // Published tracks are readable by everyone (including anonymous) so the
+      // Discover page and Community Mix work without sign-in.
+      // Unpublished / deleted tracks are only visible to their uploader.
+      allow read: if resource.data.isPublished == true && resource.data.isDeleted == false
+                  || (request.auth != null
+                      && resource.data.uploadedByUid == request.auth.uid)
+                  || isModeratorOrAbove();
       allow create: if request.auth != null
                     && request.resource.data.uploadedByUid == request.auth.uid
                     && request.resource.data.isDeleted == false;
@@ -299,7 +305,8 @@ service cloud.firestore {
     // Any authenticated user may read and add to it.
     // Only admins/founders may delete the whole document.
     match /communityMix/{docId} {
-      allow read: if request.auth != null;
+      // Community Mix meta doc is public (anonymous listeners can see the list)
+      allow read: if true;
       allow create: if request.auth != null;
       allow update: if request.auth != null;
       allow delete: if isFounderOrAdmin();

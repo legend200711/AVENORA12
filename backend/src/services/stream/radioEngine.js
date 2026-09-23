@@ -510,20 +510,33 @@ async function recoverStation() {
 
     // Calculate how much of the current track has already elapsed.
     // Advance past tracks that have already finished.
+    // Guard: track the starting index so a full loop through all tracks
+    // (when repeat=true and all tracks are missing durations) cannot run forever.
     const now = Date.now();
     let elapsedMs = now - trackStartedAt;
+    const startingIndex = currentIndex;
+    let loopCount = 0;
 
     while (elapsedMs > 0) {
       const t = playlist[currentIndex];
       const dMs = (t && t.duration > 0) ? t.duration * 1000 : DEFAULT_TRACK_DURATION_MS;
       if (elapsedMs < dMs) break; // still in this track
       elapsedMs -= dMs;
+      const prevIndex = currentIndex;
       currentIndex = (currentIndex + 1) % playlist.length;
-      if (!data.repeat && currentIndex === 0) {
-        // Playlist finished, station would have stopped
+      loopCount++;
+      // If we've completed one full rotation through the playlist:
+      if (!data.repeat && currentIndex <= startingIndex && prevIndex > currentIndex) {
+        // Playlist finished (no repeat) — station would have stopped
         logger.info('[Radio] Recovery: playlist ended (repeat=false) — not resuming');
         _station = new RadioStation({ stationName: data.stationName, description: data.description, playlist, shuffle: data.shuffle, repeat: data.repeat });
         return;
+      }
+      // Safety: stop advancing after 10× the playlist length to prevent infinite loops
+      // when all tracks have duration=0 (would use DEFAULT_TRACK_DURATION_MS fallback)
+      if (loopCount > playlist.length * 10) {
+        logger.warn('[Radio] Recovery: loop limit reached — resuming at computed index', currentIndex);
+        break;
       }
     }
 

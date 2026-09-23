@@ -166,28 +166,73 @@ function _radioShell() {
 }
 
 // ─── Player state ─────────────────────────────────────────
+// Module-level so it survives tab switches, but is RESET on each fresh render
+// via _resetRadioState() to avoid stale currentTrackId/currentUrl from a previous
+// session preventing a new audio element from loading.
 let _radioState = {
-  unsubscribe:       null,   // Firestore onSnapshot unsubscribe fn
-  pingInterval:      null,   // presence heartbeat
-  progressTimer:     null,   // progress-bar UI update interval
-  masterTicker:      null,   // drift-correction interval (read-only — never advances station)
-  vizAnimFrame:      null,   // visualizer RAF handle
+  unsubscribe:       null,
+  pingInterval:      null,
+  progressTimer:     null,
+  masterTicker:      null,
+  vizAnimFrame:      null,
   vizCtx:            null,
   vizAnalyser:       null,
   vizSource:         null,
   audioCtx:          null,
   listenerId:        null,
-  currentUrl:        null,   // currently loaded audio URL
+  currentUrl:        null,
   currentTrackId:    null,
-  serverClockOffset: 0,      // (localMs - serverMs) used to convert local→server time
-  clockSamples:      [],     // rolling samples for median clock-offset calculation
+  serverClockOffset: 0,
+  clockSamples:      [],
   isUserPaused:      false,
-  stationDoc:        null,   // latest Firestore NowPlaying doc (authoritative, read-only for listeners)
+  stationDoc:        null,
   favoriteTrackIds:  new Set(),
 };
 
+/**
+ * Reset the mutable playback fields so that on re-open, the new audio element
+ * is always loaded fresh (fixes the "re-open → no audio" bug).
+ * Preserves listenerId (stable per session) and favoriteTrackIds (persisted from last open).
+ */
+function _resetRadioState() {
+  // Cancel any stale visualizer animation frame
+  if (_radioState.vizAnimFrame) {
+    try { cancelAnimationFrame(_radioState.vizAnimFrame); } catch (_) {}
+  }
+  // Close old AudioContext to release hardware resources
+  if (_radioState.audioCtx) {
+    try { _radioState.audioCtx.close(); } catch (_) {}
+  }
+  // Preserve persistent fields
+  const favs    = _radioState.favoriteTrackIds;
+  const lisId   = _radioState.listenerId;
+  _radioState = {
+    unsubscribe:       null,
+    pingInterval:      null,
+    progressTimer:     null,
+    masterTicker:      null,
+    vizAnimFrame:      null,
+    vizCtx:            null,
+    vizAnalyser:       null,
+    vizSource:         null,
+    audioCtx:          null,
+    listenerId:        lisId,
+    currentUrl:        null,   // CRITICAL: reset so _onStationUpdate always loads audio
+    currentTrackId:    null,   // CRITICAL: reset so trackChanged === true on first update
+    serverClockOffset: 0,
+    clockSamples:      [],
+    isUserPaused:      false,
+    stationDoc:        null,
+    favoriteTrackIds:  favs,
+  };
+}
+
 // ─── Init ─────────────────────────────────────────────────
 async function _initRadioPlayer() {
+  // CRITICAL: reset all playback fields on every fresh render so stale
+  // currentTrackId / currentUrl from a previous session don't prevent
+  // _onStationUpdate from loading the audio element.
+  _resetRadioState();
   _radioState.listenerId = 'avn-' + Math.random().toString(36).slice(2) + Date.now();
 
   _buildStars();
@@ -218,11 +263,12 @@ async function _initRadioPlayer() {
     if (_radioState.pingInterval)   clearInterval(_radioState.pingInterval);
     if (_radioState.progressTimer)  clearInterval(_radioState.progressTimer);
     if (_radioState.masterTicker)   clearInterval(_radioState.masterTicker);
-    if (_pollInterval)              clearInterval(_pollInterval);
+    if (_pollInterval)              { clearInterval(_pollInterval); _pollInterval = null; }
     if (_radioState.vizAnimFrame)   cancelAnimationFrame(_radioState.vizAnimFrame);
     const audio = document.getElementById('radio-audio');
     if (audio) { audio.pause(); audio.src = ''; }
     _leavePresence();
+    // Null out the timer handles so _resetRadioState() on next open starts clean.
     _radioState.unsubscribe   = null;
     _radioState.pingInterval  = null;
     _radioState.progressTimer = null;
@@ -263,6 +309,7 @@ async function _subscribeFirestore() {
 // Fallback: poll /api/radio/status when Firestore is unavailable
 let _pollInterval = null;
 function _fallbackToApiPoll() {
+  // Guard: only start once per page session (reset in _radioCleanup)
   if (_pollInterval) return;
   _showReconnecting(true);
   _pollInterval = setInterval(async () => {
