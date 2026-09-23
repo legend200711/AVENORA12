@@ -499,27 +499,60 @@ function _loadAudio(url, seekTo, trackId) {
   _radioState.currentUrl     = url;
   _radioState.currentTrackId = trackId;
 
+  // Pause Music Hub player if it is running so they don't play simultaneously.
+  // This only affects the local listener — it never touches the global station.
+  try {
+    const mpAudio = document.getElementById('mp-audio');
+    if (mpAudio && !mpAudio.paused) {
+      mpAudio.pause();
+      if (typeof MP !== 'undefined') { MP.isPlaying = false; }
+      const mpBtn = document.getElementById('mp-btn-play');
+      if (mpBtn) mpBtn.textContent = '▶';
+    }
+  } catch (_) {}
+
   audio.pause();
   audio.src = url;
   audio.load();
 
-  // Restore volume
+  // Restore volume — never muted, never zero
   audio.muted = false;
   const savedVol  = localStorage.getItem('lu_mp_volume');
   const vol       = savedVol !== null ? Math.max(0, Math.min(1, Number(savedVol) || 1)) : 1.0;
-  audio.volume    = vol;
+  audio.volume    = vol > 0 ? vol : 1.0;
   const volSlider = document.getElementById('radio-vol');
-  if (volSlider) volSlider.value = Math.round(vol * 100);
+  if (volSlider) volSlider.value = Math.round(audio.volume * 100);
 
-  const attemptPlay = () => {
-    // Seek to the server-synchronized position before playing
+  /**
+   * SEEK-THEN-PLAY: always wait for loadedmetadata before seeking.
+   * Assigning currentTime before the browser knows the media duration is
+   * unreliable — the assignment is silently ignored on some browsers.
+   *
+   * Two-phase sequence:
+   *   1. loadedmetadata fires → duration is known → seek to master position
+   *   2. canplay fires         → playback is ready → call audio.play()
+   *
+   * If the audio is already in the right readyState (re-use after seek),
+   * both events may have already fired, so we check readyState first.
+   */
+  let _metadataReady = false;
+  let _seekApplied   = false;
+  let _playAttempted = false;
+
+  const _applySeek = () => {
+    if (_seekApplied) return;
+    _seekApplied = true;
     const targetTime = Math.max(0, seekTo);
-    if (targetTime > 1 && isFinite(audio.duration) && audio.duration > 0) {
+    if (targetTime > 0.5 && isFinite(audio.duration) && audio.duration > 0) {
       audio.currentTime = Math.min(targetTime, audio.duration - 0.5);
-    } else if (targetTime > 1) {
-      // duration not yet known — seek anyway; browser will clamp
-      audio.currentTime = targetTime;
+      console.info('[Radio] Seeked to', audio.currentTime.toFixed(1), 's (target:', targetTime.toFixed(1), 's, duration:', audio.duration.toFixed(1), 's)');
     }
+  };
+
+  const _tryPlay = () => {
+    if (_playAttempted) return;
+    _playAttempted = true;
+    if (_radioState.isUserPaused) return;
 
     if (_radioState.audioCtx?.state === 'suspended') {
       _radioState.audioCtx.resume().catch(() => {});
@@ -532,7 +565,7 @@ function _loadAudio(url, seekTo, trackId) {
         _radioState.isUserPaused = false;
         _hideAutoplayOverlay();
       }).catch((err) => {
-        console.info('[Radio] Autoplay blocked:', err.message);
+        console.info('[Radio] Autoplay blocked:', err.message, '— showing unlock overlay');
         _setPlayBtn(false);
         _radioState.isUserPaused = true;
         _showAutoplayOverlay();
@@ -540,28 +573,42 @@ function _loadAudio(url, seekTo, trackId) {
     }
   };
 
-  const onReady = () => {
-    audio.removeEventListener('canplaythrough', onReady);
-    if (!_radioState.isUserPaused) attemptPlay();
+  const onLoadedMetadata = () => {
+    audio.removeEventListener('loadedmetadata', onLoadedMetadata);
+    _metadataReady = true;
+    _applySeek();
   };
 
-  if (audio.readyState >= 3) {
-    if (!_radioState.isUserPaused) attemptPlay();
+  const onCanPlay = () => {
+    audio.removeEventListener('canplay', onCanPlay);
+    _tryPlay();
+  };
+
+  if (audio.readyState >= 1) {
+    // HAVE_METADATA or better — duration may already be known
+    _metadataReady = true;
+    _applySeek();
   } else {
-    audio.addEventListener('canplaythrough', onReady);
+    audio.addEventListener('loadedmetadata', onLoadedMetadata);
+  }
+
+  if (audio.readyState >= 3) {
+    // HAVE_FUTURE_DATA — can play immediately
+    _tryPlay();
+  } else {
+    audio.addEventListener('canplay', onCanPlay);
   }
 
   // Handle audio errors — log and attempt re-sync from master timeline
-  audio.addEventListener('error', (e) => {
-    const ae       = document.getElementById('radio-audio');
-    const errCode  = ae?.error?.code;
-    const errMsg   = ae?.error?.message || '(no message)';
+  audio.addEventListener('error', () => {
+    const errCode  = audio.error?.code;
+    const errMsg   = audio.error?.message || '(no message)';
     console.error('[Radio] Audio error', {
       errorCode:    errCode,
       errorMessage: errMsg,
-      networkState: ae?.networkState,
-      readyState:   ae?.readyState,
-      src:          ae?.src?.slice(0, 200) || '(no src)',
+      networkState: audio.networkState,
+      readyState:   audio.readyState,
+      src:          audio.src?.slice(0, 200) || '(no src)',
       trackId:      _radioState.currentTrackId || '(none)',
       hint: errCode === 4 ? 'MEDIA_ERR_SRC_NOT_SUPPORTED — MIME type or CORS issue' :
             errCode === 3 ? 'MEDIA_ERR_DECODE — file may be corrupt' :
@@ -845,12 +892,29 @@ window.radioUnlockAutoplay = function () {
   }
   _radioState.isUserPaused = false;
   const stDoc = _radioState.stationDoc;
-  if (stDoc && stDoc.currentUrl) {
-    const elapsedSec = stDoc.trackStartedAt
-      ? Math.max(0, (_serverNow() - stDoc.trackStartedAt) / 1000)
-      : 0;
-    _loadAudio(stDoc.currentUrl, elapsedSec, stDoc.currentTrackId);
-  } else if (audio.src) {
+  if (stDoc) {
+    // Resolve URL same way as _onStationUpdate — supports storagePath fallback
+    let resolvedUrl = stDoc.currentUrl || '';
+    if (!resolvedUrl && stDoc.currentStoragePath) {
+      if (window.AvenoraStorage?.getPublicUrl) {
+        resolvedUrl = window.AvenoraStorage.getPublicUrl('music', stDoc.currentStoragePath);
+      }
+      if (!resolvedUrl) {
+        const SUPABASE_STORAGE = 'https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public';
+        const encoded = stDoc.currentStoragePath.split('/').map(encodeURIComponent).join('/');
+        resolvedUrl = `${SUPABASE_STORAGE}/music/${encoded}`;
+      }
+    }
+    if (resolvedUrl) {
+      const elapsedSec = stDoc.trackStartedAt
+        ? Math.max(0, (_serverNow() - stDoc.trackStartedAt) / 1000)
+        : 0;
+      _loadAudio(resolvedUrl, elapsedSec, stDoc.currentTrackId);
+      return;
+    }
+  }
+  // Already loaded audio — just resume
+  if (audio.src) {
     audio.play().then(() => { _setPlayBtn(true); }).catch(() => {});
   }
 };

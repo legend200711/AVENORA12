@@ -1381,6 +1381,8 @@
         artist:      trackData.artistName || trackData.artist || '',
         audioUrl:    trackData.fileUrl || trackData.audioUrl || trackData.url || '',
         storagePath: trackData.storagePath || '',
+        coverUrl:    trackData.coverUrl || null,
+        duration:    trackData.duration || 0,
         addedByUid:  uid,
         addedAt:     serverTimestamp(),
         position,

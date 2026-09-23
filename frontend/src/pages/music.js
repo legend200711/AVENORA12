@@ -3164,18 +3164,53 @@ window.musicAddToPlaylistModal = async function (trackId, trackName) {
     return;
   }
 
+  // Check Firestore membership for each playlist so the checkboxes correctly
+  // reflect whether this track is already in each playlist.
+  // This is async per-playlist so we do it in parallel — one Firestore read per playlist.
+  let membershipMap = {}; // { [playlistId]: { has: bool, count: number, docId: string|null } }
+  if (window.AvenoraFirebase?.getFirestore) {
+    try {
+      const fsDb = await window.AvenoraFirebase.getFirestore();
+      const { collection, query, where, getDocs, limit: fsLimit } =
+        await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+      await Promise.all(playlists.map(async (p) => {
+        try {
+          // Count total tracks in this playlist sub-collection
+          const allSnap = await getDocs(collection(fsDb, 'musicPlaylists', p.id, 'tracks'));
+          const count = allSnap.size;
+          // Check if this specific track is already a member (by trackId field)
+          const memberSnap = await getDocs(
+            query(collection(fsDb, 'musicPlaylists', p.id, 'tracks'),
+                  where('trackId', '==', sid), fsLimit(1))
+          );
+          const docId = memberSnap.empty ? null : memberSnap.docs[0].id;
+          membershipMap[p.id] = { has: !memberSnap.empty, count, docId };
+        } catch (_) {
+          // Firestore rule or network failure — default to no membership, count 0
+          membershipMap[p.id] = { has: false, count: 0, docId: null };
+        }
+      }));
+    } catch (e) {
+      console.warn('[AVN] musicAddToPlaylistModal membership check failed:', e.message);
+    }
+  }
+
   // Build checkbox list — all playlists (system + user), mark which already contain this track
   const items = playlists.map(p => {
-    const has = (p.tracks || []).some(t => String(t) === sid);
+    const info = membershipMap[p.id] || { has: false, count: (p.tracks || []).length, docId: null };
+    const has  = info.has;
     const sp   = SYSTEM_PLAYLISTS.find(s => s.sysId === p.sysId);
     const icon = p.icon || (sp ? sp.icon : '📂');
     return `
       <label class="music-pl-check-row ${has ? 'has-track' : ''}">
-        <input type="checkbox" name="pl-check" value="${escapeHtml(p.id)}" ${has ? 'checked' : ''}
-               data-name="${escapeHtml(p.name)}" data-sysid="${escapeHtml(p.sysId || '')}">
+        <input type="checkbox" name="pl-check" value="${escapeHtml(p.id)}"
+               ${has ? 'checked' : ''}
+               data-name="${escapeHtml(p.name)}"
+               data-sysid="${escapeHtml(p.sysId || '')}"
+               data-docid="${escapeHtml(info.docId || '')}">
         <span class="music-pl-check-icon">${icon}</span>
         <span class="music-pl-check-name">${escapeHtml(p.name)}</span>
-        <span class="music-pl-check-count">${(p.tracks||[]).length} tracks</span>
+        <span class="music-pl-check-count">${info.count} track${info.count !== 1 ? 's' : ''}</span>
         ${has ? '<span class="music-pl-has-badge">✓</span>' : ''}
       </label>`;
   }).join('');
@@ -3212,58 +3247,77 @@ window.musicConfirmAddToPlaylist = async function (trackId) {
   const resolvedUrl = trackObj.fileUrl || trackObj.audioUrl || trackObj.url
     || trackObj.publicUrl || trackObj.downloadURL || '';
 
-  const playlists = LS.get('lu_music_playlists', []);
   let added = 0, removed = 0;
 
+  // Process each checkbox: add to or remove from each playlist via Firestore
+  const promises = [];
   for (const cb of checked) {
-    const pl = playlists.find(p => p.id === cb.value);
-    if (!pl) {
-      // Playlist exists in Firestore but not localStorage — still write to Firestore
-      if (cb.checked && window.AvenoraFirebase?.Firestore?.addTrackToPlaylist) {
-        window.AvenoraFirebase.Firestore.addTrackToPlaylist(cb.value, {
-          id:          sid,
-          trackId:     sid,
-          title:       trackObj.title || trackObj.name || 'Untitled',
-          artistName:  trackObj.artistName || trackObj.artist || '',
-          fileUrl:     resolvedUrl,
-          audioUrl:    resolvedUrl,
-          storagePath: trackObj.storagePath || '',
-          coverUrl:    trackObj.coverUrl || null,
-        }).then(() => { added++; }).catch(e => console.warn('[AVN] Firestore addTrackToPlaylist (no-LS) failed:', e.message));
-      }
-      continue;
-    }
-    if (!pl.tracks) pl.tracks = [];
-    // Normalise existing IDs to strings for consistent comparison
-    pl.tracks = pl.tracks.map(t => String(t));
-    if (cb.checked) {
-      if (!pl.tracks.includes(sid)) {
-        pl.tracks.push(sid);
-        added++;
-        // Write to Firestore — include full audio URL so other users can play it
-        if (window.AvenoraFirebase?.Firestore?.addTrackToPlaylist) {
-          window.AvenoraFirebase.Firestore.addTrackToPlaylist(cb.value, {
+    const plId      = cb.value;
+    const wasChecked = cb.defaultChecked; // initial HTML attribute state (before user interaction)
+    const isChecked  = cb.checked;
+    const trackDocId = cb.dataset.docid || '';
+
+    if (isChecked && !wasChecked) {
+      // ADD: track not in this playlist — add it now
+      added++;
+      if (window.AvenoraFirebase?.Firestore?.addTrackToPlaylist) {
+        promises.push(
+          window.AvenoraFirebase.Firestore.addTrackToPlaylist(plId, {
             id:          sid,
             trackId:     sid,
             title:       trackObj.title || trackObj.name || 'Untitled',
             artistName:  trackObj.artistName || trackObj.artist || '',
+            artist:      trackObj.artistName || trackObj.artist || '',
             fileUrl:     resolvedUrl,
             audioUrl:    resolvedUrl,
+            url:         resolvedUrl,
             storagePath: trackObj.storagePath || '',
             coverUrl:    trackObj.coverUrl || null,
-          }).catch(e => console.warn('[AVN] Firestore addTrackToPlaylist failed:', e.message));
-        }
+            duration:    trackObj.duration || 0,
+          }).catch(e => {
+            console.warn('[AVN] Firestore addTrackToPlaylist failed:', e.message);
+            added--;
+          })
+        );
       }
-    } else {
-      const idx = pl.tracks.indexOf(sid);
-      if (idx !== -1) {
-        pl.tracks.splice(idx, 1);
+    } else if (!isChecked && wasChecked) {
+      // REMOVE: track was in this playlist — remove it now
+      if (trackDocId && window.AvenoraFirebase?.Firestore?.removeTrackFromPlaylist) {
         removed++;
+        promises.push(
+          window.AvenoraFirebase.Firestore.removeTrackFromPlaylist(plId, trackDocId)
+            .catch(e => {
+              console.warn('[AVN] Firestore removeTrackFromPlaylist failed:', e.message);
+              removed--;
+            })
+        );
       }
     }
+    // isChecked && wasChecked → no change needed
+    // !isChecked && !wasChecked → no change needed
   }
 
-  LS.set('lu_music_playlists', playlists);
+  // Wait for all Firestore operations to complete before showing result
+  await Promise.allSettled(promises);
+
+  // Also keep localStorage in sync for offline fallback (best-effort — never the source of truth)
+  try {
+    const playlists = LS.get('lu_music_playlists', []);
+    for (const cb of checked) {
+      const pl = playlists.find(p => p.id === cb.value);
+      if (!pl) continue;
+      if (!pl.tracks) pl.tracks = [];
+      pl.tracks = pl.tracks.map(t => String(t));
+      if (cb.checked) {
+        if (!pl.tracks.includes(sid)) pl.tracks.push(sid);
+      } else {
+        const idx = pl.tracks.indexOf(sid);
+        if (idx !== -1) pl.tracks.splice(idx, 1);
+      }
+    }
+    LS.set('lu_music_playlists', playlists);
+  } catch (_) {}
+
   // Invalidate resolved track cache for affected playlists so next open re-fetches
   checked.forEach(cb => { delete _plResolvedTracks[cb.value]; });
 
@@ -3613,6 +3667,18 @@ window.mpLoadTrack = function (index) {
     return;
   }
 
+  // Pause Radio player if it is running — Music Hub and Radio must not overlap.
+  // This only affects local playback; it NEVER modifies the global Radio station.
+  try {
+    const radioAudio = document.getElementById('radio-audio');
+    if (radioAudio && !radioAudio.paused) {
+      radioAudio.pause();
+      const radioBtn = document.getElementById('radio-play-btn');
+      if (radioBtn) radioBtn.textContent = '▶';
+      if (typeof _radioState !== 'undefined') { _radioState.isUserPaused = true; }
+    }
+  } catch (_) {}
+
   audio.src = resolvedUrl;
 
   // Ensure audio is not muted and has a proper volume before playing.
@@ -3734,6 +3800,19 @@ window.mpLoadBackendTrack = async function (track, index, context, tracksArray) 
     Toast.error('This track has no playable audio URL.');
     return;
   }
+
+  // Pause Radio player if it is running — Music Hub and Radio must not overlap.
+  // This only affects local playback; it NEVER modifies the global Radio station.
+  try {
+    const radioAudio = document.getElementById('radio-audio');
+    if (radioAudio && !radioAudio.paused) {
+      radioAudio.pause();
+      const radioBtn = document.getElementById('radio-play-btn');
+      if (radioBtn) radioBtn.textContent = '▶';
+      // Mark as user-paused so Radio doesn't auto-restart on its drift-check
+      if (typeof _radioState !== 'undefined') { _radioState.isUserPaused = true; }
+    }
+  } catch (_) {}
 
   audio.src = playUrl;
 
