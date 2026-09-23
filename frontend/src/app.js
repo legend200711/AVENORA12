@@ -2,20 +2,22 @@
  * AVENORA - Main App Router & Bootstrap
  * Hash-based SPA routing. Each page module registers itself.
  *
- * BUILD: v52 — 2025-07-14
- * Full system repair & stabilization:
+ * BUILD: v53 — 2026-09-23 (global stabilization)
+ * Global update — all repairs deployed across all devices:
  *   - MusicAPI: Firestore fallback for tracks/albums/artists
- *   - musicService.js: uses globalMusicLibrary instead of REST API
- *   - SW: bumped to v52, evicts v51 and all prior caches
- *   - Firestore rules: cloudStreamTracks any-auth read for community cross-user
- *   - Profile: avatar versioned URL saved correctly
- *   - Follow/Unfollow: atomic batch writes verified
- *   - Radio: stationNowPlaying Firestore sync verified
+ *   - Music Hub: playlist play/shuffle — coverUrl, audioUrl, trackId mapping fixed
+ *   - Radio: browser-side ticker + queueRevision guard (no backend required)
+ *   - 24-Hour Cloud Radio: continuous playback, drift correction, recovery loop
+ *   - Profiles: avatar versioned URL (?v=timestamp) saved to Firestore
+ *   - Follow/Unfollow: atomic batch writes with correct UID validation
+ *   - Firestore rules: musicPlaylists isSystem, cloudStreamTracks auth-read
+ *   - Firestore indexes: tracks/position COLLECTION + COLLECTION_GROUP
+ *   - SW: bumped to v53, evicts v52 and all prior caches
  */
 
 // Build identifier — visible in DevTools console for version verification
-const AVENORA_BUILD = 'v52-2025-07-14';
-console.info('[AVENORA] Build:', AVENORA_BUILD, '— SW: avenora-cache-v52');
+const AVENORA_BUILD = 'v53-2026-09-23';
+console.info('[AVENORA] Build:', AVENORA_BUILD, '— SW: avenora-cache-v53');
 window.AVENORA_BUILD = AVENORA_BUILD;
 
 (function () {
