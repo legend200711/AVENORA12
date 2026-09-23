@@ -195,13 +195,24 @@ let _radioState = {
  * Preserves listenerId (stable per session) and favoriteTrackIds (persisted from last open).
  */
 function _resetRadioState() {
-  // Cancel any stale visualizer animation frame
+  // Cancel any stale visualizer animation frame before tearing down AudioContext
   if (_radioState.vizAnimFrame) {
     try { cancelAnimationFrame(_radioState.vizAnimFrame); } catch (_) {}
+    _radioState.vizAnimFrame = null;
+  }
+  // Disconnect visualizer nodes before closing AudioContext
+  if (_radioState.vizSource) {
+    try { _radioState.vizSource.disconnect(); } catch (_) {}
+    _radioState.vizSource = null;
+  }
+  if (_radioState.vizAnalyser) {
+    try { _radioState.vizAnalyser.disconnect(); } catch (_) {}
+    _radioState.vizAnalyser = null;
   }
   // Close old AudioContext to release hardware resources
   if (_radioState.audioCtx) {
     try { _radioState.audioCtx.close(); } catch (_) {}
+    _radioState.audioCtx = null;
   }
   // Preserve persistent fields
   const favs    = _radioState.favoriteTrackIds;
@@ -919,7 +930,7 @@ function _initVisualizer(audioEl) {
     _radioState.vizAnalyser.fftSize = 128;
     _radioState.vizSource   = _radioState.audioCtx.createMediaElementSource(audioEl);
 
-    _radioState.vizSource.connect(_radioState.audioCtx.destination);
+    // Signal chain: source → analyser → destination (single output path)
     _radioState.vizSource.connect(_radioState.vizAnalyser);
     _radioState.vizAnalyser.connect(_radioState.audioCtx.destination);
 

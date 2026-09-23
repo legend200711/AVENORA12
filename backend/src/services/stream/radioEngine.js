@@ -1,20 +1,28 @@
 /**
- * AVENORA RADIO ENGINE
+ * AVENORA RADIO ENGINE  v48
  *
  * Persistent server-side radio station.
  *
  * KEY DIFFERENCES from cloudRadioEngine:
  *   - A single authoritative station (radioStations/avenoraRadio) instead of
  *     per-user broadcast sessions.
- *   - NO expiry / 24-hour countdown — the station runs until an admin pauses it.
+ *   - NO expiry / 24-hour countdown — the station loops FOREVER.
  *   - The engine manages one singleton RadioStation instance.
- *   - On server restart the station automatically recovers from Firestore.
+ *   - On server restart the station automatically recovers from Firestore,
+ *     mathematically advancing through any elapsed tracks so the broadcast
+ *     continues from the correct position.
  *   - Listeners subscribe to stationNowPlaying/avenoraRadio via Firestore
  *     onSnapshot. They calculate elapsed time from trackStartedAt and play
  *     the audio URL directly — no media server required.
  *
+ * MASTER CLOCK RULES:
+ *   - The backend is the SOLE authority for track advancement.
+ *   - Listeners may NEVER call skip or modify currentIndex/trackStartedAt.
+ *   - trackStartedAt is a Unix ms timestamp (Date.now()) set only by the engine.
+ *   - serverTime published every heartbeat allows listeners to correct clock skew.
+ *
  * Firestore documents:
- *   radioStations/avenoraRadio          — authoritative station state
+ *   radioStations/avenoraRadio          — authoritative station state (persisted)
  *   stationNowPlaying/avenoraRadio      — current track + queue (updated every heartbeat)
  *
  * Design:
@@ -33,6 +41,8 @@ const HEARTBEAT_INTERVAL_MS   = 10_000;   // publish Now Playing every 10s
 const DEFAULT_TRACK_DURATION_MS = 240_000; // fallback if duration unknown (4 min)
 const MAX_CONSECUTIVE_ERRORS  = 5;
 const ERROR_PAUSE_MS          = 30_000;
+// Maximum recovery iterations = playlist.length * this multiplier
+const RECOVERY_LOOP_MULTIPLIER = 10;
 
 // ─── Firebase Admin SDK ───────────────────────────────────
 let _db = null;
@@ -298,7 +308,8 @@ class RadioStation {
     const nextIndex = (wasIndex + 1) % total;
 
     // If we've looped and repeat is off → stop
-    if (nextIndex === 0 && !this.repeat && wasIndex === total - 1) {
+    // A wrap is detected when nextIndex < wasIndex (or wasIndex is the last slot)
+    if (!this.repeat && wasIndex === total - 1) {
       logger.info('[Radio] Playlist complete, repeat=false — pausing');
       this.pause();
       return;
@@ -306,23 +317,28 @@ class RadioStation {
 
     this.currentIndex      = nextIndex;
     this.trackStartedAt    = Date.now();
-    this.consecutiveErrors = 0;
+    // NOTE: do NOT reset consecutiveErrors here — it is incremented below and
+    // only reset after a valid track is found so the guard works correctly.
 
     const track = this._currentTrack();
     if (!track || !track.url) {
       this.consecutiveErrors++;
-      logger.warn(`[Radio] Track at index ${nextIndex} has no URL — skipping`);
+      logger.warn(`[Radio] Track at index ${nextIndex} has no URL (errors: ${this.consecutiveErrors}) — skipping`);
       if (this.consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-        logger.error(`[Radio] ${MAX_CONSECUTIVE_ERRORS} consecutive missing URLs — pausing ${ERROR_PAUSE_MS / 1000}s`);
+        logger.error(`[Radio] ${MAX_CONSECUTIVE_ERRORS} consecutive missing URLs — pausing ${ERROR_PAUSE_MS / 1000}s then retrying`);
         this._advanceTimer = setTimeout(() => {
           this.consecutiveErrors = 0;
           this._advanceTrack();
         }, ERROR_PAUSE_MS);
         return;
       }
+      // Skip this track after a short delay
       setTimeout(() => this._advanceTrack(), 500);
       return;
     }
+
+    // Good track — reset error counter
+    this.consecutiveErrors = 0;
 
     logger.info(`[Radio] → "${track.title}" (index ${nextIndex}/${total})`);
     this._publishNowPlaying();
@@ -463,6 +479,15 @@ function getStation() {
 
 /**
  * Recover station from Firestore on server start.
+ *
+ * CRITICAL BEHAVIOR:
+ *   - Reads the saved master state (currentIndex, trackStartedAt, playlist).
+ *   - Calculates how much wall-clock time has passed since the backend stopped.
+ *   - Mathematically advances through completed tracks using real durations.
+ *   - Publishes the corrected state so listeners immediately rejoin at the right position.
+ *   - Does NOT restart Song A just because the server restarted.
+ *   - Does NOT allow the loop to run forever — bounded by playlist.length × RECOVERY_LOOP_MULTIPLIER.
+ *
  * Non-fatal — server still starts if Firestore is unavailable.
  */
 async function recoverStation() {
@@ -502,45 +527,74 @@ async function recoverStation() {
       return;
     }
 
+    const repeatMode = data.repeat !== false; // default true → loop forever
     let currentIndex   = typeof data.currentIndex === 'number' ? data.currentIndex : 0;
     let trackStartedAt = typeof data.trackStartedAt === 'number' ? data.trackStartedAt : Date.now();
 
-    // Clamp index
+    // Clamp index to valid range
     currentIndex = Math.max(0, Math.min(currentIndex, playlist.length - 1));
 
-    // Calculate how much of the current track has already elapsed.
-    // Advance past tracks that have already finished.
-    // Guard: track the starting index so a full loop through all tracks
-    // (when repeat=true and all tracks are missing durations) cannot run forever.
+    // ── Time-travel recovery ──────────────────────────────────────────────────
+    // Calculate how many milliseconds have passed since the engine last persisted
+    // the current track's start time. Walk forward through the playlist, consuming
+    // each track's duration, until we find which track should NOW be playing and
+    // how many milliseconds into it we are.
+    //
+    // Safety bound: we allow at most playlist.length × RECOVERY_LOOP_MULTIPLIER
+    // track-advances. With DEFAULT_TRACK_DURATION_MS = 240 s, a 10-track playlist
+    // and the server down for 2 hours (7200 s / 240 s = 30 advances), a multiplier
+    // of 10 covers 100 advances — far more than any realistic outage.
+    //
+    // For repeat=false, we also stop if we reach the last track again (playlist end).
+
     const now = Date.now();
     let elapsedMs = now - trackStartedAt;
-    const startingIndex = currentIndex;
-    let loopCount = 0;
 
-    while (elapsedMs > 0) {
+    if (elapsedMs < 0) {
+      // Clock skew: trackStartedAt is in the future — clamp to 0
+      logger.warn('[Radio] Recovery: trackStartedAt is in the future — clamping to now');
+      elapsedMs = 0;
+    }
+
+    const maxAdvances = playlist.length * RECOVERY_LOOP_MULTIPLIER;
+    let advances = 0;
+
+    while (elapsedMs > 0 && advances < maxAdvances) {
       const t = playlist[currentIndex];
-      const dMs = (t && t.duration > 0) ? t.duration * 1000 : DEFAULT_TRACK_DURATION_MS;
-      if (elapsedMs < dMs) break; // still in this track
+      // Use real track duration; fall back to DEFAULT only when truly unknown.
+      // Skip zero-duration tracks immediately to prevent infinite tight loops.
+      const dMs = (t && t.duration > 0)
+        ? Math.max(1000, t.duration * 1000)  // at least 1 s to avoid 0-duration trap
+        : DEFAULT_TRACK_DURATION_MS;
+
+      if (elapsedMs < dMs) break; // current track is still playing
+
       elapsedMs -= dMs;
       const prevIndex = currentIndex;
       currentIndex = (currentIndex + 1) % playlist.length;
-      loopCount++;
-      // If we've completed one full rotation through the playlist:
-      if (!data.repeat && currentIndex <= startingIndex && prevIndex > currentIndex) {
-        // Playlist finished (no repeat) — station would have stopped
+      advances++;
+
+      // Detect playlist end for repeat=false mode.
+      // A wrap-around occurs when the new index is less than the previous index
+      // (i.e. we went from the last slot back to 0) or when we've looped once.
+      if (!repeatMode && prevIndex === playlist.length - 1) {
         logger.info('[Radio] Recovery: playlist ended (repeat=false) — not resuming');
-        _station = new RadioStation({ stationName: data.stationName, description: data.description, playlist, shuffle: data.shuffle, repeat: data.repeat });
+        _station = new RadioStation({
+          stationName: data.stationName,
+          description: data.description,
+          playlist,
+          shuffle:     data.shuffle,
+          repeat:      repeatMode,
+        });
         return;
-      }
-      // Safety: stop advancing after 10× the playlist length to prevent infinite loops
-      // when all tracks have duration=0 (would use DEFAULT_TRACK_DURATION_MS fallback)
-      if (loopCount > playlist.length * 10) {
-        logger.warn('[Radio] Recovery: loop limit reached — resuming at computed index', currentIndex);
-        break;
       }
     }
 
-    // trackStartedAt for the recovered track = now - elapsedMs within this track
+    if (advances >= maxAdvances) {
+      logger.warn(`[Radio] Recovery: advance limit (${maxAdvances}) reached — resuming at index ${currentIndex}`);
+    }
+
+    // trackStartedAt for the recovered track = now minus the remaining elapsedMs
     trackStartedAt = now - elapsedMs;
 
     _station = new RadioStation({
@@ -548,12 +602,12 @@ async function recoverStation() {
       description:   data.description || '24 HOURS • 7 DAYS • ALWAYS PLAYING',
       playlist,
       shuffle:       data.shuffle === true,
-      repeat:        data.repeat !== false,
+      repeat:        repeatMode,
       currentIndex,
       trackStartedAt,
     });
 
-    // Manually start (skip shuffle since we're restoring a specific position)
+    // Manually start — skip shuffle since we're restoring a specific position
     _station.isRunning     = true;
     _station.status        = 'playing';
     _station._scheduleAdvance();
@@ -562,7 +616,13 @@ async function recoverStation() {
     await _station._persistState();
 
     const cur = _station._currentTrack();
-    logger.info(`[Radio] Recovered — "${cur?.title || '?'}" at index ${currentIndex}/${playlist.length}`);
+    const recoveredElapsed = Math.round((now - trackStartedAt) / 1000);
+    logger.info(
+      `[Radio] Recovered — "${cur?.title || '?'}" ` +
+      `at index ${currentIndex}/${playlist.length}, ` +
+      `${recoveredElapsed}s into track, ` +
+      `${advances} track(s) skipped during outage`
+    );
 
   } catch (err) {
     logger.error(`[Radio] Recovery failed: ${err.message}`);
