@@ -190,21 +190,50 @@
    * Logs full diagnostics for every resolved (or failed) URL.
    * Returns the first truthy URL found, or null if nothing works.
    */
+  // ─── Supabase public URL constants (mirrors supabase.js) ────────────────
+  const _SUPABASE_URL   = 'https://licuiqxkkfboqezzmsqu.supabase.co';
+  const _STORAGE_BASE   = `${_SUPABASE_URL}/storage/v1`;
+
+  /**
+   * Generate the Supabase public URL for a given bucket + path.
+   * Each path segment is percent-encoded to handle spaces and special chars.
+   * Does NOT double-encode a path that already contains %XX sequences.
+   */
+  function _supabasePublicUrl(bucket, path) {
+    // Decode first (handles already-encoded paths) then re-encode uniformly
+    let decoded;
+    try { decoded = decodeURIComponent(path); } catch (_) { decoded = path; }
+    const encoded = decoded.split('/').map(encodeURIComponent).join('/');
+    return `${_STORAGE_BASE}/object/public/${bucket}/${encoded}`;
+  }
+
+  /**
+   * Resolve the best playable URL from a track object.
+   *
+   * Priority:
+   *   1. track.audioUrl
+   *   2. track.fileUrl
+   *   3. track.url
+   *   4. track.publicUrl
+   *   5. track.downloadURL
+   *   6. storagePath → Supabase public music-bucket URL
+   *      (tries AvenoraStorage.getPublicUrl first, then falls back to inline derivation)
+   */
   function resolveAudioUrl(track) {
     if (!track) return null;
 
     const candidates = [
-      { field: 'audioUrl',     val: track.audioUrl     },
-      { field: 'fileUrl',      val: track.fileUrl      },
-      { field: 'url',          val: track.url          },
-      { field: 'publicUrl',    val: track.publicUrl    },
-      { field: 'downloadURL',  val: track.downloadURL  },
+      { field: 'audioUrl',    val: track.audioUrl    },
+      { field: 'fileUrl',     val: track.fileUrl     },
+      { field: 'url',         val: track.url         },
+      { field: 'publicUrl',   val: track.publicUrl   },
+      { field: 'downloadURL', val: track.downloadURL },
     ];
 
     for (const { field, val } of candidates) {
       if (val && typeof val === 'string' && val.trim()) {
         console.log(
-          '[AVN resolveAudioUrl]',
+          '[AVN MUSIC URL] resolveAudioUrl',
           'id:', track.id || '(none)',
           'title:', track.title || track.name || '(none)',
           'resolvedUrl:', val,
@@ -215,31 +244,38 @@
       }
     }
 
-    // Derive from storagePath — Supabase public URL for the music bucket
-    if (track.storagePath && window.AvenoraStorage) {
-      try {
-        // AvenoraStorage exposes getPublicUrl(bucket, path)
-        const derived = typeof window.AvenoraStorage.getPublicUrl === 'function'
-          ? window.AvenoraStorage.getPublicUrl('music', track.storagePath)
-          : null;
-        if (derived) {
-          console.log(
-            '[AVN resolveAudioUrl]',
-            'id:', track.id || '(none)',
-            'title:', track.title || track.name || '(none)',
-            'resolvedUrl:', derived,
-            'storagePath:', track.storagePath,
-            'usedField:', 'storagePath→derived',
-          );
-          return derived;
+    // Derive from storagePath
+    if (track.storagePath) {
+      // 6a: Try AvenoraStorage (supabase.js) first
+      if (window.AvenoraStorage && typeof window.AvenoraStorage.getPublicUrl === 'function') {
+        try {
+          const derived = window.AvenoraStorage.getPublicUrl('music', track.storagePath);
+          if (derived) {
+            console.log(
+              '[AVN MUSIC URL] resolveAudioUrl — from storagePath via AvenoraStorage',
+              'id:', track.id || '(none)',
+              'storagePath:', track.storagePath,
+              'resolvedUrl:', derived,
+            );
+            return derived;
+          }
+        } catch (e) {
+          console.warn('[AVN MUSIC URL] AvenoraStorage.getPublicUrl failed:', e.message);
         }
-      } catch (e) {
-        console.warn('[AVN resolveAudioUrl] storagePath derive failed:', e.message);
       }
+      // 6b: Inline derivation — works without AvenoraStorage (cross-user, other devices)
+      const derived = _supabasePublicUrl('music', track.storagePath);
+      console.log(
+        '[AVN MUSIC URL] resolveAudioUrl — from storagePath (inline derivation)',
+        'id:', track.id || '(none)',
+        'storagePath:', track.storagePath,
+        'resolvedUrl:', derived,
+      );
+      return derived;
     }
 
     console.warn(
-      '[AVN resolveAudioUrl] NO URL FOUND',
+      '[AVN MUSIC URL] resolveAudioUrl — NO URL FOUND',
       'id:', track.id || '(none)',
       'title:', track.title || track.name || '(none)',
       'storagePath:', track.storagePath || null,

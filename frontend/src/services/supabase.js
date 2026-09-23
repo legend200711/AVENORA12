@@ -45,8 +45,12 @@
   // Each path segment is percent-encoded so that filenames with spaces,
   // parentheses, or other special characters resolve correctly on Android
   // Chrome (which rejects unencoded URLs with MediaError code 4).
+  // We decode first to avoid double-encoding paths that were already
+  // percent-encoded at upload time (e.g. "uid%2Ftimestamp-rand.mp3").
   function _publicUrl(bucket, path) {
-    const encoded = path.split('/').map(encodeURIComponent).join('/');
+    let decoded;
+    try { decoded = decodeURIComponent(path); } catch (_) { decoded = path; }
+    const encoded = decoded.split('/').map(encodeURIComponent).join('/');
     return `${STORAGE_BASE}/object/public/${bucket}/${encoded}`;
   }
 

@@ -1375,15 +1375,22 @@
         }
       } catch (_) {}
 
+      // ownerUid = the original uploader's UID (may differ from the person adding to the playlist).
+      // This is CRITICAL for cross-user playback: _resolvePlaylistTrackUrl looks up
+      // cloudStreamTracks/{ownerUid}/tracks/{trackId} to find the audio file.
+      const ownerUid = trackData.ownerUid || trackData.uploadedByUid || trackData.addedByUid
+                    || trackData.uid || uid; // fall back to current user
+
       const ref = await addDoc(collection(db, 'musicPlaylists', playlistId, 'tracks'), {
-        trackId:     String(trackData.id || trackData.trackId || ''),
+        trackId:     String(trackData.trackId || trackData.id || ''),
         title:       trackData.title || trackData.name || 'Untitled',
         artist:      trackData.artistName || trackData.artist || '',
         audioUrl:    trackData.fileUrl || trackData.audioUrl || trackData.url || '',
         storagePath: trackData.storagePath || '',
         coverUrl:    trackData.coverUrl || null,
         duration:    trackData.duration || 0,
-        addedByUid:  uid,
+        ownerUid:    ownerUid,     // uploader's UID — required for cross-user URL resolution
+        addedByUid:  uid,          // person who added this entry to the playlist
         addedAt:     serverTimestamp(),
         position,
       });

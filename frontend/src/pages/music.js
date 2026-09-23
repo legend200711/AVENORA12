@@ -2746,25 +2746,30 @@ async function _resolvePlaylistTracks(trackIds) {
         const stillMissing = [];
         for (const tid of missing) {
           try {
+            console.log('[AVN PLAYLIST] _resolvePlaylistTracks — looking up cloudStreamTracks', uid, 'tracks', tid);
             const snap = await getDoc(doc(fsDb, 'cloudStreamTracks', uid, 'tracks', String(tid)));
             if (snap.exists()) {
               const d = snap.data();
               // Validate the record has a playable URL before accepting it
               const playUrl = d.url || d.downloadURL || d.fileUrl || '';
               if (!playUrl && !d.storagePath) {
-                console.warn('[AVN] Track record exists but has no playable URL — trackId:', tid);
+                console.warn('[AVN PLAYLIST] Track record exists but has no playable URL — trackId:', tid);
                 // Still push so the track row renders (mpLoadBackendTrack will surface the error)
               }
               resolved.push({
                 id:           snap.id,
+                trackId:      snap.id,
                 title:        d.title       || 'Untitled',
                 artistName:   d.artist      || '',
                 albumTitle:   d.album       || '',
                 genre:        d.genre       || '',
                 fileUrl:      playUrl,
+                audioUrl:     playUrl,
                 storagePath:  d.storagePath || null,
                 coverUrl:     d.coverUrl    || null,
                 duration:     d.duration    || 0,
+                ownerUid:     uid,
+                uploadedByUid: uid,
                 _isFirestore: true,
               });
             } else {
@@ -2807,22 +2812,26 @@ async function _resolvePlaylistTracks(trackIds) {
       const stillMissing2 = [];
       for (const tid of missing) {
         try {
+          console.log('[AVN PLAYLIST] _resolvePlaylistTracks — looking up globalMusicLibrary', tid);
           const snap = await fsGet2(fsDoc2(fsDb, 'globalMusicLibrary', String(tid)));
           if (snap.exists()) {
             const d = snap.data();
             const playUrl = d.audioUrl || d.fileUrl || d.url || '';
             resolved.push({
-              id:          snap.id,
-              title:       d.title      || 'Untitled',
-              artistName:  d.artist     || '',
-              albumTitle:  d.album      || '',
-              genre:       d.genre      || '',
-              fileUrl:     playUrl,
-              audioUrl:    playUrl,
-              storagePath: d.storagePath || null,
-              coverUrl:    d.coverUrl   || null,
-              duration:    d.duration   || 0,
-              _isGlobal:   true,
+              id:           snap.id,
+              trackId:      snap.id,
+              title:        d.title      || 'Untitled',
+              artistName:   d.artist     || '',
+              albumTitle:   d.album      || '',
+              genre:        d.genre      || '',
+              fileUrl:      playUrl,
+              audioUrl:     playUrl,
+              storagePath:  d.storagePath || null,
+              coverUrl:     d.coverUrl   || null,
+              duration:     d.duration   || 0,
+              ownerUid:     d.uploadedByUid || '',
+              uploadedByUid: d.uploadedByUid || '',
+              _isGlobal:    true,
               _isFirestore: true,
             });
           } else {
@@ -2944,19 +2953,31 @@ window.musicOpenPlaylist = async function (id) {
       return;
     }
 
-    // Store only playable tracks for play/shuffle; keep all for display
-    const playableTracks = tracks.filter(t => !t._unavailable && (t.audioUrl || t.storagePath));
-    _plResolvedTracks[id] = playableTracks.length ? playableTracks : tracks;
-
+    // Build fully-normalized track objects preserving ALL resolution fields.
+    // ownerUid is essential for cross-user audio URL resolution.
     const allTrackObjs = tracks.map(x => ({
-      id:          x._docId || x.trackId || x.id,
-      title:       x.title || 'Untitled',
-      artistName:  x.artist || '',
-      fileUrl:     x.audioUrl || '',
-      storagePath: x.storagePath || '',
+      id:           x._docId || x.trackId || x.id,
+      trackId:      x.trackId || x.id || x._docId,
+      title:        x.title  || 'Untitled',
+      artistName:   x.artist || x.artistName || '',
+      artist:       x.artist || x.artistName || '',
+      fileUrl:      x.audioUrl || x.fileUrl || x.url || '',
+      audioUrl:     x.audioUrl || x.fileUrl || x.url || '',
+      url:          x.audioUrl || x.fileUrl || x.url || '',
+      storagePath:  x.storagePath || '',
+      coverUrl:     x.coverUrl  || null,
+      duration:     x.duration  || 0,
+      // Uploader / owner UID — required so other users can resolve cloudStreamTracks
+      ownerUid:     x.ownerUid     || x.uploadedByUid || x.addedByUid || x.uid || '',
+      uploadedByUid: x.uploadedByUid || x.ownerUid    || x.addedByUid || x.uid || '',
+      addedByUid:   x.addedByUid  || '',
       _isFirestore: true,
       _unavailable: x._unavailable || false,
     }));
+
+    // Store only playable tracks for play/shuffle; keep all for display
+    const playableTracks = allTrackObjs.filter(t => !t._unavailable && (t.audioUrl || t.fileUrl || t.storagePath));
+    _plResolvedTracks[id] = playableTracks.length ? playableTracks : allTrackObjs;
 
     wrap.innerHTML = `<div class="music-track-list">${tracks.map((t, i) => {
       const trackObj = allTrackObjs[i];
@@ -3274,7 +3295,7 @@ window.musicConfirmAddToPlaylist = async function (trackId) {
         promises.push(
           window.AvenoraFirebase.Firestore.addTrackToPlaylist(plId, {
             id:          sid,
-            trackId:     sid,
+            trackId:     trackObj.trackId || sid,
             title:       trackObj.title || trackObj.name || 'Untitled',
             artistName:  trackObj.artistName || trackObj.artist || '',
             artist:      trackObj.artistName || trackObj.artist || '',
@@ -3284,6 +3305,9 @@ window.musicConfirmAddToPlaylist = async function (trackId) {
             storagePath: trackObj.storagePath || '',
             coverUrl:    trackObj.coverUrl || null,
             duration:    trackObj.duration || 0,
+            // Preserve original uploader UID so cross-user playback works
+            ownerUid:    trackObj.uploadedByUid || trackObj.ownerUid || trackObj.uid || trackObj.addedByUid || '',
+            uploadedByUid: trackObj.uploadedByUid || trackObj.ownerUid || '',
           }).catch(e => {
             console.warn('[AVN] Firestore addTrackToPlaylist failed:', e.message);
             added--;
@@ -3338,6 +3362,33 @@ window.musicConfirmAddToPlaylist = async function (trackId) {
 
   Modal.close('add-to-pl-modal');
 };
+
+// ─── Canonical Firestore track normalizer ────────────────────────────────────
+// ALL code paths that convert raw Firestore playlist track entries into player
+// objects MUST use this helper so fields are consistently preserved.
+// Preserving ownerUid is critical for cross-user audio URL resolution.
+function _normalizeFsTrack(t) {
+  return {
+    id:           t._docId    || t.trackId   || t.id,
+    trackId:      t.trackId   || t.id        || t._docId,
+    title:        t.title     || 'Untitled',
+    artistName:   t.artist    || t.artistName || '',
+    artist:       t.artist    || t.artistName || '',
+    fileUrl:      t.audioUrl  || t.fileUrl   || t.url || '',
+    audioUrl:     t.audioUrl  || t.fileUrl   || t.url || '',
+    url:          t.audioUrl  || t.fileUrl   || t.url || '',
+    storagePath:  t.storagePath || '',
+    coverUrl:     t.coverUrl  || null,
+    duration:     t.duration  || 0,
+    // ownerUid = the original uploader's UID — NOT the person who added this entry.
+    // _resolvePlaylistTrackUrl uses this to look up cloudStreamTracks/{ownerUid}/tracks/{trackId}
+    ownerUid:     t.ownerUid     || t.uploadedByUid || t.addedByUid || t.uid || '',
+    uploadedByUid: t.uploadedByUid || t.ownerUid    || t.addedByUid || t.uid || '',
+    addedByUid:   t.addedByUid  || '',
+    _isFirestore: true,
+    _unavailable: t._unavailable || false,
+  };
+}
 
 // Alias used by cosmic playlist "+ ADD" buttons (opens the add-to-playlist modal
 // for any song currently in the queue — or prompts to import music first).
@@ -3400,19 +3451,7 @@ window.musicPlayLocalPlaylist = function (id) {
         return;
       }
       _plResolvedTracks[id] = fsTracks; // cache for subsequent PLAY ALL / Shuffle calls
-      const trackObjs = playable.map(t => ({
-        id:          t._docId || t.trackId || t.id,
-        trackId:     t.trackId || t.id,
-        title:       t.title || 'Untitled',
-        artistName:  t.artist || t.artistName || '',
-        artist:      t.artist || t.artistName || '',
-        fileUrl:     t.audioUrl || t.fileUrl || t.url || '',
-        audioUrl:    t.audioUrl || t.fileUrl || t.url || '',
-        storagePath: t.storagePath || '',
-        coverUrl:    t.coverUrl || null,
-        duration:    t.duration || 0,
-        _isFirestore: true,
-      }));
+      const trackObjs = playable.map(t => _normalizeFsTrack(t));
       mpLoadBackendTrack(trackObjs[0], 0, 'playlist-' + id, trackObjs);
     }).catch(err => Toast.error('Could not load playlist. Check your connection.'));
     return;
@@ -3488,19 +3527,7 @@ window.musicShufflePlaylist = function (id) {
         return;
       }
       _plResolvedTracks[id] = fsTracks;
-      const trackObjs = playable.map(t => ({
-        id:          t._docId || t.trackId || t.id,
-        trackId:     t.trackId || t.id,
-        title:       t.title || 'Untitled',
-        artistName:  t.artist || t.artistName || '',
-        artist:      t.artist || t.artistName || '',
-        fileUrl:     t.audioUrl || t.fileUrl || t.url || '',
-        audioUrl:    t.audioUrl || t.fileUrl || t.url || '',
-        storagePath: t.storagePath || '',
-        coverUrl:    t.coverUrl || null,
-        duration:    t.duration || 0,
-        _isFirestore: true,
-      }));
+      const trackObjs = playable.map(t => _normalizeFsTrack(t));
       const shuffled = [...trackObjs].sort(() => Math.random() - 0.5);
       mpLoadBackendTrack(shuffled[0], 0, 'playlist-' + id, shuffled);
       Toast.info('Shuffled — playing a random track');
@@ -3522,6 +3549,156 @@ window.mpShufflePlaylist = function (indices) {
 
 // ─── MUSIC PLAYER ENGINE ──────────────────────────────────────
 
+// ─── Shared audio helper utilities ───────────────────────────────────────────
+
+/**
+ * Pause Radio and Cloud Stream players so they don't overlap Music Hub.
+ * This never touches the Music Hub audio element itself.
+ */
+function _mpPauseCompetingPlayers() {
+  try {
+    const radioAudio = document.getElementById('radio-audio');
+    if (radioAudio && !radioAudio.paused) {
+      radioAudio.pause();
+      const radioBtn = document.getElementById('radio-play-btn');
+      if (radioBtn) radioBtn.textContent = '▶';
+      if (typeof _radioState !== 'undefined') { _radioState.isUserPaused = true; }
+    }
+  } catch (_) {}
+  try {
+    const csrFrame = document.getElementById('csr-frame');
+    if (csrFrame && csrFrame.contentWindow) {
+      csrFrame.contentWindow.postMessage({ type: 'AVN_PAUSE' }, location.origin);
+    }
+  } catch (_) {}
+}
+
+/**
+ * Ensure the Music Hub audio element is unmuted and has a safe audible volume.
+ * Reads the persisted preference; defaults to 1.0.
+ * Also always forces muted=false so a stale muted state from Radio/CloudStream
+ * cannot silently block Music Hub playback.
+ */
+function _mpRestoreVolume(audio) {
+  audio.muted = false;
+  // Always restore volume — not just when it's 0, because audio.muted=true also silences
+  const sv = localStorage.getItem('lu_mp_volume');
+  const pv = sv !== null ? Number(sv) : NaN;
+  const vol = (Number.isFinite(pv) && pv > 0 && pv <= 1) ? pv : 1.0;
+  audio.volume = vol;
+  // Sync sliders
+  const sliderVal = Math.round(vol * 100);
+  document.querySelectorAll('#mp-vol-slider, input[oninput*="mpSetVolume"]').forEach(s => {
+    s.value = sliderVal;
+  });
+}
+
+/**
+ * Core Music Hub play routine — called from both mpLoadTrack and mpLoadBackendTrack.
+ *
+ * Handles:
+ *  - AudioContext unlock (required on iOS Safari / Android Chrome)
+ *  - audio.load() — required on iOS to register the new src before play()
+ *  - Verified play: MP.isPlaying is only set AFTER audio.play() resolves
+ *  - Full error logging with AVN prefixes
+ *  - Per-error-type UI feedback
+ *  - Auto-advance on decode/network/unsupported errors
+ *
+ * @param {HTMLAudioElement} audio
+ * @param {string}  id          — MP track id (may be Firestore _docId)
+ * @param {string}  trackId     — canonical original trackId
+ * @param {string}  title
+ * @param {string}  ownerUid    — original uploader's UID
+ * @param {string|null} storagePath
+ * @param {string}  resolvedUrl — the URL already set on audio.src
+ */
+function _mpUnlockAndPlay(audio, id, trackId, title, ownerUid, storagePath, resolvedUrl) {
+  // 1. Resume suspended AudioContext (iOS/Android require this inside a user gesture)
+  if (MP._audioCtx && MP._audioCtx.state === 'suspended') {
+    MP._audioCtx.resume().catch(() => {});
+  }
+
+  // 2. audio.load() — mandatory on iOS Safari after changing src.
+  //    Without this, play() may silently fail or play the previous track's audio.
+  audio.load();
+
+  // 3. Attempt play — only set isPlaying after the promise resolves successfully
+  const playPromise = audio.play();
+  if (!playPromise || typeof playPromise.then !== 'function') {
+    // Old browser (no promise) — assume started
+    MP.isPlaying = true;
+    mpUpdatePlayBtn();
+    return;
+  }
+
+  playPromise.then(() => {
+    // ✓ Audible playback confirmed
+    MP.isPlaying = true;
+    mpUpdatePlayBtn();
+    if (MP._audioCtx && MP._audioCtx.state === 'suspended') MP._audioCtx.resume().catch(() => {});
+
+    console.log(
+      '[AVN MUSIC PLAY] PLAYING',
+      '\n  title:', title,
+      '\n  trackId:', trackId,
+      '\n  ownerUid:', ownerUid || '(none)',
+      '\n  resolvedUrl:', resolvedUrl,
+      '\n  volume:', audio.volume,
+      '\n  muted:', audio.muted,
+      '\n  readyState:', audio.readyState,
+    );
+
+    if (typeof MusicService !== 'undefined') {
+      MusicService._notifyPlayState(true);
+    }
+  }).catch(err => {
+    const audioErr = audio.error;
+    const errCode  = audioErr?.code;
+    const mediaErrMsgs = { 1: 'MEDIA_ABORTED', 2: 'MEDIA_NETWORK', 3: 'MEDIA_DECODE', 4: 'MEDIA_UNSUPPORTED' };
+
+    console.error(
+      '[AVN MUSIC ERROR] play() FAILED',
+      '\n  name:', err.name,
+      '\n  message:', err.message,
+      '\n  title:', title,
+      '\n  trackId:', trackId,
+      '\n  ownerUid:', ownerUid || '(none)',
+      '\n  storagePath:', storagePath,
+      '\n  resolvedUrl:', resolvedUrl,
+      '\n  audio.error.code:', errCode, '→', mediaErrMsgs[errCode] || 'none',
+      '\n  networkState:', audio.networkState,
+      '\n  readyState:', audio.readyState,
+      '\n  muted:', audio.muted,
+      '\n  volume:', audio.volume,
+    );
+
+    // ✗ Play failed — NEVER show a fake playing state
+    MP.isPlaying = false;
+    mpUpdatePlayBtn();
+
+    if (typeof MusicService !== 'undefined') MusicService._notifyPlayState(false);
+
+    if (err.name === 'NotAllowedError') {
+      // Mobile autoplay policy — track is loaded, user must tap Play manually
+      Toast.info('Tap ▶ to start playback (browser requires a tap).');
+    } else if (err.name === 'NotSupportedError' || errCode === 4) {
+      Toast.error('Unsupported audio format. Try another track.');
+      setTimeout(() => mpNext(), 2000);
+    } else if (err.name === 'AbortError') {
+      // Superseded by another load — not a real error
+      console.info('[AVN MUSIC AUDIO] Playback aborted — superseded by next track load.');
+    } else if (errCode === 2) {
+      Toast.error('Network error loading track. Trying next…');
+      setTimeout(() => mpNext(), 2000);
+    } else if (errCode === 3) {
+      Toast.error('Audio decode error. Trying next…');
+      setTimeout(() => mpNext(), 2000);
+    } else {
+      Toast.error('Could not play this track. Please try another.');
+    }
+  });
+}
+
 const MP = {
   queue:         [],          // local imported tracks
   currentIndex:  -1,
@@ -3541,47 +3718,71 @@ const MP = {
 function initMusicPlayer() {
   const audio = document.getElementById('mp-audio');
   if (!audio) return;
-  // Guard: remove any previously registered handlers before re-adding them.
-  // Prevents duplicate ended/timeupdate handlers if initMusicPlayer is called more than once.
+
+  // Guard: remove previously registered handlers to prevent duplicates
   audio.removeEventListener('ended',          mpHandleEnded);
   audio.removeEventListener('timeupdate',     mpUpdateProgress);
   audio.removeEventListener('loadedmetadata', mpOnMetadata);
   audio.removeEventListener('error',          mpHandleAudioError);
+  audio.removeEventListener('playing',        _mpOnPlaying);
+  audio.removeEventListener('pause',          _mpOnPause);
+  audio.removeEventListener('waiting',        _mpOnWaiting);
+  audio.removeEventListener('stalled',        _mpOnStalled);
+  audio.removeEventListener('canplay',        _mpOnCanPlay);
+  audio.removeEventListener('volumechange',   _mpOnVolumeChange);
 
   MP.favorites = LS.get('lu_mp_favorites', []);
 
-  // Restore saved volume (stored as 0.0–1.0 normalised float).
-  // Default to 1.0 (full volume) when no preference exists.
-  audio.muted = false;
-  const savedVol = localStorage.getItem('lu_mp_volume');
-  let initVolume = 1.0;
-  if (savedVol !== null) {
-    const parsed = Number(savedVol);
-    if (Number.isFinite(parsed) && parsed >= 0 && parsed <= 1) {
-      initVolume = parsed;
-    }
-  }
-  audio.volume = initVolume;
+  // Restore saved volume — always unmute on Music Hub init.
+  // A stale muted=true from Radio/CloudStream must not carry over.
+  _mpRestoreVolume(audio);
 
-  // Sync the slider(s) to match the restored volume (0–100 scale for the range input)
-  const sliderVal = Math.round(initVolume * 100);
-  const desktopSlider = document.getElementById('mp-vol-slider');
-  if (desktopSlider) desktopSlider.value = sliderVal;
-  document.querySelectorAll('input[oninput*="mpSetVolume"]').forEach(function(s) {
-    s.value = sliderVal;
-  });
-
-  audio.addEventListener('ended',        mpHandleEnded);
-  audio.addEventListener('timeupdate',   mpUpdateProgress);
+  audio.addEventListener('ended',          mpHandleEnded);
+  audio.addEventListener('timeupdate',     mpUpdateProgress);
   audio.addEventListener('loadedmetadata', mpOnMetadata);
-  audio.addEventListener('playing',      () => { MP.isPlaying = true; mpUpdatePlayBtn(); });
-  audio.addEventListener('pause',        () => { MP.isPlaying = false; mpUpdatePlayBtn(); });
-  audio.addEventListener('waiting',      () => mpSetStatus('Buffering…'));
-  audio.addEventListener('canplaythrough', () => mpSetStatus(null));
-  audio.addEventListener('error',        mpHandleAudioError);
+  audio.addEventListener('playing',        _mpOnPlaying);
+  audio.addEventListener('play',           _mpOnPlaying);
+  audio.addEventListener('pause',          _mpOnPause);
+  audio.addEventListener('waiting',        _mpOnWaiting);
+  audio.addEventListener('stalled',        _mpOnStalled);
+  audio.addEventListener('canplay',        _mpOnCanPlay);
+  audio.addEventListener('volumechange',   _mpOnVolumeChange);
+  audio.addEventListener('error',          mpHandleAudioError);
 
   // Keyboard shortcuts
   document.addEventListener('keydown', mpKeyHandler);
+}
+
+// Named event handlers (named so they can be removed without memory leaks)
+function _mpOnPlaying() {
+  MP.isPlaying = true;
+  mpUpdatePlayBtn();
+  console.log('[AVN MUSIC AUDIO] playing event — audible playback active',
+    'volume:', document.getElementById('mp-audio')?.volume,
+    'muted:', document.getElementById('mp-audio')?.muted);
+}
+function _mpOnPause() {
+  MP.isPlaying = false;
+  mpUpdatePlayBtn();
+}
+function _mpOnWaiting() {
+  mpSetStatus('Buffering…');
+  console.log('[AVN MUSIC AUDIO] waiting — network stall');
+}
+function _mpOnStalled() {
+  mpSetStatus('Loading…');
+  console.warn('[AVN MUSIC AUDIO] stalled — browser stopped buffering');
+}
+function _mpOnCanPlay() {
+  mpSetStatus(null);
+}
+function _mpOnVolumeChange() {
+  const audio = document.getElementById('mp-audio');
+  if (!audio) return;
+  const sliderVal = Math.round(audio.volume * 100);
+  document.querySelectorAll('#mp-vol-slider, input[oninput*="mpSetVolume"]').forEach(s => {
+    s.value = sliderVal;
+  });
 }
 
 function destroyMusicPlayer() {
@@ -3621,22 +3822,31 @@ function mpOnMetadata() {
 
 function mpHandleAudioError(e) {
   const audio = document.getElementById('mp-audio');
-  const code = audio?.error?.code;
-  const msgs = { 1: 'Playback aborted', 2: 'Network error', 3: 'Decode error', 4: 'Unsupported format' };
-  const msg  = msgs[code] || 'Audio error';
-  Toast.error(`${msg} — skipping track.`);
-  mpUpdatePlayBtn();
+  const code  = audio?.error?.code;
+  const msgs  = { 1: 'Playback aborted', 2: 'Network error', 3: 'Decode error', 4: 'Unsupported format' };
+  const msg   = msgs[code] || 'Audio error';
+
+  console.error('[AVN MUSIC ERROR] HTMLAudioElement error event',
+    '\n  code:', code, '→', msgs[code] || 'unknown',
+    '\n  message:', audio?.error?.message || '(none)',
+    '\n  src:', audio?.src || '(none)',
+    '\n  networkState:', audio?.networkState,
+    '\n  readyState:', audio?.readyState,
+  );
+
+  // NEVER show a fake playing state
   MP.isPlaying = false;
+  mpUpdatePlayBtn();
 
-  // Show retry in player
-  const titleEl = document.getElementById('mp-title');
-  if (titleEl && MP.currentIndex >= 0 && MP.queue[MP.currentIndex]) {
-    titleEl.textContent = `⚠ Error: ${msg}`;
-  }
-
-  // Auto-advance on network/decode error
+  // Skip unavailable track types automatically
   if (code === 2 || code === 3 || code === 4) {
-    setTimeout(() => mpNext(), 2000);
+    Toast.error(`${msg} — skipping to next track…`);
+    setTimeout(() => mpNext(), 1500);
+  } else if (code === 1) {
+    // Aborted — usually means we're switching tracks; not a user-facing error
+    console.info('[AVN MUSIC AUDIO] MediaError 1 (ABORTED) — track load superseded');
+  } else {
+    Toast.error(`${msg} — try another track.`);
   }
 }
 
@@ -3674,68 +3884,41 @@ window.mpLoadTrack = function (index) {
   const audio     = document.getElementById('mp-audio');
   if (!audio) return;
 
-  // Resolve URL via shared helper (prefers url, then falls back to storagePath)
+  // ── Resolve URL ───────────────────────────────────────────────────────────
   const resolvedUrl = (typeof MusicService !== 'undefined' && MusicService.resolveAudioUrl)
     ? MusicService.resolveAudioUrl(track)
     : (track.url || track.fileUrl || track.audioUrl || null);
 
   console.log(
-    '[AVN Player] mpLoadTrack',
-    'id:', track.id, 'title:', track.name,
-    'resolvedUrl:', resolvedUrl,
-    'storagePath:', track.storagePath || null,
-    'audio.readyState:', audio.readyState,
-    'audio.networkState:', audio.networkState,
+    '[AVN MUSIC URL] mpLoadTrack (local)',
+    '\n  id:', track.id,
+    '\n  title:', track.name,
+    '\n  storagePath:', track.storagePath || null,
+    '\n  resolvedUrl:', resolvedUrl,
+    '\n  readyState:', audio.readyState,
+    '\n  networkState:', audio.networkState,
   );
 
   if (!resolvedUrl) {
+    console.error('[AVN MUSIC ERROR] mpLoadTrack — no URL for track id:', track.id, 'name:', track.name);
     Toast.error('This track has no playable URL.');
     return;
   }
 
-  // Pause Radio player if it is running — Music Hub and Radio must not overlap.
-  // This only affects local playback; it NEVER modifies the global Radio station.
-  try {
-    const radioAudio = document.getElementById('radio-audio');
-    if (radioAudio && !radioAudio.paused) {
-      radioAudio.pause();
-      const radioBtn = document.getElementById('radio-play-btn');
-      if (radioBtn) radioBtn.textContent = '▶';
-      if (typeof _radioState !== 'undefined') { _radioState.isUserPaused = true; }
-    }
-  } catch (_) {}
+  // ── Stop competing players ──────────────────────────────────────────────
+  _mpPauseCompetingPlayers();
 
-  // Pause Cloud Stream iframe if it is playing — local coordination only.
-  try {
-    const csrFrame = document.getElementById('csr-frame');
-    if (csrFrame && csrFrame.contentWindow) {
-      csrFrame.contentWindow.postMessage({ type: 'AVN_PAUSE' }, location.origin);
-    }
-  } catch (_) {}
-
+  // ── Set src, unmute, restore volume ────────────────────────────────────
   audio.src = resolvedUrl;
+  _mpRestoreVolume(audio);
 
-  // Ensure audio is not muted and has a proper volume before playing.
-  // Use the persisted preference; fall back to 1.0 if none is saved.
-  audio.muted = false;
-  if (audio.volume === 0) {
-    const sv = localStorage.getItem('lu_mp_volume');
-    const pv = sv !== null ? Number(sv) : NaN;
-    audio.volume = (Number.isFinite(pv) && pv > 0 && pv <= 1) ? pv : 1.0;
-  }
-
-  // Update player UI
+  // ── Update UI ──────────────────────────────────────────────────────────
   document.getElementById('mp-title').textContent  = track.name;
   document.getElementById('mp-artist').textContent = track.artist || '';
 
-  // Art
   const artEl = document.getElementById('mp-art');
-  if (artEl) {
-    artEl.innerHTML = '🎵';
-    artEl.className = 'mp-art playing';
-  }
+  if (artEl) { artEl.innerHTML = '🎵'; artEl.className = 'mp-art playing'; }
 
-  // Next label
   const nextTrack = MP.queue[index + 1];
   const nextLabel = document.getElementById('mp-next-label');
   if (nextLabel) {
@@ -3749,72 +3932,34 @@ window.mpLoadTrack = function (index) {
 
   mpUpdateQueueHighlight();
   mpRecordRecentlyPlayed(track);
-
-  // Notify shared music service (DJ System, Cloud Stream, etc.)
   if (typeof MusicService !== 'undefined') MusicService._notifyTrackChange(track);
 
-  // Resume AudioContext if it was suspended (mobile autoplay policy requires a user gesture).
-  if (MP._audioCtx && MP._audioCtx.state === 'suspended') {
-    MP._audioCtx.resume().catch(() => {});
-  }
-
-  // Only update playing UI state after the play promise resolves
-  const playPromise = audio.play();
-  if (playPromise && typeof playPromise.then === 'function') {
-    playPromise.then(() => {
-      MP.isPlaying = true;
-      mpUpdatePlayBtn();
-      // Ensure AudioContext is running after play starts (needed on some mobile browsers)
-      if (MP._audioCtx && MP._audioCtx.state === 'suspended') MP._audioCtx.resume().catch(() => {});
-    }).catch(err => {
-      const audioErr = audio.error;
-      console.warn(
-        '[AVN Player] mpLoadTrack play error',
-        'name:', err.name, 'message:', err.message,
-        'audio.error.code:', audioErr?.code,
-        'audio.error.message:', audioErr?.message,
-      );
-      if (err.name === 'NotAllowedError') {
-        Toast.info('Tap the play button to start playback (browser autoplay policy).');
-      } else if (err.name === 'NotSupportedError') {
-        Toast.error('This audio format is not supported by your browser.');
-      } else if (err.name === 'AbortError') {
-        // Playback was interrupted — usually by loading the next track; not an error.
-        console.info('[AVN Player] Playback aborted (likely superseded by next track).');
-      } else {
-        Toast.error('This track could not be played. Please try another.');
-      }
-      MP.isPlaying = false;
-      mpUpdatePlayBtn();
-    });
-  }
-
+  // ── Mobile audio unlock + play ─────────────────────────────────────────
+  _mpUnlockAndPlay(audio, track.id, track.id, track.name, '', track.storagePath || null, resolvedUrl);
   mpInitVisualizer(audio);
 };
 
 window.mpLoadBackendTrack = async function (track, index, context, tracksArray) {
+  // ── State bookkeeping ────────────────────────────────────────────────────
   MP.backendQueue = context;
   MP.currentIndex = index;
-  // Store the full tracks array for auto-advance.
-  // Priority: explicit tracksArray argument → context registry → keep existing
   if (Array.isArray(tracksArray) && tracksArray.length > 0) {
     MP.backendTracks = tracksArray;
   } else if (context && _mpContextTracks[context] && _mpContextTracks[context].length > 0) {
     MP.backendTracks = _mpContextTracks[context];
   }
-  // Note: MP.queue (local imports) is kept separate and unmodified.
-  // mpHandleEnded will use backendTracks when it's populated.
 
   const audio = document.getElementById('mp-audio');
   if (!audio) return;
 
-  // Resolve URL using shared resolveAudioUrl helper first.
-  // For MongoDB-backend tracks with a storagePath, also try to refresh the signed URL.
+  // ── Resolve URL ──────────────────────────────────────────────────────────
+  // Priority: audioUrl → fileUrl → url → publicUrl → downloadURL → storagePath
   let playUrl = (typeof MusicService !== 'undefined' && MusicService.resolveAudioUrl)
     ? MusicService.resolveAudioUrl(track)
-    : (track.fileUrl || track.url || track.audioUrl || null);
+    : (track.audioUrl || track.fileUrl || track.url || track.publicUrl || track.downloadURL || null);
 
-  if (track.storagePath && track.id && !track._isFirestore && !playUrl) {
+  // For non-Firestore tracks with a storagePath and no inline URL, refresh via backend
+  if (!playUrl && track.storagePath && track.id && !track._isFirestore) {
     try {
       const refreshed = await LegendAPI.request('GET', `/music/tracks/${track.id}/url`).catch(() => null);
       if (refreshed?.url) playUrl = refreshed.url;
@@ -3822,98 +3967,50 @@ window.mpLoadBackendTrack = async function (track, index, context, tracksArray) 
   }
 
   console.log(
-    '[AVN Player] mpLoadBackendTrack',
-    'id:', track.id, 'title:', track.title,
-    'resolvedUrl:', playUrl,
-    'storagePath:', track.storagePath || null,
-    'audio.readyState:', audio.readyState,
-    'audio.networkState:', audio.networkState,
+    '[AVN MUSIC URL] mpLoadBackendTrack',
+    '\n  id:', track.id,
+    '\n  trackId:', track.trackId || '(none)',
+    '\n  title:', track.title,
+    '\n  ownerUid:', track.ownerUid || track.uploadedByUid || track.addedByUid || '(none)',
+    '\n  storagePath:', track.storagePath || null,
+    '\n  resolvedUrl:', playUrl,
+    '\n  readyState:', audio.readyState,
+    '\n  networkState:', audio.networkState,
   );
 
   if (!playUrl) {
+    console.error('[AVN MUSIC ERROR] mpLoadBackendTrack — no URL',
+      'id:', track.id, 'trackId:', track.trackId,
+      'ownerUid:', track.ownerUid || track.uploadedByUid || '(none)',
+      'storagePath:', track.storagePath || null);
     Toast.error('This track has no playable audio URL.');
     return;
   }
 
-  // Pause Radio player if it is running — Music Hub and Radio must not overlap.
-  // This only affects local playback; it NEVER modifies the global Radio station.
-  try {
-    const radioAudio = document.getElementById('radio-audio');
-    if (radioAudio && !radioAudio.paused) {
-      radioAudio.pause();
-      const radioBtn = document.getElementById('radio-play-btn');
-      if (radioBtn) radioBtn.textContent = '▶';
-      // Mark as user-paused so Radio doesn't auto-restart on its drift-check
-      if (typeof _radioState !== 'undefined') { _radioState.isUserPaused = true; }
-    }
-  } catch (_) {}
+  // ── Stop competing players ───────────────────────────────────────────────
+  _mpPauseCompetingPlayers();
 
-  // Pause Cloud Stream iframe if it is playing — local coordination only.
-  try {
-    const csrFrame = document.getElementById('csr-frame');
-    if (csrFrame && csrFrame.contentWindow) {
-      csrFrame.contentWindow.postMessage({ type: 'AVN_PAUSE' }, location.origin);
-    }
-  } catch (_) {}
-
+  // ── Set src, unmute, restore volume ─────────────────────────────────────
   audio.src = playUrl;
+  _mpRestoreVolume(audio);
 
-  // Ensure audio is not muted and has a proper volume before playing.
-  // Use the persisted preference; fall back to 1.0 if none is saved.
-  audio.muted = false;
-  if (audio.volume === 0) {
-    const sv2 = localStorage.getItem('lu_mp_volume');
-    const pv2 = sv2 !== null ? Number(sv2) : NaN;
-    audio.volume = (Number.isFinite(pv2) && pv2 > 0 && pv2 <= 1) ? pv2 : 1.0;
-  }
-
+  // ── Update UI ────────────────────────────────────────────────────────────
   document.getElementById('mp-title').textContent  = track.title || 'Unknown';
-  document.getElementById('mp-artist').textContent = track.artistName || '';
+  document.getElementById('mp-artist').textContent = track.artistName || track.artist || '';
 
-  const artEl = document.getElementById('mp-art');
-  if (artEl) {
+  const artEl2 = document.getElementById('mp-art');
+  if (artEl2) {
     if (track.coverUrl) {
-      artEl.innerHTML = `<img src="${escapeHtml(track.coverUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:6px">`;
+      artEl2.innerHTML = `<img src="${escapeHtml(track.coverUrl)}" alt="" style="width:100%;height:100%;object-fit:cover;border-radius:6px">`;
     } else {
-      artEl.innerHTML = '🎵';
+      artEl2.innerHTML = '🎵';
     }
-    artEl.className = 'mp-art playing';
+    artEl2.className = 'mp-art playing';
   }
 
-  // Resume AudioContext if it was suspended (mobile autoplay policy requires a user gesture).
-  if (MP._audioCtx && MP._audioCtx.state === 'suspended') {
-    MP._audioCtx.resume().catch(() => {});
-  }
-
-  // Only update playing UI state after the play promise resolves
-  const playPromise = audio.play();
-  if (playPromise && typeof playPromise.then === 'function') {
-    playPromise.then(() => {
-      MP.isPlaying = true;
-      mpUpdatePlayBtn();
-      // Ensure AudioContext is running after play starts
-      if (MP._audioCtx && MP._audioCtx.state === 'suspended') MP._audioCtx.resume().catch(() => {});
-    }).catch(err => {
-      const audioErr = audio.error;
-      console.warn(
-        '[AVN Player] mpLoadBackendTrack play error',
-        'name:', err.name, 'message:', err.message,
-        'audio.error.code:', audioErr?.code,
-        'audio.error.message:', audioErr?.message,
-      );
-      if (err.name === 'NotAllowedError') {
-        Toast.info('Tap the play button to start playback (browser autoplay policy).');
-      } else if (err.name === 'NotSupportedError') {
-        Toast.error('This audio format is not supported by your browser.');
-      } else if (err.name === 'AbortError') {
-        console.info('[AVN Player] Backend track playback aborted (likely superseded by next track).');
-      } else {
-        Toast.error('This track could not be played. Please try another.');
-      }
-      MP.isPlaying = false;
-      mpUpdatePlayBtn();
-    });
-  }
+  // ── Mobile audio unlock + play ───────────────────────────────────────────
+  const ownerUid = track.ownerUid || track.uploadedByUid || track.addedByUid || '';
+  _mpUnlockAndPlay(audio, track.id, track.trackId || track.id, track.title, ownerUid, track.storagePath || null, playUrl);
 
   // Record server-side play for MongoDB-backed tracks only (non-critical)
   if (track.id && !track._isFirestore) {
@@ -3929,12 +4026,22 @@ window.mpTogglePlay = function () {
   if (MP.isPlaying) {
     audio.pause();
   } else {
-    if (!audio.src && MP.queue.length > 0) {
+    if (!audio.src && MP.backendTracks && MP.backendTracks.length > 0 && MP.currentIndex >= 0) {
+      // Resume backend track context
+      const t = MP.backendTracks[MP.currentIndex] || MP.backendTracks[0];
+      if (t) window.mpLoadBackendTrack(t, MP.currentIndex, MP.backendQueue, MP.backendTracks);
+    } else if (!audio.src && MP.queue.length > 0) {
       mpLoadTrack(Math.max(0, MP.currentIndex));
     } else if (audio.src) {
+      // Ensure unmuted before resuming (guards against stale state)
+      _mpRestoreVolume(audio);
       audio.play().catch(err => {
-        console.warn('[AVN] Track playback error:', err);
-        Toast.error('This track could not be played. Please try another.');
+        console.warn('[AVN MUSIC AUDIO] mpTogglePlay resume error:', err.name, err.message);
+        if (err.name === 'NotAllowedError') {
+          Toast.info('Tap ▶ to start playback (browser requires a tap).');
+        } else {
+          Toast.error('This track could not be played. Please try another.');
+        }
       });
     } else {
       Toast.info('Import music files or connect a cloud library to start listening.');
