@@ -459,6 +459,28 @@
       if (!file.type.startsWith('audio/')) throw new Error('File must be an audio file (MP3, WAV, OGG, FLAC, AAC, M4A, OPUS).');
       if (file.size > 100 * 1024 * 1024) throw new Error('Audio must be under 100 MB');
       const uid  = _requireUid('upload music');
+
+      // Extract real audio duration BEFORE uploading so it is stored accurately.
+      // This is essential for the radio engine to schedule tracks correctly.
+      // We create a temporary object URL, load it into an Audio element, then revoke it.
+      let audioDurationSec = 0;
+      try {
+        audioDurationSec = await new Promise((resolve) => {
+          const tmpUrl = URL.createObjectURL(file);
+          const tmpAudio = new Audio();
+          const cleanup = (val) => { URL.revokeObjectURL(tmpUrl); tmpAudio.src = ''; resolve(val); };
+          tmpAudio.addEventListener('loadedmetadata', () => {
+            const d = tmpAudio.duration;
+            cleanup(isFinite(d) && d > 0 ? Math.round(d) : 0);
+          }, { once: true });
+          tmpAudio.addEventListener('error', () => cleanup(0), { once: true });
+          // Timeout after 8 s in case the browser can't read the file header
+          setTimeout(() => cleanup(0), 8000);
+          tmpAudio.src = tmpUrl;
+          tmpAudio.load();
+        });
+      } catch (_) {}
+
       const path = _storagePath('music', uid, file.name);
       const { url, storagePath } = await _upload('music', path, file, onProgress);
 
@@ -472,6 +494,7 @@
         storagePath,
         fileSize:    file.size,
         mimeType:    file.type,
+        duration:    audioDurationSec,
         visibility:  meta.visibility || 'public',
         createdAt:   new Date().toISOString(),
       };
@@ -495,7 +518,7 @@
         genre:       track.genre,
         url,
         storagePath,
-        duration:    0,
+        duration:    audioDurationSec,
         fileName:    file.name,
         fileSize:    file.size,
         mimeType:    file.type,
