@@ -1,17 +1,23 @@
 /**
  * AVENORA RADIO — Listener Page (frontend/src/pages/radio.js)
  *
- * Architecture:
- *   - Subscribes to Firestore `stationNowPlaying/avenoraRadio` for real-time
- *     track state (current track, trackStartedAt, queue, etc.)
- *   - Calculates elapsed offset from server's trackStartedAt + serverTime clock skew.
- *   - Plays audio via HTML5 <audio> element, seeked to the correct offset.
- *   - When the server advances to a new track the onSnapshot fires and the
- *     client loads the new URL automatically.
- *   - Listener presence is maintained via /api/radio/listener/ping every 30 s.
- *   - Reconnects automatically on network loss.
+ * Architecture — TRUE SYNCHRONIZED BROADCAST
+ * ══════════════════════════════════════════
+ * ONE master station timeline lives in Firestore.
+ * ALL listeners read that timeline and seek to the correct playback position.
  *
- * The listener's browser is ONLY a listener — the server controls the station.
+ * CRITICAL INVARIANTS:
+ *   • Joining the radio NEVER restarts the current song.
+ *   • Leaving/re-opening the radio NEVER resets the station timeline.
+ *   • The listener's `audio.ended` event NEVER independently advances the
+ *     global station — it only re-syncs against the master timeline.
+ *   • Track advancement is guarded by a Firestore transaction that checks
+ *     `queueRevision` so only ONE client wins the race to advance the station.
+ *   • A dedicated `_masterTicker` interval (not the audio `ended` event) is
+ *     responsible for triggering advancement checks.
+ *
+ * Playback offset formula:
+ *   seekPosition = (clientNow - serverClockOffset) - trackStartedAt   [in seconds]
  */
 
 registerPage('radio', {
@@ -161,57 +167,68 @@ function _radioShell() {
 
 // ─── Player state ─────────────────────────────────────────
 let _radioState = {
-  unsubscribe:      null,    // Firestore listener
-  pingInterval:     null,    // presence heartbeat
-  progressTimer:    null,    // progress UI update
-  vizAnimFrame:     null,    // visualizer RAF
-  vizCtx:           null,
-  vizAnalyser:      null,
-  vizSource:        null,
-  audioCtx:         null,
-  listenerId:       null,
-  currentUrl:       null,    // currently loaded audio URL
-  currentTrackId:   null,
-  serverClockOffset: 0,      // local - server ms offset
-  isUserPaused:     false,
-  stationDoc:       null,    // latest Firestore doc
-  favoriteTrackIds: new Set(),
+  unsubscribe:       null,   // Firestore onSnapshot unsubscribe fn
+  pingInterval:      null,   // presence heartbeat
+  progressTimer:     null,   // progress-bar UI update interval
+  masterTicker:      null,   // interval that checks if master track has ended
+  vizAnimFrame:      null,   // visualizer RAF handle
+  vizCtx:            null,
+  vizAnalyser:       null,
+  vizSource:         null,
+  audioCtx:          null,
+  listenerId:        null,
+  currentUrl:        null,   // currently loaded audio URL
+  currentTrackId:    null,
+  serverClockOffset: 0,      // (localMs - serverMs) used to convert local→server time
+  clockSamples:      [],     // rolling samples for median clock-offset calculation
+  isUserPaused:      false,
+  stationDoc:        null,   // latest Firestore NowPlaying doc
+  favoriteTrackIds:  new Set(),
+  advanceLockUntil:  0,      // local time until which we suppress duplicate advances
 };
 
+// ─── Init ─────────────────────────────────────────────────
 async function _initRadioPlayer() {
   _radioState.listenerId = 'avn-' + Math.random().toString(36).slice(2) + Date.now();
 
   _buildStars();
 
   // Restore saved volume preference
-  const savedVol = localStorage.getItem('lu_mp_volume');
-  const initVol  = savedVol !== null ? Math.max(0, Math.min(1, Number(savedVol) || 1)) : 1.0;
+  const savedVol  = localStorage.getItem('lu_mp_volume');
+  const initVol   = savedVol !== null ? Math.max(0, Math.min(1, Number(savedVol) || 1)) : 1.0;
   const volSlider = document.getElementById('radio-vol');
   if (volSlider) volSlider.value = Math.round(initVol * 100);
   const radioAudio = document.getElementById('radio-audio');
   if (radioAudio) { radioAudio.volume = initVol; radioAudio.muted = false; }
 
-  // Subscribe to Firestore now-playing doc
+  // Subscribe to Firestore now-playing doc (source of truth for master timeline)
   await _subscribeFirestore();
 
-  // Start presence heartbeat
+  // Presence heartbeat
   _startPresence();
 
   // Show admin link for admin/founder users
   _checkAdminLink();
 
+  // Master ticker — checks every 5 s if the current track has expired on the master
+  // timeline, and if so, attempts to advance the station.
+  // This replaces the `audio.ended` → advance pattern to avoid race conditions.
+  _radioState.masterTicker = setInterval(_masterTickerCheck, 5000);
+
   return function _radioCleanup() {
-    if (_radioState.unsubscribe) { try { _radioState.unsubscribe(); } catch {} }
-    if (_radioState.pingInterval)  clearInterval(_radioState.pingInterval);
-    if (_radioState.progressTimer) clearInterval(_radioState.progressTimer);
-    if (_radioState.vizAnimFrame)  cancelAnimationFrame(_radioState.vizAnimFrame);
+    if (_radioState.unsubscribe)   { try { _radioState.unsubscribe(); } catch {} }
+    if (_radioState.pingInterval)   clearInterval(_radioState.pingInterval);
+    if (_radioState.progressTimer)  clearInterval(_radioState.progressTimer);
+    if (_radioState.masterTicker)   clearInterval(_radioState.masterTicker);
+    if (_radioState.vizAnimFrame)   cancelAnimationFrame(_radioState.vizAnimFrame);
     const audio = document.getElementById('radio-audio');
     if (audio) { audio.pause(); audio.src = ''; }
     _leavePresence();
-    _radioState.unsubscribe = null;
-    _radioState.pingInterval = null;
+    _radioState.unsubscribe   = null;
+    _radioState.pingInterval  = null;
     _radioState.progressTimer = null;
-    _radioState.vizAnimFrame = null;
+    _radioState.masterTicker  = null;
+    _radioState.vizAnimFrame  = null;
   };
 }
 
@@ -222,7 +239,6 @@ async function _subscribeFirestore() {
     if (!getFirestore) { _fallbackToApiPoll(); return; }
     const db = await getFirestore();
 
-    // Use modular SDK API (the project uses Firebase ESM v10)
     const { doc, onSnapshot } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
     const docRef = doc(db, 'stationNowPlaying', 'avenoraRadio');
 
@@ -252,7 +268,6 @@ function _fallbackToApiPoll() {
   _showReconnecting(true);
   _pollInterval = setInterval(async () => {
     try {
-      // LegendAPI.request expects (method, path, opts) — no leading /api
       const data = await LegendAPI.request('GET', '/radio/status');
       if (data && data.status) {
         _showReconnecting(false);
@@ -278,6 +293,7 @@ function _apiStatusToDoc(s) {
     trackStartedAt:  s.trackStartedAt || (Date.now() - (t.elapsed || 0) * 1000),
     currentIndex:    s.currentIndex || 0,
     currentTrackId:  t.id || '',
+    queueRevision:   s.queueRevision || 0,
     upcoming:        s.upcoming || [],
     recentlyPlayed:  [],
     serverTime:      Date.now(),
@@ -285,19 +301,51 @@ function _apiStatusToDoc(s) {
   };
 }
 
+// ─── Server clock calibration ────────────────────────────
+/**
+ * Update the rolling server-clock-offset estimate.
+ * serverClockOffset = (localNow - serverTime)
+ * A positive value means our local clock is ahead of the server.
+ * We use the median of the last 5 samples to smooth outliers.
+ */
+function _updateClockOffset(serverTime) {
+  if (!serverTime || typeof serverTime !== 'number') return;
+  const sample = Date.now() - serverTime;
+  const samples = _radioState.clockSamples;
+  samples.push(sample);
+  if (samples.length > 5) samples.shift();
+  // Median of samples
+  const sorted = [...samples].sort((a, b) => a - b);
+  _radioState.serverClockOffset = sorted[Math.floor(sorted.length / 2)];
+}
+
+/**
+ * Returns the current server time in milliseconds,
+ * corrected by our clock-offset estimate.
+ */
+function _serverNow() {
+  return Date.now() - _radioState.serverClockOffset;
+}
+
 // ─── Station update handler ───────────────────────────────
+/**
+ * Called every time the Firestore NowPlaying doc changes.
+ * Responsibilities:
+ *   1. Calibrate server clock offset.
+ *   2. If the track changed → load the new URL seeked to the correct position.
+ *   3. If the same track is playing → only seek if drift > threshold.
+ *   4. NEVER call _tryAdvanceRadio() here — that belongs in _masterTickerCheck.
+ */
 function _onStationUpdate(doc) {
   if (!doc) { _showEmptyState(); return; }
   _radioState.stationDoc = doc;
 
-  // Update clock skew estimate
-  if (doc.serverTime) {
-    _radioState.serverClockOffset = Date.now() - doc.serverTime;
-  }
+  // Calibrate server clock
+  if (doc.serverTime) _updateClockOffset(doc.serverTime);
 
   const status = doc.status || 'stopped';
 
-  // Update station name / tagline
+  // Update station name
   const nameEl = document.getElementById('radio-station-name');
   if (nameEl && doc.stationName) nameEl.textContent = doc.stationName;
 
@@ -308,44 +356,33 @@ function _onStationUpdate(doc) {
     return;
   }
 
-  // Resolve audio URL — try doc.currentUrl first, then fall back to storagePath
+  // Resolve audio URL
   let resolvedUrl = doc.currentUrl || '';
   if (!resolvedUrl && doc.currentStoragePath && window.AvenoraStorage?.getPublicUrl) {
     resolvedUrl = window.AvenoraStorage.getPublicUrl('music', doc.currentStoragePath);
-    if (resolvedUrl) {
-      console.info('[Radio] Resolved currentUrl from currentStoragePath:', doc.currentStoragePath, resolvedUrl);
-    }
   }
   if (!resolvedUrl && doc.currentStoragePath) {
-    // Construct Supabase public URL directly
     const SUPABASE_STORAGE = 'https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public';
     const encoded = doc.currentStoragePath.split('/').map(encodeURIComponent).join('/');
     resolvedUrl = `${SUPABASE_STORAGE}/music/${encoded}`;
-    console.info('[Radio] Constructed Supabase URL from currentStoragePath:', resolvedUrl);
   }
 
   if (status === 'error' || !resolvedUrl) {
     if (status === 'playing' && !resolvedUrl) {
-      // Station claims to be playing but has no URL — log full MEDIA_RECORD_MISSING diagnostic
       console.error('[Radio] MEDIA_RECORD_MISSING', {
         status,
         currentTrackId:     doc.currentTrackId     || '(none)',
         currentTitle:       doc.currentTitle        || '(none)',
         currentUrl:         doc.currentUrl          || '(empty)',
         currentStoragePath: doc.currentStoragePath  || '(none)',
-        stationDocKeys:     Object.keys(doc).join(', '),
-        collectionsChecked: ['stationNowPlaying/avenoraRadio'],
-        hint:               'The station NowPlaying doc has no audio URL. ' +
-                            'Open Radio Admin → click 🔧 Repair to fix broken tracks.',
+        hint: 'Open Radio Admin → click 🔧 Repair to fix broken tracks.',
       });
-      // Try to refresh from the API poll (gives the server a chance to populate the URL)
+      // Try refreshing from the API
       try {
         const apiUrl = window.LU_CONFIG?.apiUrl;
         if (apiUrl) {
           fetch(`${apiUrl}/radio/status`).then(r => r.json()).then(data => {
-            if (data?.currentTrack?.url) {
-              _onStationUpdate(_apiStatusToDoc(data));
-            }
+            if (data?.currentTrack?.url) _onStationUpdate(_apiStatusToDoc(data));
           }).catch(() => {});
         }
       } catch (_) {}
@@ -358,25 +395,46 @@ function _onStationUpdate(doc) {
   _showEmptyState(false);
   _hideError();
 
-  // Compute correct playback offset
-  const adjustedNow       = Date.now() - _radioState.serverClockOffset;
-  const trackStartedAt    = doc.trackStartedAt || (adjustedNow - (doc.currentElapsed || 0) * 1000);
-  const elapsedSec        = Math.max(0, (adjustedNow - trackStartedAt) / 1000);
-  const duration          = doc.currentDuration || 0;
+  // ── Calculate correct playback position ──
+  // trackStartedAt is a Unix ms timestamp set by whoever advanced the station.
+  // We correct for measured clock skew between local and server clocks.
+  const trackStartedAt = doc.trackStartedAt || 0;
+  const elapsedSec     = trackStartedAt > 0
+    ? Math.max(0, (_serverNow() - trackStartedAt) / 1000)
+    : (doc.currentElapsed || 0);
+  const duration = doc.currentDuration || 0;
 
   _updateNowPlaying(doc);
   _updateQueues(doc);
 
-  // Load audio if track changed (compare resolved URL to avoid reloading same track)
-  if (resolvedUrl && resolvedUrl !== _radioState.currentUrl) {
+  const trackChanged = resolvedUrl !== _radioState.currentUrl ||
+                       doc.currentTrackId !== _radioState.currentTrackId;
+
+  if (trackChanged) {
+    // New track — load and seek to the correct server-synchronized position
     _loadAudio(resolvedUrl, elapsedSec, doc.currentTrackId);
+  } else {
+    // Same track is already loaded — only correct drift if > 8 seconds out
+    const audio = document.getElementById('radio-audio');
+    if (audio && audio.readyState >= 2 && !_radioState.isUserPaused) {
+      const drift = Math.abs(audio.currentTime - elapsedSec);
+      if (drift > 8) {
+        console.info('[Radio] Drift correction:', drift.toFixed(1), 's — seeking to', elapsedSec.toFixed(1));
+        audio.currentTime = Math.min(elapsedSec, (audio.duration || Infinity) - 0.5);
+      }
+    }
   }
 
-  // Start progress timer
+  // Restart progress timer with current trackStartedAt
   _startProgressTimer(trackStartedAt, duration);
 }
 
 // ─── Audio loading ────────────────────────────────────────
+/**
+ * Load a new audio URL and seek to `seekTo` seconds.
+ * Only called when the track ACTUALLY changes (URL or trackId differs).
+ * DOES NOT call _tryAdvanceRadio.
+ */
 function _loadAudio(url, seekTo, trackId) {
   const audio = document.getElementById('radio-audio');
   if (!audio) return;
@@ -388,23 +446,28 @@ function _loadAudio(url, seekTo, trackId) {
   audio.src = url;
   audio.load();
 
-  // Ensure correct volume — prefer saved preference, fall back to 1.0
+  // Restore volume
   audio.muted = false;
-  const savedVol = localStorage.getItem('lu_mp_volume');
-  const vol = savedVol !== null ? Math.max(0, Math.min(1, Number(savedVol) || 1)) : 1.0;
-  audio.volume = vol;
-  // Sync the slider
+  const savedVol  = localStorage.getItem('lu_mp_volume');
+  const vol       = savedVol !== null ? Math.max(0, Math.min(1, Number(savedVol) || 1)) : 1.0;
+  audio.volume    = vol;
   const volSlider = document.getElementById('radio-vol');
   if (volSlider) volSlider.value = Math.round(vol * 100);
 
   const attemptPlay = () => {
-    if (seekTo > 1) {
-      audio.currentTime = Math.min(seekTo, (audio.duration || Infinity) - 0.5);
+    // Seek to the server-synchronized position before playing
+    const targetTime = Math.max(0, seekTo);
+    if (targetTime > 1 && isFinite(audio.duration) && audio.duration > 0) {
+      audio.currentTime = Math.min(targetTime, audio.duration - 0.5);
+    } else if (targetTime > 1) {
+      // duration not yet known — seek anyway; browser will clamp
+      audio.currentTime = targetTime;
     }
-    // Resume AudioContext if suspended (mobile requirement)
+
     if (_radioState.audioCtx?.state === 'suspended') {
       _radioState.audioCtx.resume().catch(() => {});
     }
+
     const playPromise = audio.play();
     if (playPromise) {
       playPromise.then(() => {
@@ -412,7 +475,6 @@ function _loadAudio(url, seekTo, trackId) {
         _radioState.isUserPaused = false;
         _hideAutoplayOverlay();
       }).catch((err) => {
-        // Autoplay blocked — show the ▶ Start Listening overlay
         console.info('[Radio] Autoplay blocked:', err.message);
         _setPlayBtn(false);
         _radioState.isUserPaused = true;
@@ -421,170 +483,312 @@ function _loadAudio(url, seekTo, trackId) {
     }
   };
 
-  // canplaythrough is most reliable for seeking before play
   const onReady = () => {
     audio.removeEventListener('canplaythrough', onReady);
     if (!_radioState.isUserPaused) attemptPlay();
   };
 
-  // If the audio is already ready enough, don't wait for canplaythrough
   if (audio.readyState >= 3) {
     if (!_radioState.isUserPaused) attemptPlay();
   } else {
     audio.addEventListener('canplaythrough', onReady);
   }
 
+  // Handle audio errors — log and attempt re-sync from master timeline
   audio.addEventListener('error', (e) => {
-    const ae = document.getElementById('radio-audio');
+    const ae       = document.getElementById('radio-audio');
     const errCode  = ae?.error?.code;
     const errMsg   = ae?.error?.message || '(no message)';
-    const netState = ae?.networkState;
-    const rdyState = ae?.readyState;
     console.error('[Radio] Audio error', {
       errorCode:    errCode,
       errorMessage: errMsg,
-      networkState: netState,
-      readyState:   rdyState,
+      networkState: ae?.networkState,
+      readyState:   ae?.readyState,
       src:          ae?.src?.slice(0, 200) || '(no src)',
       trackId:      _radioState.currentTrackId || '(none)',
-      hint:         errCode === 4 ? 'MEDIA_ERR_SRC_NOT_SUPPORTED — wrong MIME type or CORS issue on Supabase storage' :
-                    errCode === 3 ? 'MEDIA_ERR_DECODE — file may be corrupt' :
-                    errCode === 2 ? 'MEDIA_ERR_NETWORK — network problem fetching audio' :
-                    'Check Supabase bucket policies and file URL',
+      hint: errCode === 4 ? 'MEDIA_ERR_SRC_NOT_SUPPORTED — MIME type or CORS issue' :
+            errCode === 3 ? 'MEDIA_ERR_DECODE — file may be corrupt' :
+            errCode === 2 ? 'MEDIA_ERR_NETWORK — network problem' :
+            'Check Supabase bucket policies and file URL',
     });
-    // Auto-advance on error so one broken track doesn't stop the station
-    _showError('⚠ Audio failed — skipping to next track…');
-    setTimeout(() => { _hideError(); _tryAdvanceRadio(); }, 3000);
+    // Don't advance the station — re-sync will happen via masterTicker or Firestore update
+    _showError('⚠ Audio failed — will retry…');
+    setTimeout(() => {
+      _hideError();
+      // Force a re-sync by re-evaluating the current station doc
+      if (_radioState.stationDoc) _onStationUpdate(_radioState.stationDoc);
+    }, 4000);
   }, { once: true });
 
-  // When a track ends naturally, advance to the next track.
-  // The Firestore onSnapshot fires when the backend advances, but this
-  // is a client-side safety net.
+  /**
+   * CRITICAL: When the listener's audio ends, do NOT advance the global station.
+   *
+   * Instead, re-read the Firestore station doc to determine what the master
+   * timeline is currently broadcasting. The masterTicker handles advancement.
+   *
+   * Rationale: A listener's audio may end early if they joined mid-song and
+   * the audio element's `ended` event fires at the END OF ITS LOADED PORTION,
+   * not at the end of the master station's track. If we advanced from `ended`,
+   * 100 simultaneous listeners would each try to advance the station.
+   */
   audio.addEventListener('ended', () => {
     if (_radioState.isUserPaused) return;
-    _tryAdvanceRadio();
+    console.info('[Radio] Local audio ended — re-syncing with master timeline');
+    // Re-read the current station doc to determine if master has moved
+    _resyncFromMaster();
   }, { once: true });
 
   // Init visualizer once
   if (!_radioState.vizCtx) _initVisualizer(audio);
 }
 
+// ─── Re-sync from master ──────────────────────────────────
 /**
- * Called when the audio element fires 'ended'.
- * Attempts to advance the station to the next track.
+ * Called when local audio ends. Reads the latest Firestore state and
+ * applies it — if the master already advanced to a new track, load it;
+ * if the master is still on the same track, seek back to current position.
+ * DOES NOT write to Firestore.
+ */
+async function _resyncFromMaster() {
+  try {
+    // If we have a cached stationDoc that's fresh enough, use it immediately
+    const doc = _radioState.stationDoc;
+    if (doc) {
+      const now         = _serverNow();
+      const startedAt   = doc.trackStartedAt || 0;
+      const duration    = doc.currentDuration || 0;
+      const masterEnded = duration > 0 && (now - startedAt) / 1000 >= duration;
+
+      if (masterEnded) {
+        // Master should have advanced — give the masterTicker a chance to do it,
+        // or request it now
+        console.info('[Radio] Master track ended — triggering advance check');
+        await _tryAdvanceRadio();
+        return;
+      }
+
+      // Master hasn't ended yet — seek to current master position
+      const elapsedSec = Math.max(0, (now - startedAt) / 1000);
+      const audio = document.getElementById('radio-audio');
+      if (audio && !_radioState.isUserPaused) {
+        // Reload because audio has already ended
+        _loadAudio(_radioState.currentUrl, elapsedSec, _radioState.currentTrackId);
+      }
+      return;
+    }
+
+    // No cached doc — re-read from Firestore
+    const { getFirestore } = window.AvenoraFirebase || {};
+    if (!getFirestore) return;
+    const db = await getFirestore();
+    const { doc: fsDoc, getDoc } =
+      await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+    const snap = await getDoc(fsDoc(db, 'stationNowPlaying', 'avenoraRadio'));
+    if (snap.exists()) _onStationUpdate(snap.data());
+  } catch (e) {
+    console.warn('[Radio] _resyncFromMaster failed:', e.message);
+  }
+}
+
+// ─── Master ticker ────────────────────────────────────────
+/**
+ * Runs every 5 seconds. Checks whether the master station's current track
+ * has exceeded its duration according to the server timeline. If so, calls
+ * _tryAdvanceRadio() to advance the station.
  *
- * Strategy:
- *   1. If a backend is configured — call POST /radio/station/skip to let the engine advance.
- *   2. In production (no backend) — advance directly in Firestore so the Firestore
- *      onSnapshot fires for all listeners (cross-device sync).
+ * This is the ONLY mechanism that advances the station in the Firestore-only
+ * (production, no-backend) path. The audio `ended` event is NOT used for
+ * station advancement.
+ */
+async function _masterTickerCheck() {
+  const doc = _radioState.stationDoc;
+  if (!doc || doc.status !== 'playing') return;
+
+  const duration    = doc.currentDuration || 0;
+  const startedAt   = doc.trackStartedAt  || 0;
+  if (!duration || !startedAt) return;
+
+  const now         = _serverNow();
+  const elapsedSec  = (now - startedAt) / 1000;
+
+  // Allow a small grace period (2 s) past end before advancing
+  if (elapsedSec >= duration + 2) {
+    console.info('[Radio] masterTicker: track expired at', elapsedSec.toFixed(1), '/', duration, '— advancing');
+    await _tryAdvanceRadio();
+  }
+}
+
+// ─── Station advancement ──────────────────────────────────
+/**
+ * Advance the station to the next track.
+ *
+ * RACE CONDITION PROTECTION:
+ *   - Local debounce: if we already attempted an advance within the last 15 s,
+ *     skip silently. The Firestore onSnapshot will fire for all clients once
+ *     the advance is committed.
+ *   - Firestore transaction: reads `queueRevision` and only writes if it hasn't
+ *     changed since we read it. This ensures exactly one client wins when
+ *     multiple clients notice the track ended simultaneously.
+ *
+ * This function is called by _masterTickerCheck and _resyncFromMaster ONLY.
+ * It is NEVER called directly from the audio `ended` event.
  */
 async function _tryAdvanceRadio(skipDepth) {
-  // skipDepth prevents infinite recursion when multiple consecutive tracks have no URL.
   const depth = (skipDepth || 0);
   if (depth > 50) {
     console.warn('[Radio] _tryAdvanceRadio — too many consecutive skips, stopping');
     return;
   }
+
+  // Local debounce — prevent duplicate advances within 15 s
+  const now = Date.now();
+  if (now < _radioState.advanceLockUntil) {
+    console.info('[Radio] _tryAdvanceRadio — suppressed (advance lock active for',
+      Math.ceil((_radioState.advanceLockUntil - now) / 1000), 'more seconds)');
+    return;
+  }
+  _radioState.advanceLockUntil = now + 15000;
+
   try {
+    // Backend path: let the engine handle advancement
     const apiUrl = window.LU_CONFIG?.apiUrl;
     if (apiUrl) {
-      // Backend path: let the engine handle advancement
       const res = await fetch(`${apiUrl}/radio/station/skip`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       }).catch(() => null);
       if (res?.ok) {
-        console.info('[Radio] Track ended — requested station advance via backend');
+        console.info('[Radio] Station advance requested via backend');
       }
       return;
     }
 
-    // Firestore-only path (production): advance the current track index
+    // ── Firestore-only path (production) ──
     if (!window.AvenoraFirebase?.getFirestore) return;
     const db = await window.AvenoraFirebase.getFirestore();
-    const { doc, getDoc, setDoc } =
+    const { doc, runTransaction } =
       await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
 
     const stationRef = doc(db, 'radioStations', 'avenoraRadio');
-    const stationSnap = await getDoc(stationRef);
-    if (!stationSnap.exists()) return;
+    const npRef      = doc(db, 'stationNowPlaying', 'avenoraRadio');
 
-    const stationData = stationSnap.data();
-    const playlist = Array.isArray(stationData.playlist) ? stationData.playlist : [];
-    if (!playlist.length) return;
+    // Use a Firestore transaction so only one concurrent client wins
+    await runTransaction(db, async (tx) => {
+      const stationSnap = await tx.get(stationRef);
+      if (!stationSnap.exists()) return;
 
-    // Always loop: radio station plays forever
-    const currentIdx  = typeof stationData.currentIndex === 'number' ? stationData.currentIndex : 0;
-    const nextIdx     = (currentIdx + 1) % playlist.length;
+      const stationData   = stationSnap.data();
+      const playlist      = Array.isArray(stationData.playlist) ? stationData.playlist : [];
+      if (!playlist.length) return;
 
-    const nextTrack = playlist[nextIdx];
-    if (!nextTrack) {
-      // Corrupt playlist entry — skip again
-      await _tryAdvanceRadio(depth + 1);
-      return;
-    }
+      const currentIdx    = typeof stationData.currentIndex === 'number' ? stationData.currentIndex : 0;
+      const revisionInDoc = stationData.queueRevision || 0;
 
-    // Resolve the next track's URL
-    let nextUrl = nextTrack.url || nextTrack.audioUrl || nextTrack.fileUrl || '';
-    if (!nextUrl && nextTrack.storagePath) {
-      if (window.AvenoraStorage?.getPublicUrl) {
-        nextUrl = window.AvenoraStorage.getPublicUrl('music', nextTrack.storagePath) || '';
+      // Re-check that the track still needs to be advanced inside the transaction.
+      // If another client already advanced (queueRevision changed), abort.
+      const npSnap = await tx.get(npRef);
+      if (npSnap.exists()) {
+        const npData = npSnap.data();
+        if ((npData.queueRevision || 0) > revisionInDoc) {
+          console.info('[Radio] _tryAdvanceRadio — aborted: another client already advanced (revision mismatch)');
+          return;
+        }
       }
+
+      const nextIdx   = (currentIdx + 1) % playlist.length;
+      const nextTrack = playlist[nextIdx];
+      if (!nextTrack) return; // corrupt entry — skip handled outside tx
+
+      // Resolve next track URL
+      let nextUrl = nextTrack.url || nextTrack.audioUrl || nextTrack.fileUrl || '';
+      if (!nextUrl && nextTrack.storagePath) {
+        if (window.AvenoraStorage?.getPublicUrl) {
+          nextUrl = window.AvenoraStorage.getPublicUrl('music', nextTrack.storagePath) || '';
+        }
+        if (!nextUrl) {
+          const SUPABASE_STORAGE = 'https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public';
+          const encoded = nextTrack.storagePath.split('/').map(encodeURIComponent).join('/');
+          nextUrl = `${SUPABASE_STORAGE}/music/${encoded}`;
+        }
+      }
+
       if (!nextUrl) {
-        // Construct Supabase public URL directly as fallback
-        const SUPABASE_STORAGE = 'https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public';
-        const encoded = nextTrack.storagePath.split('/').map(encodeURIComponent).join('/');
-        nextUrl = `${SUPABASE_STORAGE}/music/${encoded}`;
+        // Skip this track and try the next — done outside the transaction
+        console.warn('[Radio] _tryAdvanceRadio — track has no URL, will skip:', nextTrack.id, nextTrack.title);
+        // Write the index advancement so we don't loop forever, but mark as needing another skip
+        const newRevision = revisionInDoc + 1;
+        const tsNow       = Date.now();
+        tx.set(stationRef, { currentIndex: nextIdx, queueRevision: newRevision, updatedAt: tsNow }, { merge: true });
+        tx.set(npRef, {
+          currentIndex:  nextIdx,
+          queueRevision: newRevision,
+          serverTime:    tsNow,
+          updatedAt:     tsNow,
+        }, { merge: true });
+        // After the transaction, try again
+        setTimeout(() => _tryAdvanceRadio(depth + 1), 100);
+        return;
       }
-    }
 
-    if (!nextUrl) {
-      // This track has no playable URL — skip it and try the one after
-      console.warn('[Radio] _tryAdvanceRadio — track has no URL, auto-skipping:', nextTrack.id, nextTrack.title);
-      // Temporarily advance currentIndex in Firestore so we don't get stuck
-      await setDoc(stationRef, { currentIndex: nextIdx, updatedAt: Date.now() }, { merge: true });
-      await _tryAdvanceRadio(depth + 1);
-      return;
-    }
+      const newRevision = revisionInDoc + 1;
+      const tsNow       = Date.now();
 
-    const now = Date.now();
-    const upcoming = [];
-    for (let i = 1; i <= 5; i++) {
-      const t = playlist[(nextIdx + i) % playlist.length];
-      if (t) upcoming.push({ id: t.id, title: t.title, artist: t.artist, coverUrl: t.coverUrl || null, duration: t.duration || 0 });
-    }
+      const upcoming = [];
+      for (let i = 1; i <= 5; i++) {
+        const t = playlist[(nextIdx + i) % playlist.length];
+        if (t) upcoming.push({ id: t.id, title: t.title, artist: t.artist, coverUrl: t.coverUrl || null, duration: t.duration || 0 });
+      }
 
-    // Write updated state to both Firestore documents
-    await setDoc(stationRef, {
-      currentIndex:   nextIdx,
-      trackStartedAt: now,
-      status:         'playing',
-      active:         true,
-      updatedAt:      now,
-    }, { merge: true });
+      // Determine recently played: add current track to front
+      const currentNpData = npSnap.exists() ? npSnap.data() : {};
+      const prevTrack     = currentNpData.currentTitle
+        ? [{
+            id:       currentNpData.currentTrackId  || '',
+            title:    currentNpData.currentTitle     || '',
+            artist:   currentNpData.currentArtist    || '',
+            coverUrl: currentNpData.currentCoverUrl  || null,
+          }, ...(currentNpData.recentlyPlayed || []).slice(0, 4)]
+        : (currentNpData.recentlyPlayed || []).slice(0, 5);
 
-    await setDoc(doc(db, 'stationNowPlaying', 'avenoraRadio'), {
-      status:           'playing',
-      currentTrackId:   nextTrack.id   || '',
-      currentTitle:     nextTrack.title  || '',
-      currentArtist:    nextTrack.artist || '',
-      currentAlbum:     nextTrack.album  || '',
-      currentCoverUrl:  nextTrack.coverUrl || null,
-      currentUrl:       nextUrl,
-      currentDuration:  nextTrack.duration || 0,
-      currentElapsed:   0,
-      trackStartedAt:   now,
-      currentIndex:     nextIdx,
-      playlistLength:   playlist.length,
-      upcoming,
-      recentlyPlayed:   [],
-      serverTime:       now,
-      updatedAt:        now,
-    }, { merge: true });
+      tx.set(stationRef, {
+        currentIndex:   nextIdx,
+        trackStartedAt: tsNow,
+        queueRevision:  newRevision,
+        status:         'playing',
+        active:         true,
+        updatedAt:      tsNow,
+      }, { merge: true });
 
-    console.info('[Radio] _tryAdvanceRadio — Firestore advanced to track', nextIdx, nextTrack.title);
+      tx.set(npRef, {
+        status:          'playing',
+        currentTrackId:  nextTrack.id     || '',
+        currentTitle:    nextTrack.title   || '',
+        currentArtist:   nextTrack.artist  || '',
+        currentAlbum:    nextTrack.album   || '',
+        currentCoverUrl: nextTrack.coverUrl || null,
+        currentUrl:      nextUrl,
+        currentDuration: nextTrack.duration || 0,
+        currentElapsed:  0,
+        trackStartedAt:  tsNow,
+        currentIndex:    nextIdx,
+        queueRevision:   newRevision,
+        playlistLength:  playlist.length,
+        upcoming,
+        recentlyPlayed:  prevTrack,
+        serverTime:      tsNow,
+        updatedAt:       tsNow,
+      }, { merge: true });
+
+      console.info('[Radio] _tryAdvanceRadio — Firestore advanced to track', nextIdx, nextTrack.title,
+        '(revision', newRevision, ')');
+    });
+
   } catch (e) {
-    console.warn('[Radio] _tryAdvanceRadio failed (non-fatal):', e.message);
+    // Transaction aborted (another client won) or network error — both are non-fatal.
+    // The Firestore onSnapshot will fire for all clients once the winning client commits.
+    console.warn('[Radio] _tryAdvanceRadio transaction failed (likely won by another client):', e.message);
+    // Release the local lock immediately so we can re-check
+    _radioState.advanceLockUntil = 0;
   }
 }
 
@@ -592,7 +796,7 @@ async function _tryAdvanceRadio(skipDepth) {
 function _startProgressTimer(trackStartedAt, durationSec) {
   if (_radioState.progressTimer) clearInterval(_radioState.progressTimer);
   _radioState.progressTimer = setInterval(() => {
-    const elapsed  = Math.max(0, (Date.now() - _radioState.serverClockOffset - trackStartedAt) / 1000);
+    const elapsed  = Math.max(0, (_serverNow() - trackStartedAt) / 1000);
     const duration = durationSec || 0;
     const pct      = duration > 0 ? Math.min(100, (elapsed / duration) * 100) : 0;
 
@@ -625,13 +829,11 @@ function _updateNowPlaying(doc) {
     }
   }
 
-  // Playlist count
   const countEl = document.getElementById('radio-playlist-count');
   if (countEl && doc.playlistLength) {
     countEl.textContent = `${doc.playlistLength} TRACKS`;
   }
 
-  // Favorite state
   if (_radioState.currentTrackId) {
     const favBtn = document.getElementById('radio-fav-btn');
     if (favBtn) {
@@ -644,7 +846,6 @@ function _updateNowPlaying(doc) {
 }
 
 function _updateQueues(doc) {
-  // Upcoming
   const upcomingSection = document.getElementById('radio-upcoming-section');
   const upcomingList    = document.getElementById('radio-upcoming-list');
   const upcoming        = doc.upcoming || [];
@@ -665,7 +866,6 @@ function _updateQueues(doc) {
       </div>`).join('');
   }
 
-  // Recently played
   const recentSection = document.getElementById('radio-recent-section');
   const recentList    = document.getElementById('radio-recent-list');
   const recent        = doc.recentlyPlayed || [];
@@ -690,10 +890,10 @@ function _showOnAir(onAir, label = 'ON AIR') {
   const lbl   = document.getElementById('radio-onair-label');
   const badge = document.getElementById('radio-live-badge');
 
-  if (lbl)   lbl.textContent  = label;
-  if (dot)   dot.style.background  = onAir ? '#ff3344' : '#666';
-  if (dot)   dot.style.boxShadow   = onAir ? '0 0 8px #ff3344' : 'none';
-  if (badge) badge.style.display   = onAir ? 'inline-flex' : 'none';
+  if (lbl)   lbl.textContent        = label;
+  if (dot)   dot.style.background   = onAir ? '#ff3344' : '#666';
+  if (dot)   dot.style.boxShadow    = onAir ? '0 0 8px #ff3344' : 'none';
+  if (badge) badge.style.display    = onAir ? 'inline-flex' : 'none';
 
   const playBtn = document.getElementById('radio-play-btn');
   if (playBtn) playBtn.disabled = false;
@@ -726,23 +926,18 @@ window.radioUnlockAutoplay = function () {
   _hideAutoplayOverlay();
   const audio = document.getElementById('radio-audio');
   if (!audio) return;
-  // Resume AudioContext (required by Web Audio API after user gesture)
   if (_radioState.audioCtx?.state === 'suspended') {
     _radioState.audioCtx.resume().catch(() => {});
   }
   _radioState.isUserPaused = false;
-  // If we have a valid station doc, reload to the correct position
   const stDoc = _radioState.stationDoc;
   if (stDoc && stDoc.currentUrl) {
-    const adjustedNow = Date.now() - _radioState.serverClockOffset;
-    const elapsedSec  = stDoc.trackStartedAt
-      ? Math.max(0, (adjustedNow - stDoc.trackStartedAt) / 1000)
+    const elapsedSec = stDoc.trackStartedAt
+      ? Math.max(0, (_serverNow() - stDoc.trackStartedAt) / 1000)
       : 0;
     _loadAudio(stDoc.currentUrl, elapsedSec, stDoc.currentTrackId);
   } else if (audio.src) {
-    audio.play().then(() => {
-      _setPlayBtn(true);
-    }).catch(() => {});
+    audio.play().then(() => { _setPlayBtn(true); }).catch(() => {});
   }
 };
 
@@ -755,6 +950,7 @@ function _showError(msg) {
   const el = document.getElementById('radio-error-msg');
   if (el) { el.textContent = msg; el.classList.remove('hidden'); }
 }
+
 function _hideError() {
   const el = document.getElementById('radio-error-msg');
   if (el) el.classList.add('hidden');
@@ -767,9 +963,7 @@ function _setPlayBtn(playing) {
 
 // ─── Listener presence ────────────────────────────────────
 function _startPresence() {
-  // Join immediately
   _pingPresence();
-  // Ping every 30 s
   _radioState.pingInterval = setInterval(_pingPresence, 30_000);
 }
 
@@ -822,9 +1016,6 @@ function _initVisualizer(audioEl) {
     _radioState.vizAnalyser.fftSize = 128;
     _radioState.vizSource   = _radioState.audioCtx.createMediaElementSource(audioEl);
 
-    // Connect source DIRECTLY to destination so audio is always audible.
-    // The analyser is wired in parallel (source→analyser→destination),
-    // NOT in series — a broken analyser can never silence playback.
     _radioState.vizSource.connect(_radioState.audioCtx.destination);
     _radioState.vizSource.connect(_radioState.vizAnalyser);
     _radioState.vizAnalyser.connect(_radioState.audioCtx.destination);
@@ -855,8 +1046,8 @@ function _drawViz() {
     const barW = (W / bufLen) * 2;
     let x = 0;
     for (let i = 0; i < bufLen; i++) {
-      const bH = (data[i] / 255) * H;
-      const hue = 200 + (i / bufLen) * 40; // blue-cyan range
+      const bH  = (data[i] / 255) * H;
+      const hue = 200 + (i / bufLen) * 40;
       ctx.fillStyle = `hsla(${hue},80%,60%,0.65)`;
       ctx.fillRect(x, H - bH, barW - 1, bH);
       x += barW;
@@ -869,7 +1060,6 @@ function _drawViz() {
 function _buildStars() {
   const bg = document.getElementById('radio-stars-bg');
   if (!bg) return;
-  // Only create stars if reduced-motion not requested
   const noAnim = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   const count  = noAnim ? 30 : 80;
   const frag   = document.createDocumentFragment();
@@ -896,7 +1086,6 @@ window.radioTogglePlay = function () {
   const audio = document.getElementById('radio-audio');
   if (!audio) return;
 
-  // Always dismiss the autoplay overlay on any play interaction
   _hideAutoplayOverlay();
 
   if (_radioState.audioCtx?.state === 'suspended') {
@@ -905,20 +1094,16 @@ window.radioTogglePlay = function () {
 
   if (audio.paused) {
     _radioState.isUserPaused = false;
-    // If we have a valid station doc, reconnect to the current server position
     const stDoc = _radioState.stationDoc;
     if (stDoc && stDoc.currentUrl && stDoc.trackStartedAt) {
-      const adjustedNow  = Date.now() - _radioState.serverClockOffset;
-      const elapsedSec   = Math.max(0, (adjustedNow - stDoc.trackStartedAt) / 1000);
-      // If more than 5 s of drift, reload to resync
+      const elapsedSec = Math.max(0, (_serverNow() - stDoc.trackStartedAt) / 1000);
+      // Reload to resync if drift > 5 s
       if (Math.abs(audio.currentTime - elapsedSec) > 5) {
         _loadAudio(stDoc.currentUrl, elapsedSec, stDoc.currentTrackId);
         return;
       }
     }
-    audio.play().then(() => {
-      _setPlayBtn(true);
-    }).catch(() => {});
+    audio.play().then(() => { _setPlayBtn(true); }).catch(() => {});
   } else {
     audio.pause();
     _radioState.isUserPaused = true;
@@ -932,7 +1117,6 @@ window.radioSetVolume = function (val) {
   const normalized = Math.max(0, Math.min(1, parseInt(val, 10) / 100));
   audio.volume = normalized;
   audio.muted  = false;
-  // Share the same volume key with the Music Hub player so both stay in sync
   try { localStorage.setItem('lu_mp_volume', String(normalized)); } catch (_) {}
 };
 
@@ -945,11 +1129,11 @@ window.radioToggleFavorite = async function () {
   const trackId = _radioState.currentTrackId;
   if (!trackId) return;
 
-  const isFav = _radioState.favoriteTrackIds.has(trackId);
+  const isFav  = _radioState.favoriteTrackIds.has(trackId);
   const action = isFav ? 'remove' : 'add';
 
   try {
-    const token = await _getAuthToken();
+    const token  = await _getAuthToken();
     const apiUrl = window.LU_CONFIG?.apiUrl || '';
     const res = await fetch(`${apiUrl}/radio/favorites`, {
       method: 'POST',

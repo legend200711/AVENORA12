@@ -332,17 +332,19 @@ function _radminRenderPlaylist() {
 // Otherwise write directly to Firestore so the radio player picks up changes.
 
 async function _radminFirestoreSetStatus(patch) {
-  const db = await _radminGetFirestore();
+  const db  = await _radminGetFirestore();
   const { doc, setDoc } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+  const tsNow = Date.now();
   await setDoc(doc(db, 'radioStations', 'avenoraRadio'), {
     ...patch,
-    updatedAt: Date.now(),
+    updatedAt: tsNow,
   }, { merge: true });
-  // Mirror status to stationNowPlaying so the radio player reacts
+  // Mirror status to stationNowPlaying so the radio player reacts.
+  // Always include serverTime so listeners can calibrate their clock offset.
   await setDoc(doc(db, 'stationNowPlaying', 'avenoraRadio'), {
     ...patch,
-    serverTime: Date.now(),
-    updatedAt:  Date.now(),
+    serverTime: tsNow,
+    updatedAt:  tsNow,
   }, { merge: true });
 }
 
@@ -359,23 +361,28 @@ window.radminStartStation = async function () {
         repeat:    document.getElementById('radmin-repeat')?.checked !== false,
       });
     } else {
-      // Production: start the station by updating Firestore state.
-      // The radio player listens to stationNowPlaying and will pick up the first track.
+      // Production: start the station by writing to Firestore.
+      // trackStartedAt is the master station clock — all listeners compute their
+      // playback position as (serverNow - trackStartedAt).
       const playlist = _radminState.playlist;
-      const track = playlist[0];
+      const track    = playlist[0];
+      const tsNow    = Date.now();
+      // Initialise queueRevision so the first advance can be validated.
       await _radminFirestoreSetStatus({
-        status:        'playing',
-        active:        true,
-        currentIndex:  0,
-        trackStartedAt: Date.now(),
-        currentTitle:  track?.title  || '',
-        currentArtist: track?.artist || '',
-        currentUrl:    track?.url    || '',
+        status:          'playing',
+        active:          true,
+        currentIndex:    0,
+        trackStartedAt:  tsNow,
+        queueRevision:   1,
+        currentTitle:    track?.title    || '',
+        currentArtist:   track?.artist   || '',
+        currentUrl:      track?.url      || '',
         currentDuration: track?.duration || 0,
         currentCoverUrl: track?.coverUrl || null,
-        currentTrackId: track?.id || '',
+        currentTrackId:  track?.id       || '',
+        currentTrackIndex: 0,
         playlist,
-        playlistLength: playlist.length,
+        playlistLength:  playlist.length,
         upcoming: playlist.slice(1, 6).map(t => ({
           id: t.id, title: t.title, artist: t.artist, coverUrl: t.coverUrl || null, duration: t.duration || 0,
         })),
@@ -425,20 +432,34 @@ window.radminSkipTrack = async function () {
     if (window.LU_CONFIG?.apiUrl) {
       await _radminFetch('POST', '/radio/station/skip');
     } else {
-      // Advance to next track in Firestore
+      // Advance to next track in Firestore.
+      // Bump queueRevision so the listener-side transaction guard can detect
+      // that the admin already advanced and avoid a double-skip.
       const station = await _radminLoadFirestoreStation();
       if (station && Array.isArray(station.playlist) && station.playlist.length) {
-        const nextIdx = ((station.currentIndex || 0) + 1) % station.playlist.length;
-        const track   = station.playlist[nextIdx];
+        const nextIdx    = ((station.currentIndex || 0) + 1) % station.playlist.length;
+        const track      = station.playlist[nextIdx];
+        const newRevision = (station.queueRevision || 0) + 1;
+        const tsNow       = Date.now();
+
+        const upcoming = [];
+        for (let i = 1; i <= 5; i++) {
+          const t = station.playlist[(nextIdx + i) % station.playlist.length];
+          if (t) upcoming.push({ id: t.id, title: t.title, artist: t.artist, coverUrl: t.coverUrl || null, duration: t.duration || 0 });
+        }
+
         await _radminFirestoreSetStatus({
-          currentIndex:   nextIdx,
-          trackStartedAt: Date.now(),
-          currentTitle:   track?.title  || '',
-          currentArtist:  track?.artist || '',
-          currentUrl:     track?.url    || '',
+          currentIndex:    nextIdx,
+          trackStartedAt:  tsNow,
+          queueRevision:   newRevision,
+          currentTitle:    track?.title    || '',
+          currentArtist:   track?.artist   || '',
+          currentUrl:      track?.url      || '',
           currentDuration: track?.duration || 0,
           currentCoverUrl: track?.coverUrl || null,
-          currentTrackId:  track?.id || '',
+          currentTrackId:  track?.id       || '',
+          upcoming,
+          // Keep recentlyPlayed intact — listeners will see it from their cached doc
         });
       }
     }
