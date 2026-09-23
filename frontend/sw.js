@@ -47,8 +47,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v49';
-const CACHE_NAME  = 'avenora-cache-v49';
+const SW_VERSION  = 'v50';
+const CACHE_NAME  = 'avenora-cache-v50';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -103,7 +103,8 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v46', // v46 — evict: intermediate
   'avenora-cache-v47', // v47 — evict: radio engine master clock, visualizer fix, recovery loop fix
   'avenora-cache-v48', // v48 — evict: radio audio seek race-condition, playlist Firestore membership, Radio↔MusicHub conflict
-  // v49 = current — not in evict list
+  'avenora-cache-v49', // v49 — evict: media ecosystem repair (playlist counts, player coordination, picture/audio CSR)
+  // v50 = current — not in evict list
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',

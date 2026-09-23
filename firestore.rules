@@ -256,7 +256,7 @@ service cloud.firestore {
                         || request.resource.data.createdByUid == 'system');
       allow update: if request.auth != null
                     && (resource.data.createdByUid == request.auth.uid
-                        || resource.data.createdByUid == 'system'
+                        || (resource.data.createdByUid == 'system' && isFounderOrAdmin())
                         || isModeratorOrAbove());
       allow delete: if request.auth != null
                     && (resource.data.createdByUid == request.auth.uid

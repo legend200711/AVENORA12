@@ -1096,27 +1096,32 @@ function renderPlaylistCards() {
 
   const all = [...sysCards, ...userCards];
 
-  // Kick off Firestore realtime count listeners after the HTML is injected into the DOM.
-  // Cancel any previous listener set first to avoid leaking subscriptions.
+  // IMPORTANT: The listener must be started AFTER the returned HTML string has been
+  // injected into the DOM by the caller.  We use setTimeout(0) to defer the setup
+  // past the current synchronous call stack so the id="cosmic-pl-count-*" elements
+  // actually exist when the Firestore snapshot callback first fires.
   _playlistCardCountsCleanup();
 
   if (window.AvenoraFirebase?.Firestore?.listenToPlaylistCardCounts) {
     const ids = all.map(p => p.id);
-    _playlistCardCountsUnsub = window.AvenoraFirebase.Firestore.listenToPlaylistCardCounts(
-      ids,
-      function(countsMap) {
-        for (const [plId, count] of Object.entries(countsMap)) {
-          const countEl = document.getElementById('cosmic-pl-count-' + plId);
-          if (!countEl) continue;
-          if (count === null) {
-            // Still loading — keep the spinner text
-            countEl.textContent = 'Loading…';
-          } else {
-            countEl.textContent = count + ' track' + (count !== 1 ? 's' : '');
+    setTimeout(function() {
+      _playlistCardCountsCleanup(); // cancel any listener started between now and the defer
+      _playlistCardCountsUnsub = window.AvenoraFirebase.Firestore.listenToPlaylistCardCounts(
+        ids,
+        function(countsMap) {
+          for (const [plId, count] of Object.entries(countsMap)) {
+            const countEl = document.getElementById('cosmic-pl-count-' + plId);
+            if (!countEl) continue;
+            if (count === null) {
+              // Still loading — keep the spinner text
+              countEl.textContent = 'Loading…';
+            } else {
+              countEl.textContent = count + ' Song' + (count !== 1 ? 's' : '');
+            }
           }
         }
-      }
-    );
+      );
+    }, 0);
   }
 
   return `
@@ -1331,20 +1336,25 @@ async function renderPlaylists() {
   const systemPlaylists = playlists.filter(p => p.isSystem);
   const userPlaylists   = playlists.filter(p => !p.isSystem);
 
-  // Start Firestore count listeners for all playlist cards (fired async after HTML is in DOM)
+  // Start Firestore count listeners AFTER the HTML is injected into the DOM.
+  // Deferred with setTimeout(0) so the id="cosmic-pl-count-*" elements exist
+  // when the Firestore snapshot callback first fires.
   _playlistTabCountsCleanup();
   if (window.AvenoraFirebase?.Firestore?.listenToPlaylistCardCounts && playlists.length) {
     const ids = playlists.map(p => p.id);
-    _playlistTabCountsUnsub = window.AvenoraFirebase.Firestore.listenToPlaylistCardCounts(
-      ids,
-      function(countsMap) {
-        for (const [plId, count] of Object.entries(countsMap)) {
-          const countEl = document.getElementById('cosmic-pl-count-' + plId);
-          if (!countEl) continue;
-          countEl.textContent = count === null ? 'Loading…' : (count + ' track' + (count !== 1 ? 's' : ''));
+    setTimeout(function() {
+      _playlistTabCountsCleanup();
+      _playlistTabCountsUnsub = window.AvenoraFirebase.Firestore.listenToPlaylistCardCounts(
+        ids,
+        function(countsMap) {
+          for (const [plId, count] of Object.entries(countsMap)) {
+            const countEl = document.getElementById('cosmic-pl-count-' + plId);
+            if (!countEl) continue;
+            countEl.textContent = count === null ? 'Loading…' : (count + ' Song' + (count !== 1 ? 's' : ''));
+          }
         }
-      }
-    );
+      );
+    }, 0);
   }
 
   return `
@@ -3521,6 +3531,12 @@ const MP = {
 function initMusicPlayer() {
   const audio = document.getElementById('mp-audio');
   if (!audio) return;
+  // Guard: remove any previously registered handlers before re-adding them.
+  // Prevents duplicate ended/timeupdate handlers if initMusicPlayer is called more than once.
+  audio.removeEventListener('ended',          mpHandleEnded);
+  audio.removeEventListener('timeupdate',     mpUpdateProgress);
+  audio.removeEventListener('loadedmetadata', mpOnMetadata);
+  audio.removeEventListener('error',          mpHandleAudioError);
 
   MP.favorites = LS.get('lu_mp_favorites', []);
 
@@ -3679,6 +3695,14 @@ window.mpLoadTrack = function (index) {
     }
   } catch (_) {}
 
+  // Pause Cloud Stream iframe if it is playing — local coordination only.
+  try {
+    const csrFrame = document.getElementById('csr-frame');
+    if (csrFrame && csrFrame.contentWindow) {
+      csrFrame.contentWindow.postMessage({ type: 'AVN_PAUSE' }, location.origin);
+    }
+  } catch (_) {}
+
   audio.src = resolvedUrl;
 
   // Ensure audio is not muted and has a proper volume before playing.
@@ -3811,6 +3835,14 @@ window.mpLoadBackendTrack = async function (track, index, context, tracksArray) 
       if (radioBtn) radioBtn.textContent = '▶';
       // Mark as user-paused so Radio doesn't auto-restart on its drift-check
       if (typeof _radioState !== 'undefined') { _radioState.isUserPaused = true; }
+    }
+  } catch (_) {}
+
+  // Pause Cloud Stream iframe if it is playing — local coordination only.
+  try {
+    const csrFrame = document.getElementById('csr-frame');
+    if (csrFrame && csrFrame.contentWindow) {
+      csrFrame.contentWindow.postMessage({ type: 'AVN_PAUSE' }, location.origin);
     }
   } catch (_) {}
 

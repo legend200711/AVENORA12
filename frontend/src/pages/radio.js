@@ -511,6 +511,14 @@ function _loadAudio(url, seekTo, trackId) {
     }
   } catch (_) {}
 
+  // Pause Cloud Stream iframe if it is playing — local coordination only.
+  try {
+    const csrFrame = document.getElementById('csr-frame');
+    if (csrFrame && csrFrame.contentWindow) {
+      csrFrame.contentWindow.postMessage({ type: 'AVN_PAUSE' }, location.origin);
+    }
+  } catch (_) {}
+
   audio.pause();
   audio.src = url;
   audio.load();

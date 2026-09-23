@@ -244,6 +244,18 @@ window.addEventListener('message', async (event) => {
       return;
     }
 
+    // ── AVN_PAUSE: parent SPA is asking us to pause local playback ────────────
+    // This only pauses the local player — it NEVER stops the global channel timeline.
+    if (event.data.type === 'AVN_PAUSE') {
+      if (_player.audio && _player.playing) {
+        _player.audio.pause();
+        _player.playing = false;
+        _setPlayBtn(false);
+        _stopProgressRaf();
+      }
+      return;
+    }
+
     // ── AVN_AUTH_TOKEN: parent confirmed auth state ──────────────────────────
     if (event.data.type === 'AVN_AUTH_TOKEN') {
       // Mark parent as having confirmed auth.  Even a null uid counts —
@@ -1141,11 +1153,12 @@ async function _initListenerForStream(streamId, streamData) {
 
 function _syncListenerToNowPlaying(d) {
   if (!d) return;
-  const url    = d.currentTrackUrl  || d.currentUrl || '';
-  const title  = d.currentTitle     || '—';
-  const artist = d.currentArtist    || '';
-  const dur    = d.currentDuration  || 0;
-  const next   = d.nextTitle || '';
+  const url         = d.currentTrackUrl  || d.currentUrl || '';
+  const title       = d.currentTitle     || '—';
+  const artist      = d.currentArtist    || '';
+  const dur         = d.currentDuration  || 0;
+  const next        = d.nextTitle || '';
+  const contentType = d.contentType || d.currentContentType || '';
 
   _setText('csrPlayerTrackTitle',  title);
   _setText('csrPlayerTrackArtist', artist);
@@ -1154,7 +1167,25 @@ function _syncListenerToNowPlaying(d) {
   const nextEl = _el('csrPlayerNextRow');
   if (nextEl) nextEl.textContent = next ? '▶ Next: ' + next : '';
 
-  // If the track changed, load the new audio
+  // Update artwork area with picture items
+  const artEl = _el('csrPlayerArtwork');
+  const isImage = contentType === 'image' || /\.(jpe?g|png|gif|webp|svg)(\?|$)/i.test(url);
+
+  if (artEl) {
+    if (isImage && url) {
+      artEl.innerHTML = `<img src="${_esc(url)}" alt="${_esc(title)}"
+        style="width:100%;height:100%;object-fit:contain;border-radius:8px;background:#000">`;
+    } else if (contentType === 'audio' || /\.(mp3|wav|flac|aac|ogg|m4a)(\?|$)/i.test(url)) {
+      // Audio-only visual — show a waveform placeholder so the player isn't black
+      artEl.innerHTML = `<div style="width:100%;height:100%;display:flex;flex-direction:column;
+        align-items:center;justify-content:center;background:linear-gradient(135deg,#0a0a1a,#1a0a2a);
+        border-radius:8px;color:#7c5cd8;font-size:2.5rem;gap:8px">
+        🎵<span style="font-size:0.75rem;color:#5a3a8a;letter-spacing:0.1em">AUDIO STREAM</span></div>`;
+    }
+    // For video, leave artwork as-is (video element managed elsewhere, or show title card)
+  }
+
+  // If the track/item changed, load the new media
   if (url && url !== _player.trackUrl) {
     // Cancel any pending engine-stall fallback timer — server has advanced
     if (_engineAdvanceTimer) { clearTimeout(_engineAdvanceTimer); _engineAdvanceTimer = null; }
@@ -1166,7 +1197,23 @@ function _syncListenerToNowPlaying(d) {
       (typeof d.trackStartedAt === 'number' && d.trackStartedAt > 0)
         ? d.trackStartedAt
         : (d.updatedAt?.toMillis ? d.updatedAt.toMillis() : Date.now());
-    _loadAndPlayTrack(url, dur);
+
+    if (isImage) {
+      // Picture item — display for the configured duration then advance
+      _stopPlayerAudio();
+      _player.playing = true;
+      _setPlayBtn(true);
+      _show('csrPlayerOffline', false);
+      const displayDur = dur > 0 ? dur * 1000 : 15000; // default 15s for pictures
+      _player._pictureTimer = setTimeout(() => {
+        _player._pictureTimer = null;
+        if (_engineRunning) return; // server will advance
+        _autoAdvanceQueue();
+      }, displayDur);
+    } else {
+      if (_player._pictureTimer) { clearTimeout(_player._pictureTimer); _player._pictureTimer = null; }
+      _loadAndPlayTrack(url, dur);
+    }
   }
 }
 
@@ -1396,6 +1443,7 @@ function _stopProgressRaf() {
 
 function _stopPlayerAudio() {
   _stopProgressRaf();
+  if (_player._pictureTimer) { clearTimeout(_player._pictureTimer); _player._pictureTimer = null; }
   if (_player.audio) {
     _player.audio.removeEventListener('timeupdate', _updatePlayerProgress);
     _player.audio.removeEventListener('ended', _onTrackEnded);
