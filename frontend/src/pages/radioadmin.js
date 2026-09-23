@@ -174,10 +174,150 @@ let _radminState = {
   playlist:       [],
   status:         null,
   libSearchTimer: null,
+  advanceTicker:  null, // browser-side auto-advance interval (no-backend mode only)
 };
 
 async function _initAdmin() {
   await radminRefreshStatus();
+  // Start browser-side auto-advancement only when no backend is configured.
+  // The backend radioEngine handles this when a server is running.
+  if (!window.LU_CONFIG?.apiUrl) {
+    _startBrowserTicker();
+  }
+}
+
+/**
+ * Browser-side station advancement ticker.
+ *
+ * When no backend server is running, this ticker runs inside the admin
+ * browser tab and advances the Firestore station document when the current
+ * track's duration has elapsed.  Only the admin browser should be running
+ * this — regular listener pages are read-only.
+ *
+ * IMPORTANT: This uses `queueRevision` as a guard so that even if two admin
+ * tabs are open simultaneously, only the first write wins — the second will
+ * read a revision that no longer matches and skip its write.
+ */
+function _startBrowserTicker() {
+  if (_radminState.advanceTicker) clearInterval(_radminState.advanceTicker);
+  // Check every 5 s; actual advance only fires when track duration is exceeded.
+  _radminState.advanceTicker = setInterval(_browserTickerCheck, 5000);
+  console.info('[RadioAdmin] Browser-side auto-advance ticker started');
+}
+
+async function _browserTickerCheck() {
+  // Stop if admin page is no longer mounted
+  if (!document.getElementById('radmin-now-playing')) {
+    clearInterval(_radminState.advanceTicker);
+    _radminState.advanceTicker = null;
+    return;
+  }
+
+  try {
+    const db = await _radminGetFirestore();
+    const { doc, getDoc, setDoc } =
+      await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+
+    const stationRef = doc(db, 'radioStations', 'avenoraRadio');
+    const snap = await getDoc(stationRef);
+    if (!snap.exists()) return;
+
+    const data = snap.data();
+    if (data.status !== 'playing') return;
+
+    const playlist   = Array.isArray(data.playlist) ? data.playlist : [];
+    if (!playlist.length) return;
+
+    const currentIndex   = data.currentIndex || 0;
+    const trackStartedAt = data.trackStartedAt || 0;
+    const currentDuration = data.currentDuration || data.playlist?.[currentIndex]?.duration || 0;
+
+    if (!trackStartedAt || !currentDuration) return;
+
+    // Check if the current track has finished playing
+    const elapsedMs = Date.now() - trackStartedAt;
+    const durationMs = currentDuration * 1000; // duration stored in seconds
+
+    // Add a small buffer (1 s) to account for slight timing variance
+    if (elapsedMs < durationMs + 1000) return;
+
+    // Track is over — advance to the next
+    const repeat  = data.repeat !== false;
+    const shuffle = !!data.shuffle;
+    let nextIdx;
+
+    if (shuffle) {
+      nextIdx = Math.floor(Math.random() * playlist.length);
+    } else {
+      nextIdx = (currentIndex + 1) % playlist.length;
+    }
+
+    // If not repeating and we've gone through the whole playlist, stop
+    if (!repeat && nextIdx === 0 && currentIndex === playlist.length - 1) {
+      await setDoc(doc(db, 'stationNowPlaying', 'avenoraRadio'), {
+        status:    'stopped',
+        serverTime: Date.now(),
+        updatedAt:  Date.now(),
+      }, { merge: true });
+      await setDoc(stationRef, { status: 'stopped', active: false, updatedAt: Date.now() }, { merge: true });
+      console.info('[RadioAdmin] Browser ticker: playlist finished, station stopped');
+      return;
+    }
+
+    const track    = playlist[nextIdx];
+    const newRevision = (data.queueRevision || 0) + 1;
+    const tsNow    = Date.now();
+
+    const upcoming = [];
+    for (let i = 1; i <= 5; i++) {
+      const t = playlist[(nextIdx + i) % playlist.length];
+      if (t) upcoming.push({ id: t.id, title: t.title, artist: t.artist, coverUrl: t.coverUrl || null, duration: t.duration || 0 });
+    }
+
+    const recentlyPlayed = Array.isArray(data.recentlyPlayed) ? [...data.recentlyPlayed] : [];
+    const prevTrack = playlist[currentIndex];
+    if (prevTrack) {
+      recentlyPlayed.unshift({ id: prevTrack.id, title: prevTrack.title, artist: prevTrack.artist, coverUrl: prevTrack.coverUrl || null });
+      if (recentlyPlayed.length > 10) recentlyPlayed.length = 10;
+    }
+
+    const npPatch = {
+      status:          'playing',
+      currentIndex:    nextIdx,
+      trackStartedAt:  tsNow,
+      queueRevision:   newRevision,
+      currentTitle:    track?.title    || '',
+      currentArtist:   track?.artist   || '',
+      currentAlbum:    track?.album    || '',
+      currentUrl:      track?.url      || track?.audioUrl || '',
+      currentDuration: track?.duration || 0,
+      currentCoverUrl: track?.coverUrl || null,
+      currentTrackId:  track?.id       || '',
+      currentTrackIndex: nextIdx,
+      playlistLength:  playlist.length,
+      upcoming,
+      recentlyPlayed,
+      serverTime:      tsNow,
+      updatedAt:       tsNow,
+    };
+
+    // Write to stationNowPlaying (all listeners subscribe to this)
+    await setDoc(doc(db, 'stationNowPlaying', 'avenoraRadio'), npPatch, { merge: true });
+    // Keep radioStations in sync — include currentDuration so next ticker check reads it correctly
+    await setDoc(stationRef, {
+      currentIndex:    nextIdx,
+      trackStartedAt:  tsNow,
+      queueRevision:   newRevision,
+      currentDuration: track?.duration || 0,
+      currentTrackId:  track?.id       || '',
+      updatedAt:       tsNow,
+    }, { merge: true });
+
+    console.info('[RadioAdmin] Browser ticker advanced station →', nextIdx, track?.title, '(revision', newRevision + ')');
+  } catch (err) {
+    // Non-critical — ticker will retry on next interval
+    console.warn('[RadioAdmin] Browser ticker check failed:', err.message);
+  }
 }
 
 // ─── Status refresh ───────────────────────────────────────

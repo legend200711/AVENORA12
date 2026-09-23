@@ -2,15 +2,20 @@
  * AVENORA - Main App Router & Bootstrap
  * Hash-based SPA routing. Each page module registers itself.
  *
- * BUILD: v47 — 2025-01-01
- * radio.js: _resetRadioState on re-open, _pollInterval null fix, AF cancel on reset
- * radioEngine.js: loop-overflow guard in recoverStation
- * firestore.rules: globalMusicLibrary public read for published tracks; communityMix public read
+ * BUILD: v52 — 2025-07-14
+ * Full system repair & stabilization:
+ *   - MusicAPI: Firestore fallback for tracks/albums/artists
+ *   - musicService.js: uses globalMusicLibrary instead of REST API
+ *   - SW: bumped to v52, evicts v51 and all prior caches
+ *   - Firestore rules: cloudStreamTracks any-auth read for community cross-user
+ *   - Profile: avatar versioned URL saved correctly
+ *   - Follow/Unfollow: atomic batch writes verified
+ *   - Radio: stationNowPlaying Firestore sync verified
  */
 
 // Build identifier — visible in DevTools console for version verification
-const AVENORA_BUILD = 'v47-2025-01-01';
-console.info('[AVENORA] Build:', AVENORA_BUILD, '— SW: avenora-cache-v47');
+const AVENORA_BUILD = 'v52-2025-07-14';
+console.info('[AVENORA] Build:', AVENORA_BUILD, '— SW: avenora-cache-v52');
 window.AVENORA_BUILD = AVENORA_BUILD;
 
 (function () {
@@ -144,10 +149,17 @@ window.AVENORA_BUILD = AVENORA_BUILD;
       if (navAvatar) {
         const initial = (user.profile?.displayName || user.username || '?')[0].toUpperCase();
         navAvatar.textContent = initial;
-        if (user.profile?.avatarUrl) {
-          navAvatar.style.backgroundImage = `url(${user.profile.avatarUrl})`;
+        const _navAvatarUrl = (typeof resolveAvatarUrl === 'function')
+          ? resolveAvatarUrl(user)
+          : (user.profile?.avatarUrl || null);
+        if (_navAvatarUrl) {
+          navAvatar.style.backgroundImage = `url(${_navAvatarUrl})`;
           navAvatar.style.backgroundSize = 'cover';
+          navAvatar.style.backgroundPosition = 'center';
           navAvatar.textContent = '';
+        } else {
+          navAvatar.style.backgroundImage = '';
+          navAvatar.textContent = initial;
         }
       }
       // Show admin/founder links

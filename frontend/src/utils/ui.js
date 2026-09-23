@@ -187,12 +187,53 @@
     } catch { return ''; }
   }
 
+  // ─── Avatar URL resolver ──────────────────────────────────
+  // Single shared function for resolving any stored avatar reference to a usable URL.
+  // Handles: full HTTPS URL (already resolved), Supabase storage path, null/empty.
+  // Returns a usable HTTPS URL, or null if nothing is stored.
+  function resolveAvatarUrl(profile) {
+    const raw = profile?.profile?.avatarUrl || profile?.avatarUrl || null;
+    if (!raw) return null;
+    // Already a full URL (blob: excluded intentionally — those break after reload)
+    if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
+    // Relative Supabase storage path e.g. "abc123/avatar.jpg"
+    // Assume avatars bucket (the only bucket used for profile pictures)
+    if (raw && !raw.startsWith('/')) {
+      const encoded = raw.split('/').map(encodeURIComponent).join('/');
+      return `https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public/avatars/${encoded}`;
+    }
+    return null;
+  }
+
+  // ─── Avatar image error handler ───────────────────────────
+  // Called from onerror on any avatar <img>. Replaces the broken image with
+  // an initials placeholder. This is a safety net only — the real fix is the
+  // correct Supabase public URL stored in the profile.
+  function _onAvatarError(img) {
+    if (!img) return;
+    img.onerror = null; // prevent infinite loop
+    const initials = img.dataset.initials || '?';
+    const size     = img.dataset.size     || 'md';
+    const fontSize = size === 'sm' ? '12px' : size === 'lg' ? '24px' : '16px';
+    if (typeof console !== 'undefined') {
+      console.warn('[AVN] Avatar image failed to load — URL:', img.src,
+        '— check Supabase avatars bucket is public and the URL is correct.');
+    }
+    const placeholder = document.createElement('div');
+    placeholder.className = `avatar-placeholder avatar-${size}`;
+    placeholder.style.fontSize = fontSize;
+    placeholder.textContent = initials;
+    img.parentNode && img.parentNode.insertBefore(placeholder, img.nextSibling);
+    img.style.display = 'none';
+  }
+
   // ─── Avatar ───────────────────────────────────────────────
   function avatarHtml(user, size = 'md') {
     if (!user) return `<div class="avatar-placeholder avatar-${size}">?</div>`;
     const initials = (user.profile?.displayName || user.username || '?')[0].toUpperCase();
-    if (user.profile?.avatarUrl) {
-      return `<img class="avatar avatar-${size}" src="${escapeHtml(user.profile.avatarUrl)}" alt="${escapeHtml(user.username)}" loading="lazy">`;
+    const url = resolveAvatarUrl(user);
+    if (url) {
+      return `<img class="avatar avatar-${size}" src="${escapeHtml(url)}" alt="${escapeHtml(user.username || '')}" loading="lazy" data-initials="${escapeHtml(initials)}" data-size="${size}" onerror="_onAvatarError(this)">`;
     }
     return `<div class="avatar-placeholder avatar-${size}" style="font-size:${size === 'sm' ? '12px' : size === 'lg' ? '24px' : '16px'}">${initials}</div>`;
   }
@@ -261,6 +302,8 @@
   global.formatTimeAgo = formatTimeAgo;
   global.formatDate = formatDate;
   global.avatarHtml = avatarHtml;
+  global.resolveAvatarUrl = resolveAvatarUrl;
+  global._onAvatarError = _onAvatarError;
   global.roleBadgeHtml = roleBadgeHtml;
   global.showError = showError;
   global.showLoading = showLoading;

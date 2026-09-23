@@ -105,10 +105,16 @@ registerPage('profile', {
           <div class="sn-profile-top">
             <div class="sn-profile-avatar-wrap">
               <div class="sn-profile-avatar-ring">
-                ${profile.profile?.avatarUrl
-                  ? `<img class="sn-profile-avatar-img" src="${escapeHtml(profile.profile.avatarUrl)}" alt="${escapeHtml(profile.username)}">`
-                  : `<div class="sn-profile-avatar-placeholder">${(profile.username||'?')[0].toUpperCase()}</div>`
-                }
+                ${(function() {
+                  const _avatarUrl = (typeof resolveAvatarUrl === 'function')
+                    ? resolveAvatarUrl(profile)
+                    : (profile.profile?.avatarUrl || null);
+                  const _initials = (profile.username || '?')[0].toUpperCase();
+                  if (_avatarUrl) {
+                    return `<img class="sn-profile-avatar-img" src="${escapeHtml(_avatarUrl)}" alt="${escapeHtml(profile.username)}" data-initials="${escapeHtml(_initials)}" data-size="lg" onerror="_onAvatarError(this)">`;
+                  }
+                  return `<div class="sn-profile-avatar-placeholder">${_initials}</div>`;
+                })()}
               </div>
               ${isOwn ? `<button class="sn-avatar-edit-btn" onclick="SNProfile.editAvatar()" title="Change avatar">📷</button>` : ''}
             </div>
@@ -514,14 +520,45 @@ const SNProfile = {
 
       try {
         if (!window.AvenoraStorage) throw new Error('Storage service not available');
+
+        // Upload to Supabase — result.url is the public HTTPS URL
         const result = await window.AvenoraStorage.uploadAvatar(file);
-        await LegendAPI.users.updateProfile({ avatarUrl: result.url });
+
+        // Verify the upload actually returned a resolvable HTTPS URL
+        if (!result || !result.url || !result.url.startsWith('https://')) {
+          throw new Error(
+            'Upload succeeded but did not return a valid URL. ' +
+            'Check that the Supabase "avatars" bucket is set to PUBLIC and has ' +
+            'an anon INSERT policy. See SUPABASE_SETUP.md for details.'
+          );
+        }
+
+        // uploadAvatar uses a stable path (uid/avatar.jpg). Add a version timestamp
+        // to the stored URL so every device (and every browser cache) fetches the
+        // new image rather than the previously-cached one.
+        const versionedUrl = `${result.url}?v=${Date.now()}`;
+
+        // Save the versioned URL to Firestore (and REST backend if configured).
+        // Storing the version in the URL means all devices see the updated picture.
+        await LegendAPI.users.updateProfile({ avatarUrl: versionedUrl });
+
+        // Update in-memory state immediately
         const user = LegendAPI.auth.getUser();
-        if (user) LegendState.set('user', { ...user, profile: { ...user.profile, avatarUrl: result.url } });
+        if (user) LegendState.set('user', { ...user, profile: { ...user.profile, avatarUrl: versionedUrl } });
+
+        console.info('[AVN] Avatar uploaded successfully:', {
+          supabasePath: result.storagePath,
+          bucket: result.bucket,
+          publicUrl: result.url,
+        });
+
         Toast.success('Avatar updated!');
         navigateTo('profile');
       } catch (err) {
-        console.warn('[AVN] Avatar upload error:', err);
+        console.error('[AVN] Avatar upload error:', {
+          message: err.message,
+          hint: 'If "403" or "network error": check avatars bucket is PUBLIC with anon INSERT policy in Supabase.',
+        });
         Toast.error(err.message || 'Your avatar could not be updated. Please try again.');
       } finally {
         if (btn) { btn.disabled = false; btn.textContent = '📷'; }

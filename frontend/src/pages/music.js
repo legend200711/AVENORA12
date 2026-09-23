@@ -3402,10 +3402,15 @@ window.musicPlayLocalPlaylist = function (id) {
       _plResolvedTracks[id] = fsTracks; // cache for subsequent PLAY ALL / Shuffle calls
       const trackObjs = playable.map(t => ({
         id:          t._docId || t.trackId || t.id,
+        trackId:     t.trackId || t.id,
         title:       t.title || 'Untitled',
-        artistName:  t.artist || '',
-        fileUrl:     t.audioUrl || '',
+        artistName:  t.artist || t.artistName || '',
+        artist:      t.artist || t.artistName || '',
+        fileUrl:     t.audioUrl || t.fileUrl || t.url || '',
+        audioUrl:    t.audioUrl || t.fileUrl || t.url || '',
         storagePath: t.storagePath || '',
+        coverUrl:    t.coverUrl || null,
+        duration:    t.duration || 0,
         _isFirestore: true,
       }));
       mpLoadBackendTrack(trackObjs[0], 0, 'playlist-' + id, trackObjs);
@@ -3485,10 +3490,15 @@ window.musicShufflePlaylist = function (id) {
       _plResolvedTracks[id] = fsTracks;
       const trackObjs = playable.map(t => ({
         id:          t._docId || t.trackId || t.id,
+        trackId:     t.trackId || t.id,
         title:       t.title || 'Untitled',
-        artistName:  t.artist || '',
-        fileUrl:     t.audioUrl || '',
+        artistName:  t.artist || t.artistName || '',
+        artist:      t.artist || t.artistName || '',
+        fileUrl:     t.audioUrl || t.fileUrl || t.url || '',
+        audioUrl:    t.audioUrl || t.fileUrl || t.url || '',
         storagePath: t.storagePath || '',
+        coverUrl:    t.coverUrl || null,
+        duration:    t.duration || 0,
         _isFirestore: true,
       }));
       const shuffled = [...trackObjs].sort(() => Math.random() - 0.5);

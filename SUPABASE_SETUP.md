@@ -28,11 +28,12 @@ also create them manually to ensure the correct `public` setting.
 | `music` | **Yes** | 100 MB | Uploaded audio files |
 | `stream-media` | **Yes** | 100 MB | 24-hour cloud stream media library |
 | `gallery` | **Yes** | 20 MB | Community gallery images |
-| `avatars` | No (private) | 5 MB | User profile pictures (signed URLs) |
+| `avatars` | **Yes** | 10 MB | User profile pictures (public CDN URLs) |
 
-> **Why public?** AVENORA generates public CDN URLs for playback (no token needed
-> for read). Writes are always performed server-side via the service-role key, so
-> setting buckets to public does not allow unauthorized writes.
+> **Why public?** AVENORA uploads avatars **directly from the browser** using the anon
+> key. The bucket must be public so the anon role can INSERT and so the generated
+> public CDN URL is accessible to all users (including other accounts viewing your profile).
+> Profile pictures are not sensitive — they are intended to be seen by everyone.
 
 ---
 
@@ -162,18 +163,30 @@ TO anon
 WITH CHECK (bucket_id = 'gallery');
 ```
 
-### 3.6 `avatars` bucket (private — signed URLs only)
+### 3.6 `avatars` bucket — **REQUIRED for profile pictures**
 
 ```sql
--- No public SELECT policy — all reads use signed URLs generated server-side.
--- INSERT/UPDATE/DELETE are performed by the backend via service-role key.
--- No additional client-side policies needed.
+-- REQUIRED: Allow public read so profile pictures load for all users (including other accounts)
+CREATE POLICY "Public read — avatars"
+ON storage.objects FOR SELECT
+USING (bucket_id = 'avatars');
+
+-- REQUIRED: Allow direct browser uploads (anon key) from the avatar edit button
+CREATE POLICY "Anon insert — avatars"
+ON storage.objects FOR INSERT
+TO anon
+WITH CHECK (bucket_id = 'avatars');
 ```
+
+> **Why public?** Profile pictures must be readable by ALL users — not just the uploader.
+> When Account B views Account A's profile, it must be able to load Account A's avatar.
+> A private bucket would require server-side signed URL generation, which is not available
+> in AVENORA's Firebase + Supabase browser-direct architecture.
 
 > **Security note:** The anon INSERT policies allow any client with the anon key to
 > upload files to these buckets. This is intentional — AVENORA uses Firebase Auth to
-> identify users (stored in the path as `{uid}/...`) and the backend validates ownership
-> before creating media records. Service-role writes bypass RLS automatically.
+> identify users (stored in the path as `{uid}/...`) and the bucket path structure
+> makes ownership implicit. Service-role writes bypass RLS automatically.
 
 ---
 
@@ -212,14 +225,14 @@ https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public/{bucket}/{path
 
 This URL never expires. The backend stores it in MongoDB as `videoUrl` / `url`.
 
-For the **`avatars`** bucket (private), the backend generates a signed URL:
+For the **`avatars`** bucket (public), the CDN URL format is the same:
 
 ```
-https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/sign/{bucket}/{path}?token=...
+https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public/avatars/{uid}/avatar.jpg
 ```
 
-Signed URLs from Supabase expire after 1 hour by default. The backend refreshes
-them on demand via `GET /api/users/:id/avatar-url`.
+This URL never expires. A version timestamp (`?v=timestamp`) is appended when
+updating the avatar so that all browsers fetch the new image instead of the cached one.
 
 ---
 
@@ -335,16 +348,15 @@ These limits are enforced automatically by `ensureBuckets()` in
 After completing setup, verify each item:
 
 - [ ] All 6 buckets exist in Supabase dashboard
-- [ ] `videos`, `thumbnails`, `music`, `stream-media`, `gallery` are set to **public**
-- [ ] `avatars` is set to **private** (RLS enabled, no public SELECT policy)
-- [ ] Public read SELECT policies created for all 5 public buckets
-- [ ] **Anon INSERT policies created for `music`, `videos`, `gallery`, `thumbnails`, `stream-media`** (required for direct browser upload)
+- [ ] `videos`, `thumbnails`, `music`, `stream-media`, `gallery`, `avatars` are ALL set to **public**
+- [ ] Public read SELECT policies created for all 6 public buckets
+- [ ] **Anon INSERT policies created for `music`, `videos`, `gallery`, `thumbnails`, `stream-media`, `avatars`** (required for direct browser upload)
 - [ ] **Supabase Storage CORS includes `POST`, `PATCH`, `OPTIONS` methods** (required for direct browser upload)
 - [ ] `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_ANON_KEY` in `backend/.env`
 - [ ] Backend starts without `[SupabaseStorage] Storage service is not configured` error
 - [ ] Test direct browser upload to `music` bucket succeeds from `https://legend200711.github.io`
 - [ ] Public URL is playable directly in the browser / `<video>` or `<audio>` tag
-- [ ] Avatar signed URL is generated and refreshed by backend
+- [ ] Avatar public CDN URL works — load `https://licuiqxkkfboqezzmsqu.supabase.co/storage/v1/object/public/avatars/{uid}/avatar.jpg` directly in a browser tab
 - [ ] Render backend responds at `https://avenora-backend.onrender.com/health`
 
 ---

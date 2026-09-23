@@ -130,6 +130,28 @@
         { "fieldPath": "isDeleted",     "order": "ASCENDING" },
         { "fieldPath": "createdAt",     "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "tracks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "position", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "tracks",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "position", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "tracks",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "addedByUid", "order": "ASCENDING" },
+        { "fieldPath": "position",   "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

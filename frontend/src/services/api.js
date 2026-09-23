@@ -1566,34 +1566,41 @@
       return get(`/social/following/${targetUid}?page=${page}`);
     },
     updateProfile: async (data) => {
-      // Always persist to the MongoDB backend (the authoritative record for follow
-      // counts, role, and profile fields like avatarUrl / bannerUrl used everywhere).
-      // Additionally mirror to Firestore so Firestore-backed pages stay in sync.
-      let result;
-      try {
-        result = await put('/users/profile', data);
-      } catch (backendErr) {
-        // Backend unavailable — fall back to Firestore-only update
-        console.warn('[AVN] Profile backend update failed, falling back to Firestore:', backendErr.message);
-        if (window.AvenoraFirebase?.Firestore) {
-          const user = LegendState.get('user');
-          if (!user) throw new Error('Not authenticated');
-          await window.AvenoraFirebase.Firestore.upsertProfile(user.id, { profile: { ...user.profile, ...data } });
-          const updated = { ...user, profile: { ...user.profile, ...data } };
+      // Persist to Firestore first (this is the authoritative store in the
+      // Firebase + Supabase architecture). Mirror to REST backend if configured.
+      const user = LegendState.get('user');
+      if (!user) throw new Error('Not authenticated');
+
+      // ── Firestore write (always) ──────────────────────────────────────────────
+      if (window.AvenoraFirebase?.Firestore) {
+        // Build the new profile object — spread existing profile then apply changes.
+        // avatarUrl must be saved at profile.avatarUrl (the canonical field).
+        const newProfile = { ...user.profile };
+        // Map flat data keys to the nested profile sub-document
+        if ('avatarUrl'   in data) newProfile.avatarUrl   = data.avatarUrl;
+        if ('bannerUrl'   in data) newProfile.bannerUrl   = data.bannerUrl;
+        if ('displayName' in data) newProfile.displayName = data.displayName;
+        if ('bio'         in data) newProfile.bio         = data.bio;
+        if ('location'    in data) newProfile.location    = data.location;
+        if ('website'     in data) newProfile.website     = data.website;
+        try {
+          await window.AvenoraFirebase.Firestore.upsertProfile(user.id || user.uid, { profile: newProfile });
+          // Update LegendState immediately so callers see the new value
+          const updated = { ...user, profile: newProfile };
           LegendState.set('user', updated);
-          return { user: updated };
-        }
-        throw backendErr;
-      }
-      // Backend succeeded — mirror to Firestore as a secondary sync (non-critical)
-      try {
-        if (window.AvenoraFirebase?.Firestore) {
-          const user = LegendState.get('user');
-          if (user) {
-            await window.AvenoraFirebase.Firestore.upsertProfile(user.id, { profile: { ...user.profile, ...data } });
+          // Also try the REST backend if it is configured (non-critical)
+          if (BASE_URL) {
+            put('/users/profile', data).catch((_) => {});
           }
+          return { user: updated };
+        } catch (fsErr) {
+          console.error('[AVN] updateProfile — Firestore write failed:', fsErr.code, fsErr.message);
+          throw fsErr;
         }
-      } catch (_) {}
+      }
+
+      // ── REST backend fallback (no Firestore) ─────────────────────────────────
+      const result = await put('/users/profile', data);
       return result;
     },
   };
@@ -1782,27 +1789,125 @@
   };
 
   // ─── Music API ────────────────────────────────────────────
+  // Primary: Firestore globalMusicLibrary (Firebase + Supabase architecture).
+  // Fallback: REST backend (only when BASE_URL is configured and Firestore unavailable).
   const MusicAPI = {
-    tracks: (params = {}) => {
+    async tracks(params = {}) {
+      // Firestore primary path
+      if (window.AvenoraFirebase?.Firestore?.getGlobalLibraryTracks) {
+        try {
+          const opts = { limit: parseInt(params.limit) || 200 };
+          if (params.genre) opts.genre = params.genre;
+          const rawTracks = await window.AvenoraFirebase.Firestore.getGlobalLibraryTracks(opts);
+          // Shape tracks to match the legacy { tracks: [...] } response format
+          const tracks = rawTracks.map(t => ({
+            id:         String(t.trackId || t.id),
+            _id:        String(t.trackId || t.id),
+            title:      t.title       || 'Untitled',
+            artistName: t.artist      || '',
+            artist:     t.artist      || '',
+            albumTitle: t.album       || '',
+            genre:      t.genre       || '',
+            fileUrl:    t.audioUrl    || t.fileUrl || t.url || '',
+            audioUrl:   t.audioUrl    || t.fileUrl || t.url || '',
+            storagePath: t.storagePath || null,
+            coverUrl:   t.coverUrl    || null,
+            duration:   t.duration    || 0,
+            uploadedByUid: t.uploadedByUid || null,
+            uploadedByName: t.uploadedByName || '',
+            createdAt:  t.createdAt,
+          }));
+          return { tracks, total: tracks.length };
+        } catch (fsErr) {
+          console.warn('[AVN] MusicAPI.tracks Firestore failed, trying REST:', fsErr.message);
+        }
+      }
+      // REST backend fallback
       const q = new URLSearchParams(params).toString();
-      return get(`/music/tracks?${q}`);
+      return get(`/music/tracks?${q}`).catch(() => ({ tracks: [], total: 0 }));
     },
-    track: (id) => get(`/music/tracks/${id}`),
-    albums: (params = {}) => {
+
+    async track(id) {
+      // Firestore primary path
+      if (window.AvenoraFirebase?.getFirestore) {
+        try {
+          const db = await window.AvenoraFirebase.getFirestore();
+          const { doc, getDoc } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+          const snap = await getDoc(doc(db, 'globalMusicLibrary', String(id)));
+          if (snap.exists()) {
+            const t = snap.data();
+            return { track: {
+              id: snap.id, _id: snap.id,
+              title: t.title || 'Untitled',
+              artistName: t.artist || '', artist: t.artist || '',
+              albumTitle: t.album || '', genre: t.genre || '',
+              fileUrl: t.audioUrl || t.fileUrl || t.url || '',
+              audioUrl: t.audioUrl || t.fileUrl || t.url || '',
+              storagePath: t.storagePath || null,
+              coverUrl: t.coverUrl || null, duration: t.duration || 0,
+            }};
+          }
+        } catch (_) {}
+      }
+      return get(`/music/tracks/${id}`);
+    },
+
+    async albums(params = {}) {
+      // Albums are derived from globalMusicLibrary by grouping unique album titles.
+      if (window.AvenoraFirebase?.Firestore?.getGlobalLibraryTracks) {
+        try {
+          const rawTracks = await window.AvenoraFirebase.Firestore.getGlobalLibraryTracks({ limit: 200 });
+          const albumMap = {};
+          rawTracks.forEach(t => {
+            const key = (t.album || '').trim();
+            if (!key) return;
+            if (!albumMap[key]) {
+              albumMap[key] = { id: key, title: key, artist: t.artist || '', coverUrl: t.coverUrl || null, trackCount: 0 };
+            }
+            albumMap[key].trackCount++;
+          });
+          const albums = Object.values(albumMap).filter(a => a.trackCount > 0);
+          return { albums, total: albums.length };
+        } catch (fsErr) {
+          console.warn('[AVN] MusicAPI.albums Firestore failed, trying REST:', fsErr.message);
+        }
+      }
       const q = new URLSearchParams(params).toString();
-      return get(`/music/albums?${q}`);
+      return get(`/music/albums?${q}`).catch(() => ({ albums: [], total: 0 }));
     },
-    album: (id) => get(`/music/albums/${id}`),
-    artists: (params = {}) => {
+
+    album: (id) => get(`/music/albums/${id}`).catch(() => null),
+
+    async artists(params = {}) {
+      // Artists are derived from globalMusicLibrary by grouping unique artist names.
+      if (window.AvenoraFirebase?.Firestore?.getGlobalLibraryTracks) {
+        try {
+          const rawTracks = await window.AvenoraFirebase.Firestore.getGlobalLibraryTracks({ limit: 200 });
+          const artistMap = {};
+          rawTracks.forEach(t => {
+            const key = (t.artist || '').trim();
+            if (!key) return;
+            if (!artistMap[key]) {
+              artistMap[key] = { id: key, name: key, coverUrl: t.coverUrl || null, trackCount: 0 };
+            }
+            artistMap[key].trackCount++;
+          });
+          const artists = Object.values(artistMap).filter(a => a.trackCount > 0);
+          return { artists, total: artists.length };
+        } catch (fsErr) {
+          console.warn('[AVN] MusicAPI.artists Firestore failed, trying REST:', fsErr.message);
+        }
+      }
       const q = new URLSearchParams(params).toString();
-      return get(`/music/artists?${q}`);
+      return get(`/music/artists?${q}`).catch(() => ({ artists: [], total: 0 }));
     },
-    artist: (id) => get(`/music/artists/${id}`),
-    playlists: () => get('/music/playlists'),
-    playlist: (id) => get(`/music/playlists/${id}`),
-    like: (id) => post(`/music/tracks/${id}/like`, {}),
+
+    artist: (id) => get(`/music/artists/${id}`).catch(() => null),
+    playlists: () => get('/music/playlists').catch(() => ({ playlists: [] })),
+    playlist: (id) => get(`/music/playlists/${id}`).catch(() => null),
+    like: (id) => post(`/music/tracks/${id}/like`, {}).catch(() => ({})),
     upload: (formData) => upload('/music/upload', formData),
-    search: (q, limit = 20) => get(`/music/search?q=${encodeURIComponent(q)}&limit=${limit}`),
+    search: (q, limit = 20) => get(`/music/search?q=${encodeURIComponent(q)}&limit=${limit}`).catch(() => ({ tracks: [] })),
   };
 
   // ─── Chat API ─────────────────────────────────────────────

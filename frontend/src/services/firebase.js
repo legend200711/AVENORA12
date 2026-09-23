@@ -328,11 +328,11 @@
                 }
                 // Prefer Firestore username; fall back to Auth displayName / email prefix
                 if (fsData.username) updated.username = fsData.username;
-                if (fsData.profile?.displayName || fsData.profile?.avatarUrl) {
+                // Merge the FULL profile from Firestore — not just displayName and avatarUrl
+                if (fsData.profile) {
                   updated.profile = {
                     ...updated.profile,
-                    ...(fsData.profile.displayName ? { displayName: fsData.profile.displayName } : {}),
-                    ...(fsData.profile.avatarUrl   ? { avatarUrl:   fsData.profile.avatarUrl   } : {}),
+                    ...fsData.profile,
                   };
                 }
                 // Always update after Firestore lookup so downstream profile reads
@@ -1481,24 +1481,61 @@
      */
     listenToPlaylist(playlistId, callback) {
       let unsubscribe = null;
-      loadModule('firestore').then(({ collection, query, orderBy, onSnapshot }) => {
+      loadModule('firestore').then(({ collection, query, orderBy, onSnapshot, getDocs }) => {
         getFirestore().then(db => {
+          const onSnap = async (snap) => {
+            try {
+              // If snapshot is empty, do a one-time getDocs check before reporting empty.
+              // This guards against an orderBy-index miss silently returning 0 docs.
+              if (snap.size === 0) {
+                try {
+                  const fallbackSnap = await getDocs(collection(db, 'musicPlaylists', playlistId, 'tracks'));
+                  if (fallbackSnap.size > 0) {
+                    // Index miss — serve tracks without ordering
+                    console.warn('[AVN] listenToPlaylist orderBy index miss — serving unordered tracks for', playlistId);
+                    const raw = fallbackSnap.docs.map(d => ({ _docId: d.id, id: d.id, ...d.data() }));
+                    const resolved = await Promise.all(raw.map(t => _resolvePlaylistTrackUrl(db, t)));
+                    callback(resolved);
+                    return;
+                  }
+                } catch (_) { /* fallback not critical */ }
+                callback([]);
+                return;
+              }
+              const rawTracks = snap.docs.map(d => ({ _docId: d.id, id: d.id, ...d.data() }));
+              const resolvedTracks = await Promise.all(
+                rawTracks.map(t => _resolvePlaylistTrackUrl(db, t))
+              );
+              callback(resolvedTracks);
+            } catch (resolveErr) {
+              console.warn('[AVN] listenToPlaylist resolve error:', resolveErr.message);
+              // Still fire the callback with unresolved data so the UI isn't frozen
+              callback(snap.docs.map(d => ({ _docId: d.id, id: d.id, ...d.data() })));
+            }
+          };
+
+          const onError = async (err) => {
+            console.warn('[AVN] listenToPlaylist error:', err.code, err.message,
+              err.code === 'failed-precondition'
+                ? '— likely a missing Firestore index. Falling back to unordered getDocs.'
+                : '');
+            // On index error, fall back to a simple getDocs without ordering
+            if (err.code === 'failed-precondition' || err.code === 'permission-denied') {
+              try {
+                const fallbackSnap = await getDocs(collection(db, 'musicPlaylists', playlistId, 'tracks'));
+                const raw = fallbackSnap.docs.map(d => ({ _docId: d.id, id: d.id, ...d.data() }));
+                const resolved = await Promise.all(raw.map(t => _resolvePlaylistTrackUrl(db, t)));
+                callback(resolved);
+              } catch (fbErr) {
+                console.warn('[AVN] listenToPlaylist fallback getDocs also failed:', fbErr.message);
+              }
+            }
+          };
+
           unsubscribe = onSnapshot(
             query(collection(db, 'musicPlaylists', playlistId, 'tracks'), orderBy('position', 'asc')),
-            async (snap) => {
-              try {
-                const rawTracks = snap.docs.map(d => ({ _docId: d.id, id: d.id, ...d.data() }));
-                const resolvedTracks = await Promise.all(
-                  rawTracks.map(t => _resolvePlaylistTrackUrl(db, t))
-                );
-                callback(resolvedTracks);
-              } catch (resolveErr) {
-                console.warn('[AVN] listenToPlaylist resolve error:', resolveErr.message);
-                // Still fire the callback with unresolved data so the UI isn't frozen
-                callback(snap.docs.map(d => ({ _docId: d.id, id: d.id, ...d.data() })));
-              }
-            },
-            (err) => console.warn('[AVN] listenToPlaylist error:', err.message)
+            onSnap,
+            onError
           );
         });
       });

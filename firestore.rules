@@ -250,13 +250,15 @@ service cloud.firestore {
     match /musicPlaylists/{playlistId} {
       allow read: if resource.data.visibility == 'shared'
                   || (request.auth != null && resource.data.createdByUid == request.auth.uid)
-                  || resource.data.createdByUid == 'system';
+                  || resource.data.createdByUid == 'system'
+                  || resource.data.isSystem == true;
       allow create: if request.auth != null
                     && (request.resource.data.createdByUid == request.auth.uid
                         || request.resource.data.createdByUid == 'system');
       allow update: if request.auth != null
                     && (resource.data.createdByUid == request.auth.uid
                         || (resource.data.createdByUid == 'system' && isFounderOrAdmin())
+                        || (resource.data.isSystem == true && isFounderOrAdmin())
                         || isModeratorOrAbove());
       allow delete: if request.auth != null
                     && (resource.data.createdByUid == request.auth.uid
