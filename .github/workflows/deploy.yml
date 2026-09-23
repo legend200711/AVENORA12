@@ -130,10 +130,10 @@ jobs:
             echo "  FAIL  direct upload buttons missing from channelstudio.js"
             exit 1
           fi
-          if grep -q "SW_VERSION.*v53\|avenora-cache-v53" frontend/sw.js; then
-            echo "  OK  SW v53 confirmed in sw.js"
+          if grep -q "SW_VERSION.*v55\|avenora-cache-v55" frontend/sw.js; then
+            echo "  OK  SW v55 confirmed in sw.js"
           else
-            echo "  FAIL  sw.js has not been bumped to v53"
+            echo "  FAIL  sw.js has not been bumped to v55"
             exit 1
           fi
 

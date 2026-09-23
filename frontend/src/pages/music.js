@@ -330,8 +330,8 @@ function buildMusicShell() {
     <!-- Track context menu (shared) -->
     <div id="music-track-menu" class="music-track-ctx-menu hidden" role="menu"></div>
 
-    <!-- Hidden audio element -->
-    <audio id="mp-audio" preload="auto" style="display:none"></audio>
+    <!-- Hidden audio element — crossorigin required for Web Audio API with Supabase CDN -->
+    <audio id="mp-audio" preload="auto" crossorigin="anonymous" style="display:none"></audio>
   `;
 }
 
@@ -4323,32 +4323,56 @@ function mpInitVisualizer(audioEl) {
   const canvas = document.getElementById('mp-mini-viz');
   if (!canvas) return;
 
+  // Fully tear down previous graph so we never attach stale nodes.
   mpStopVisualizer();
 
   try {
-    if (!MP._audioCtx) {
+    // Create or reuse the AudioContext — NEVER create a new one per track.
+    if (!MP._audioCtx || MP._audioCtx.state === 'closed') {
       MP._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     }
-    if (MP._audioCtx.state === 'suspended') MP._audioCtx.resume();
+    // Always resume — required on iOS/Android after user interaction.
+    if (MP._audioCtx.state === 'suspended') {
+      MP._audioCtx.resume().catch(() => {});
+    }
 
+    // A MediaElementSource wraps the audio element and re-routes its output
+    // through the Web Audio graph.  Once created for a given element the
+    // node is reused — calling createMediaElementSource a second time on the
+    // same element throws "already connected", so we guard with the stored ref.
+    // On every track-change mpStopVisualizer nulls MP._vizSource so we always
+    // rebuild the graph cleanly.
     if (!MP._vizSource) {
       MP._vizSource = MP._audioCtx.createMediaElementSource(audioEl);
-      // Connect the source directly to the destination so audio is always audible
-      // regardless of whether the analyser chain is set up correctly.
-      // The analyser is inserted in parallel (source → analyser → destination),
-      // NOT in series, so a broken analyser can never silence playback.
-      MP._vizSource.connect(MP._audioCtx.destination);
     }
+
+    // ─── Audio graph ────────────────────────────────────────────────────────
+    // source ──→ destination          (guarantees audible output — always wired)
+    // source ──→ analyser ──→ destination  (parallel branch for visualizer only)
+    //
+    // Connecting source directly to destination BEFORE the analyser branch
+    // means a visualizer failure can NEVER silence playback.
+    MP._vizSource.connect(MP._audioCtx.destination);
 
     MP._vizAnalyser = MP._audioCtx.createAnalyser();
     MP._vizAnalyser.fftSize = 64;
     MP._vizSource.connect(MP._vizAnalyser);
+    // NOTE: analyser does NOT need to connect to destination for the visualizer
+    // to work — getByteFrequencyData reads the data regardless.  But we also
+    // wire it for the case where the direct connection above somehow fails.
     MP._vizAnalyser.connect(MP._audioCtx.destination);
 
     MP._vizCtx = canvas.getContext('2d');
     mpDrawVisualizer();
-  } catch {
-    // AudioContext blocked or unsupported — silent fallback (audio still plays normally)
+  } catch (vizErr) {
+    // Web Audio blocked or CORS error — audio still plays normally via the
+    // <audio> element's own output path (no MediaElementSource = no hijack).
+    console.warn('[AVN MUSIC VIZ] mpInitVisualizer failed (visualizer disabled, audio unaffected):', vizErr?.message || vizErr);
+    // Ensure any partial source node is cleared so the next track can retry.
+    if (MP._vizSource) {
+      try { MP._vizSource.disconnect(); } catch (_) {}
+      MP._vizSource = null;
+    }
   }
 }
 
@@ -4390,8 +4414,16 @@ function mpDrawVisualizer() {
 function mpStopVisualizer() {
   if (MP._vizAnim) { cancelAnimationFrame(MP._vizAnim); MP._vizAnim = null; }
   if (MP._vizAnalyser) {
-    try { MP._vizAnalyser.disconnect(); } catch {}
+    try { MP._vizAnalyser.disconnect(); } catch (_) {}
     MP._vizAnalyser = null;
+  }
+  // Disconnect and release the MediaElementSource so the next call to
+  // mpInitVisualizer can rebuild a clean graph.  Without this, stale
+  // connections accumulate and — crucially — the suspended-context state
+  // on the old node can prevent audio from reaching the speakers.
+  if (MP._vizSource) {
+    try { MP._vizSource.disconnect(); } catch (_) {}
+    MP._vizSource = null;
   }
 }
 

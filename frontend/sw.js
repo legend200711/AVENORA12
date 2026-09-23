@@ -1,5 +1,5 @@
 /**
- * AVENORA — Service Worker v53
+ * AVENORA — Service Worker v55
  *
  * Global stabilization release — 2026.09.23
  * Deployment-aware: detects GitHub Pages vs Firebase Hosting automatically.
@@ -48,8 +48,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v54';
-const CACHE_NAME  = 'avenora-cache-v54';
+const SW_VERSION  = 'v55';
+const CACHE_NAME  = 'avenora-cache-v55';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -109,7 +109,8 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v51', // v51 — evict: full system repair & stabilization
   'avenora-cache-v52', // v52 — evict: music hub/radio/profiles/follow global repair
   'avenora-cache-v53', // v53 — evict: force update for Music Hub audio playback repair
-  // v54 = current — not in evict list
+  'avenora-cache-v54', // v54 — evict: silent audio bug — Web Audio graph & crossOrigin fix
+  // v55 = current — not in evict list
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',

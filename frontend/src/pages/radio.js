@@ -997,12 +997,35 @@ function _checkAdminLink() {
 function _initVisualizer(audioEl) {
   try {
     if (!window.AudioContext && !window.webkitAudioContext) return;
-    _radioState.audioCtx    = new (window.AudioContext || window.webkitAudioContext)();
+
+    // Reuse the existing AudioContext if it is still open — creating a new one
+    // per track wastes resources and can leave suspended orphan contexts.
+    if (!_radioState.audioCtx || _radioState.audioCtx.state === 'closed') {
+      _radioState.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (_radioState.audioCtx.state === 'suspended') {
+      _radioState.audioCtx.resume().catch(() => {});
+    }
+
+    // Guard against calling createMediaElementSource on the same element twice —
+    // that throws "already connected".  Tear down first if the source exists.
+    if (_radioState.vizSource) {
+      try { _radioState.vizSource.disconnect(); } catch (_) {}
+      _radioState.vizSource = null;
+    }
+    if (_radioState.vizAnalyser) {
+      try { _radioState.vizAnalyser.disconnect(); } catch (_) {}
+      _radioState.vizAnalyser = null;
+    }
+
+    _radioState.vizSource   = _radioState.audioCtx.createMediaElementSource(audioEl);
     _radioState.vizAnalyser = _radioState.audioCtx.createAnalyser();
     _radioState.vizAnalyser.fftSize = 128;
-    _radioState.vizSource   = _radioState.audioCtx.createMediaElementSource(audioEl);
 
-    // Signal chain: source → analyser → destination (single output path)
+    // ─── Audio graph ──────────────────────────────────────────────────────────
+    // source ──→ destination          (guarantees audible output — always wired)
+    // source ──→ analyser ──→ destination  (parallel branch for visualizer only)
+    _radioState.vizSource.connect(_radioState.audioCtx.destination);
     _radioState.vizSource.connect(_radioState.vizAnalyser);
     _radioState.vizAnalyser.connect(_radioState.audioCtx.destination);
 
@@ -1010,7 +1033,12 @@ function _initVisualizer(audioEl) {
     if (!canvas) return;
     _radioState.vizCtx = canvas.getContext('2d');
     _drawViz();
-  } catch {}
+  } catch (vizErr) {
+    console.warn('[AVN RADIO VIZ] _initVisualizer failed (visualizer disabled, audio unaffected):', vizErr?.message || vizErr);
+    // Clear partial state so the next call can retry cleanly
+    if (_radioState.vizSource)   { try { _radioState.vizSource.disconnect(); }   catch (_) {} _radioState.vizSource   = null; }
+    if (_radioState.vizAnalyser) { try { _radioState.vizAnalyser.disconnect(); } catch (_) {} _radioState.vizAnalyser = null; }
+  }
 }
 
 function _drawViz() {
