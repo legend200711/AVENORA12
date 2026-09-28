@@ -1,17 +1,17 @@
 {
-  "name": "AVENORA",
+  "name": "AVENORA — Your Digital Universe",
   "short_name": "AVENORA",
-  "description": "AVENORA — A place where everyone belongs. Connection, creativity, positivity, and new beginnings.",
+  "description": "AVENORA — Your Digital Universe. A unique social and creative digital universe for connection, creativity, and community.",
   "start_url": "index.html",
   "scope": "./",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui", "browser"],
-  "background_color": "#090807",
-  "theme_color": "#090807",
+  "background_color": "#000007",
+  "theme_color": "#000007",
   "orientation": "portrait-primary",
   "id": "avenora-app",
   "lang": "en",
-  "categories": ["entertainment", "social", "music"],
+  "categories": ["social", "entertainment", "lifestyle"],
   "icons": [
     {
       "src": "icons/icon-192.png",
@@ -52,27 +52,31 @@
   ],
   "shortcuts": [
     {
-      "name": "AVENORA Feed",
+      "name": "Universe Feed",
       "short_name": "Feed",
+      "description": "Browse the Universe Feed",
       "url": "index.html#social",
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     },
     {
-      "name": "AVENORA Music",
-      "short_name": "Music",
-      "url": "index.html#music",
+      "name": "Discover Universe",
+      "short_name": "Discover",
+      "description": "Discover people, rooms and content",
+      "url": "index.html#discover",
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     },
     {
-      "name": "AVENORA Channel",
-      "short_name": "Channel",
-      "url": "index.html#channel",
+      "name": "Universe Rooms",
+      "short_name": "Rooms",
+      "description": "Join community rooms",
+      "url": "index.html#rooms",
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     },
     {
-      "name": "AVENORA Arcade",
-      "short_name": "Arcade",
-      "url": "index.html#arcade",
+      "name": "Creator Gallery",
+      "short_name": "Gallery",
+      "description": "Browse and share creative works",
+      "url": "index.html#gallery",
       "icons": [{ "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png" }]
     }
   ],

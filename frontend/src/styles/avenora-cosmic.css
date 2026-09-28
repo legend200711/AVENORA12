@@ -86,12 +86,12 @@
    ═══════════════════════════════════════════════════════════ */
 body {
   background:
-    radial-gradient(ellipse 80% 60% at 15% 10%,  rgba(140,90,10,0.12)  0%, transparent 60%),
-    radial-gradient(ellipse 70% 50% at 85% 90%,  rgba(0,80,160,0.13)   0%, transparent 60%),
-    radial-gradient(ellipse 55% 50% at 50% 50%,  rgba(20,8,50,0.35)    0%, transparent 65%),
-    radial-gradient(ellipse 40% 35% at 25% 75%,  rgba(0,40,100,0.12)   0%, transparent 55%),
-    radial-gradient(ellipse 35% 28% at 78% 18%,  rgba(100,60,0,0.10)   0%, transparent 50%),
-    radial-gradient(ellipse 100% 100% at 50% 50%, #04030a 0%, #060410 45%, #040308 100%);
+    radial-gradient(ellipse 70% 50% at 20% 15%,  rgba(0,40,160,0.14)   0%, transparent 60%),
+    radial-gradient(ellipse 60% 45% at 80% 85%,  rgba(0,60,200,0.12)   0%, transparent 60%),
+    radial-gradient(ellipse 50% 40% at 50% 50%,  rgba(10,5,40,0.40)    0%, transparent 65%),
+    radial-gradient(ellipse 35% 28% at 30% 70%,  rgba(0,20,80,0.12)    0%, transparent 55%),
+    radial-gradient(ellipse 30% 25% at 75% 20%,  rgba(0,30,100,0.08)   0%, transparent 50%),
+    radial-gradient(ellipse 100% 100% at 50% 50%, #000007 0%, #020210 50%, #05041a 100%);
   background-attachment: fixed;
 }
 

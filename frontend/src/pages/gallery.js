@@ -9,20 +9,20 @@ registerPage('gallery', {
     const user = LegendAPI.auth.getUser();
 
     container.innerHTML = `
-      <div style="padding:var(--space-lg)">
-        <div class="page-header" style="padding-top:var(--space-xl);padding-bottom:var(--space-lg)">
-          <h1 style="font-family:var(--font-display);letter-spacing:0.1em">
-            <span style="color:var(--neon-green)">AVENORA</span> GALLERY
-          </h1>
-          <p class="tagline">VISUAL SHOWCASE</p>
-        </div>
+    <div style="padding:var(--space-lg)">
+      <div class="page-header" style="padding-top:var(--space-xl);padding-bottom:var(--space-lg)">
+        <h1 style="font-family:var(--font-display);letter-spacing:0.1em">
+          <span style="background:linear-gradient(135deg,#0066ff,#00aaff,#00ff88);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">CREATOR</span> GALLERY
+        </h1>
+        <p class="tagline">SHOWCASE YOUR CREATIONS · ARTWORK · PHOTOGRAPHY · PROJECTS</p>
+      </div>
 
         <div class="container-lg">
           <!-- Upload + filters -->
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:var(--space-md);margin-bottom:var(--space-xl)">
             <div class="tabs" style="margin:0;border-bottom:none;gap:var(--space-sm);flex-wrap:wrap">
-              ${['All','Artwork','Wallpapers','Album Art','Promotional','Community'].map((c,i) => {
-                const val = i === 0 ? 'all' : c.toLowerCase().replace(' ', '-');
+              ${['All','Artwork','Photography','Design','Writing','Video','Other'].map((c,i) => {
+                const val = i === 0 ? 'all' : c.toLowerCase();
                 return `<button class="tab-btn ${i===0?'active':''}" onclick="filterGallery('${val}',this)">${c}</button>`;
               }).join('')}
             </div>
@@ -71,10 +71,11 @@ registerPage('gallery', {
                 <label class="form-label">Category</label>
                 <select class="form-input" id="gallery-category">
                   <option value="artwork">Artwork</option>
-                  <option value="wallpapers">Wallpapers</option>
-                  <option value="album-art">Album Art</option>
-                  <option value="promotional">Promotional</option>
-                  <option value="community">Community</option>
+                  <option value="photography">Photography</option>
+                  <option value="design">Design</option>
+                  <option value="writing">Writing</option>
+                  <option value="video">Video</option>
+                  <option value="other">Other</option>
                 </select>
               </div>
               <div class="form-group">

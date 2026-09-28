@@ -2,22 +2,20 @@
  * AVENORA - Main App Router & Bootstrap
  * Hash-based SPA routing. Each page module registers itself.
  *
- * BUILD: v53 — 2026-09-23 (global stabilization)
- * Global update — all repairs deployed across all devices:
- *   - MusicAPI: Firestore fallback for tracks/albums/artists
- *   - Music Hub: playlist play/shuffle — coverUrl, audioUrl, trackId mapping fixed
- *   - Radio: browser-side ticker + queueRevision guard (no backend required)
- *   - 24-Hour Cloud Radio: continuous playback, drift correction, recovery loop
- *   - Profiles: avatar versioned URL (?v=timestamp) saved to Firestore
- *   - Follow/Unfollow: atomic batch writes with correct UID validation
- *   - Firestore rules: musicPlaylists isSystem, cloudStreamTracks auth-read
- *   - Firestore indexes: tracks/position COLLECTION + COLLECTION_GROUP
- *   - SW: bumped to v53, evicts v52 and all prior caches
+ * BUILD: v54 — 2026-10-01 (Universe redesign)
+ * Universe redesign — AVENORA becomes Your Digital Universe:
+ *   - Removed Music Hub, Cloud Stream, Radio, Channel from primary UX
+ *   - Added Universe Home, Moments, Universe Rooms, Discover Universe
+ *   - Added Challenges, Collections, Notifications Center
+ *   - New cosmic design system: electric blue / neon green / deep black
+ *   - Rebranded: Universe Feed, Creator Gallery, My Universe, Founder Control
+ *   - PWA manifest updated to new AVENORA identity
+ *   - SW: bumped to v54, evicts v53 and all prior caches
  */
 
 // Build identifier — visible in DevTools console for version verification
-const AVENORA_BUILD = 'v53-2026-09-23';
-console.info('[AVENORA] Build:', AVENORA_BUILD, '— SW: avenora-cache-v53');
+const AVENORA_BUILD = 'v56-2026-10-01';
+console.info('[AVENORA] Build:', AVENORA_BUILD, '— SW: avenora-cache-v56');
 window.AVENORA_BUILD = AVENORA_BUILD;
 
 (function () {
@@ -76,30 +74,37 @@ window.AVENORA_BUILD = AVENORA_BUILD;
     // Update header subtitle
     const subtitleMap = {
       hub:            'HOME',
-      social:         'FEED',
+      social:         'UNIVERSE FEED',
       video:          'VIDEO',
       live:           'LIVE',
       'live-room':    'LIVE ROOM',
-      channel:        '24-HOUR CHANNEL',
+      moments:        'MOMENTS',
+      rooms:          'UNIVERSE ROOMS',
+      discover:       'DISCOVER UNIVERSE',
+      challenges:     'CHALLENGES',
+      collections:    'COLLECTIONS',
+      notifications:  'NOTIFICATIONS',
+      arcade:         'ARCADE',
+      chat:           'MESSAGES',
+      gallery:        'CREATOR GALLERY',
+      admin:          'FOUNDER CONTROL',
+      search:         'DISCOVER',
+      profile:        'MY UNIVERSE',
+      settings:       'SETTINGS',
+      customize:      'CUSTOMIZE',
+      auth:           'SIGN IN',
+      // Legacy (kept for backward compat, not in main nav)
+      dj:             'DJ SYSTEM',
+      radio:          'AVENORA RADIO',
+      radioadmin:     'RADIO ADMIN',
+      channel:        'CHANNEL',
       channelstudio:  'CHANNEL STUDIO',
       cloudstream:    'CLOUD STREAM',
       cloudstudio:    'CREATOR STUDIO',
-      dj:             'DJ SYSTEM',
       music:          'MUSIC HUB',
-      radio:          'AVENORA RADIO',
-      radioadmin:     'RADIO ADMIN',
-      arcade:         'ARCADE',
-      chat:           'CHAT',
-      gallery:        'GALLERY',
-      admin:          'FOUNDER CONTROL',
-      search:         'SEARCH',
-      profile:        'PROFILE',
-      settings:       'SETTINGS',
-      customize:      'CUSTOMIZE AVENORA',
-      auth:           'SIGN IN',
     };
     const subtitle = document.getElementById('nav-subtitle');
-    if (subtitle) subtitle.textContent = subtitleMap[pageName] || 'HUB CORE';
+    if (subtitle) subtitle.textContent = subtitleMap[pageName] || 'YOUR DIGITAL UNIVERSE';
 
     // Update back button visibility
     const backBtn = document.getElementById('btn-back');
@@ -111,12 +116,22 @@ window.AVENORA_BUILD = AVENORA_BUILD;
 
     const module = pageRegistry[pageName];
     if (!module) {
+      // Legacy pages that are no longer in main nav
+      const _legacyRedirects = {
+        music: 'gallery', cloudstream: 'hub', cloudstudio: 'hub',
+        channel: 'hub', channelstudio: 'admin', dj: 'hub',
+      };
+      const _legacyTarget = _legacyRedirects[pageName];
+      if (_legacyTarget) {
+        navigateTo(_legacyTarget);
+        return;
+      }
       container.innerHTML = `
         <div class="error-state" style="min-height:60vh">
           <div class="error-icon">🌌</div>
-          <h3>Page Not Found</h3>
-          <p>This section doesn't exist yet or hasn't been loaded.</p>
-          <button class="btn btn-primary" onclick="navigateTo('hub')">Return to Hub</button>
+          <h3>Section Not Found</h3>
+          <p>This destination doesn't exist. Explore your digital universe instead.</p>
+          <button class="btn btn-primary" onclick="navigateTo('hub')">Return to Universe Home</button>
         </div>
       `;
       return;
@@ -142,7 +157,6 @@ window.AVENORA_BUILD = AVENORA_BUILD;
     const navUsername = document.getElementById('nav-username');
     const navAvatar = document.getElementById('nav-avatar');
     const adminLink = document.getElementById('admin-link');
-    const channelStudioLink = document.getElementById('channel-studio-link');
 
     if (user) {
       if (userDropdown) userDropdown.style.display = 'flex';
@@ -164,18 +178,14 @@ window.AVENORA_BUILD = AVENORA_BUILD;
           navAvatar.textContent = initial;
         }
       }
-      // Show admin/founder links
+      // Show founder control link for admins/founders
       if (adminLink && ['founder', 'admin'].includes(user.role)) {
         adminLink.style.display = 'flex';
-      }
-      if (channelStudioLink && ['founder', 'admin'].includes(user.role)) {
-        channelStudioLink.style.display = 'flex';
       }
     } else {
       if (userDropdown) userDropdown.style.display = 'none';
       if (authBtn) authBtn.style.display = 'flex';
       if (adminLink) adminLink.style.display = 'none';
-      if (channelStudioLink) channelStudioLink.style.display = 'none';
     }
   }
 
@@ -220,7 +230,7 @@ window.AVENORA_BUILD = AVENORA_BUILD;
   function initSearch() {
     const handleSearch = debounce(async (query) => {
       if (!query.trim() || query.length < 2) return;
-      navigateTo('search');
+      navigateTo('discover');
       LegendState.set('searchQuery', query);
     }, 400);
 
@@ -231,7 +241,7 @@ window.AVENORA_BUILD = AVENORA_BUILD;
     ['search-input-desktop', 'search-input-mobile'].forEach(id => {
       document.getElementById(id)?.addEventListener('keydown', e => {
         if (e.key === 'Enter' && e.target.value.trim()) {
-          navigateTo('search');
+          navigateTo('discover');
           LegendState.set('searchQuery', e.target.value.trim());
         }
       });
@@ -501,6 +511,8 @@ window.AVENORA_BUILD = AVENORA_BUILD;
         updateNavAuthState(user);
         if (user) loadNotifications();
       });
+      // Signal intro animation to dismiss — Firebase auth check is complete
+      window.dispatchEvent(new CustomEvent('lu:auth-ready'));
     } else {
       // Legacy fallback: REST-based session restore
       if (LegendAPI.auth.isLoggedIn()) {
@@ -626,88 +638,6 @@ window.AVENORA_BUILD = AVENORA_BUILD;
       }
     });
   }
-
-  // ─── Mini Radio Player (global persistent) ───────────────────
-  // Shown when the user navigated away from the radio page while audio is playing.
-  // Subscribes to the Firestore stationNowPlaying doc and shows/hides based on
-  // whether there is an active audio element from the radio page.
-  (function initMiniRadioPlayer() {
-    let _miniUnsubscribe = null;
-    let _miniVisible = false;
-
-    function _updateMiniTrack(title, artist) {
-      const el = document.getElementById('radio-mini-track');
-      if (el) el.textContent = artist ? `${title} • ${artist}` : title;
-    }
-
-    function _showMini(show) {
-      const el = document.getElementById('radio-mini-player');
-      if (!el) return;
-      _miniVisible = show;
-      el.classList.toggle('hidden', !show);
-    }
-
-    function _syncMiniPlayBtn() {
-      const audio = document.getElementById('radio-audio');
-      const btn   = document.getElementById('radio-mini-play');
-      if (btn) btn.textContent = (audio && !audio.paused) ? '⏸' : '▶';
-    }
-
-    // Listen to the Firestore doc for now-playing updates (modular SDK)
-    async function _subscribeMini() {
-      try {
-        const { getFirestore } = window.AvenoraFirebase || {};
-        if (!getFirestore) return;
-        const db = await getFirestore();
-        const { doc, onSnapshot } = await import(
-          'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js'
-        );
-        _miniUnsubscribe = onSnapshot(
-          doc(db, 'stationNowPlaying', 'avenoraRadio'),
-          (snap) => {
-            if (!snap.exists()) return;
-            const d = snap.data();
-            if (d.status === 'playing' && d.currentTitle) {
-              _updateMiniTrack(d.currentTitle, d.currentArtist || '');
-            }
-          },
-          () => {}
-        );
-      } catch {}
-    }
-
-    // Show the mini player whenever user navigates away from the radio page
-    // but audio is still loaded/playing.
-    window.addEventListener('hashchange', () => {
-      const page    = (location.hash.replace('#', '') || 'hub').split('/')[0];
-      const audio   = document.getElementById('radio-audio');
-      const hasAudio = audio && audio.src && !audio.ended;
-
-      if (page !== 'radio' && hasAudio) {
-        _showMini(true);
-        _syncMiniPlayBtn();
-        if (!_miniUnsubscribe) _subscribeMini();
-      } else {
-        _showMini(false);
-      }
-    });
-
-    // Global mini player controls (referenced in index.html)
-    window.radioMiniTogglePlay = function () {
-      const audio = document.getElementById('radio-audio');
-      if (!audio || !audio.src) { navigateTo('radio'); return; }
-      if (audio.paused) { audio.play().catch(() => {}); }
-      else              { audio.pause(); }
-      _syncMiniPlayBtn();
-    };
-
-    window.radioMiniClose = function () {
-      const audio = document.getElementById('radio-audio');
-      if (audio) { audio.pause(); audio.src = ''; }
-      _showMini(false);
-      if (_miniUnsubscribe) { _miniUnsubscribe(); _miniUnsubscribe = null; }
-    };
-  })();
 
   // Run after DOM is ready
   if (document.readyState === 'loading') {

@@ -24,16 +24,32 @@
   --bg-elevated:  rgba(22,18,38,0.88);
   --bg-overlay:   rgba(4,3,10,0.92);
 
-  /* ── Legacy neon aliases → Cosmic accents ─────────────── */
-  /* These keep every existing reference working while adopting
-     the cosmic palette.  Components can opt into cs-* tokens. */
-  --neon-blue:      #c9a84c;        /* cosmic gold */
-  --neon-blue-dim:  #a07830;
-  --neon-green:     #00ccff;        /* cosmic cyan */
-  --neon-green-dim: #0088bb;
-  --neon-purple:    #7c5cd8;        /* cosmic violet */
+  /* ── Universe Electric Blue + Neon Green (new primary palette) */
+  --univ-blue:          #0066ff;
+  --univ-blue-bright:   #1a7fff;
+  --univ-blue-electric: #00aaff;
+  --univ-blue-glow:     rgba(0,102,255,0.45);
+  --univ-green:         #00ff88;
+  --univ-green-dim:     #00cc66;
+  --univ-purple:        #6633cc;
+  --univ-text:          #e8f0ff;
+  --univ-text-muted:    #6a7a9a;
+  --univ-card:          rgba(8,12,35,0.82);
+  --univ-border:        rgba(0,102,255,0.16);
+  --univ-border-glow:   rgba(0,170,255,0.30);
+  --univ-border-green:  rgba(0,255,136,0.20);
+  --univ-void:          #000007;
+  --univ-deep:          #020210;
+
+  /* ── Legacy neon aliases — kept for backward compat ─────── */
+  /* Mapped to Universe palette so all existing components work */
+  --neon-blue:      #00aaff;        /* universe electric blue */
+  --neon-blue-dim:  #0066ff;
+  --neon-green:     #00ff88;        /* universe neon green */
+  --neon-green-dim: #00cc66;
+  --neon-purple:    #6633cc;        /* universe purple */
   --neon-red:       #c0394a;
-  --neon-orange:    #c9a84c;
+  --neon-orange:    #00aaff;
 
   /* ── Text ──────────────────────────────────────────────── */
   --text-primary:   #f0e8d8;
@@ -191,35 +207,35 @@ h3 { font-size: clamp(1.1rem, 2.5vw, 1.5rem); }
 .btn:disabled { opacity: 0.45; pointer-events: none; }
 
 .btn-primary {
-  background: linear-gradient(135deg, var(--avenora-bronze), #4a3318);
-  color: var(--avenora-ivory);
-  border-color: var(--avenora-bronze);
+  background: linear-gradient(135deg, #0055dd, #0088ff);
+  color: #ffffff;
+  border-color: #0066ff;
 }
 .btn-primary:hover {
-  background: linear-gradient(135deg, var(--avenora-gold), var(--avenora-bronze));
-  box-shadow: var(--glow-blue);
+  background: linear-gradient(135deg, #0066ff, #00aaff);
+  box-shadow: 0 0 18px rgba(0,102,255,0.40);
   text-decoration: none;
 }
 
 .btn-green {
-  background: linear-gradient(135deg, #21483c, #152e26);
-  color: var(--avenora-ivory);
-  border-color: #21483c;
+  background: linear-gradient(135deg, #006644, #00aa66);
+  color: #ffffff;
+  border-color: #00ff88;
 }
 .btn-green:hover {
-  background: linear-gradient(135deg, #2e6b55, #21483c);
-  box-shadow: var(--glow-green);
+  background: linear-gradient(135deg, #00aa66, #00ff88);
+  box-shadow: 0 0 18px rgba(0,255,136,0.35);
   text-decoration: none;
 }
 
 .btn-outline {
   background: transparent;
-  color: var(--avenora-gold);
-  border-color: var(--avenora-bronze);
+  color: var(--univ-blue-electric, #00aaff);
+  border-color: rgba(0,102,255,0.35);
 }
 .btn-outline:hover {
-  background: rgba(184,149,75,0.09);
-  border-color: var(--avenora-gold);
+  background: rgba(0,102,255,0.08);
+  border-color: rgba(0,170,255,0.50);
   text-decoration: none;
 }
 
@@ -252,8 +268,8 @@ h3 { font-size: clamp(1.1rem, 2.5vw, 1.5rem); }
 }
 .form-input:focus {
   outline: none;
-  border-color: var(--avenora-bronze);
-  box-shadow: 0 0 0 3px rgba(184,149,75,0.15);
+  border-color: var(--univ-blue-electric, #00aaff);
+  box-shadow: 0 0 0 3px rgba(0,102,255,0.15);
 }
 .form-input::placeholder { color: var(--text-muted); }
 textarea.form-input { resize: vertical; min-height: 80px; }
@@ -264,10 +280,10 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   position: fixed;
   top: 0; left: 0; right: 0;
   height: 60px;
-  background: rgba(9,8,7,0.96);
+  background: rgba(0,0,10,0.96);
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
-  border-bottom: 1px solid rgba(184,149,75,0.20);
+  border-bottom: 1px solid rgba(0,102,255,0.18);
   display: flex;
   align-items: center;
   gap: var(--space-md);
@@ -317,7 +333,7 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   background: var(--bg-elevated);
   text-decoration: none;
 }
-.nav-link.active { color: var(--avenora-gold); }
+.nav-link.active { color: var(--univ-blue-electric, #00aaff); }
 
 .nav-actions { display: flex; align-items: center; gap: var(--space-sm); margin-left: auto; }
 
@@ -326,9 +342,9 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   display: none;
   position: fixed;
   bottom: 0; left: 0; right: 0;
-  background: rgba(9,8,7,0.97);
+  background: rgba(0,0,10,0.97);
   backdrop-filter: blur(16px);
-  border-top: 1px solid rgba(184,149,75,0.18);
+  border-top: 1px solid rgba(0,102,255,0.18);
   padding: 8px 0 env(safe-area-inset-bottom, 8px);
   z-index: var(--z-sticky);
 }
@@ -356,7 +372,8 @@ textarea.form-input { resize: vertical; min-height: 80px; }
   transition: color var(--transition-fast);
   text-decoration: none;
 }
-.mobile-nav-item:hover, .mobile-nav-item.active { color: var(--avenora-gold); text-decoration: none; }
+.mobile-nav-item:hover, .mobile-nav-item.active { color: var(--univ-blue-electric, #00aaff); text-decoration: none; }
+.mobile-nav-item { background: none; border: none; }
 .mobile-nav-item svg, .mobile-nav-item .icon { width: 20px; height: 20px; }
 
 /* ─── Page layout ────────────────────────────────────────── */
@@ -401,7 +418,7 @@ textarea.form-input { resize: vertical; min-height: 80px; }
 
 .modal {
   background: var(--bg-card);
-  border: 1px solid var(--border-blue);
+  border: 1px solid var(--univ-border, rgba(0,102,255,0.16));
   border-radius: var(--radius-xl);
   box-shadow: var(--glow-blue), 0 40px 80px rgba(0,0,0,0.8);
   width: 100%;

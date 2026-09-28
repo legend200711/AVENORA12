@@ -1,25 +1,22 @@
 /**
- * AVENORA - Homepage (Hub)
- * Layout order:
- *   1. Cinematic welcome hero
- *   2. Continue Listening / Continue Watching
- *   3. Explore AVENORA (7 feature cards)
- *   4. Announcements (only when real data available)
- *   5. Compact profile & settings access
- *   6. Footer
+ * AVENORA — Universe Home
+ * Clean, intentional homepage. One hero, a small set of primary destinations,
+ * a live feed preview, and a footer. Nothing duplicated.
  *
- * Bottom nav (Home / Feed / Video / Arcade / Chat) is in index.html.
- * No bottom-nav destinations duplicated as homepage buttons.
+ * Hierarchy:
+ *   1. Hero / Welcome
+ *   2. Primary destinations (4 cards max — most important places)
+ *   3. Recent Activity (single feed preview, signed-in only)
+ *   4. Footer
+ *
+ * Everything else is reachable through the top nav and the More menu.
  */
 
 registerPage('hub', {
   async render(container) {
-    // ── Auth-loading gate ────────────────────────────────
-    // If the auth provider hasn't confirmed the session yet, show the
-    // branded loading screen and wait.  This is a safety net; normally
-    // app.js has already awaited listenAuthState() before calling render().
+    // Wait for Firebase auth before rendering personalised content
     if (LegendState.get('authLoading')) {
-      renderAuthLoadingScreen(container);
+      _hubRenderLoading(container);
       await new Promise((resolve) => {
         const unsub = LegendState.subscribe('authLoading', (loading) => {
           if (!loading) { unsub(); resolve(); }
@@ -29,562 +26,229 @@ registerPage('hub', {
 
     const user = LegendState.get('user');
 
-    container.innerHTML = `<div class="hub-root">
-      ${user ? renderProfileHeader(user) : renderGuestHero()}
-      ${renderHeroArea(user)}
-      ${renderContinueSection()}
-      ${renderExploreSection(user)}
-      ${renderAnnouncementsSection()}
-      ${user ? renderCompactAccess(user) : ''}
-      <!-- Backend status banner — shown for all users when backend is unreachable -->
-      <div id="hub-backend-status" style="display:none;align-items:center;gap:8px;padding:8px 12px;margin:0 0 var(--space-md);border-radius:6px;background:rgba(192,57,74,0.12);border:1px solid rgba(192,57,74,0.3);font-size:0.8rem;color:var(--text-secondary)">
-        <span id="hub-backend-status-dot" style="width:8px;height:8px;border-radius:50%;background:var(--neon-red,#c0394a);flex-shrink:0;display:inline-block"></span>
-        <span id="hub-backend-status-text"></span>
-        <button style="margin-left:auto;background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem;line-height:1" onclick="document.getElementById('hub-backend-status').style.display='none'" aria-label="Dismiss">✕</button>
-      </div>
-      <div class="hub-footer">
-        <p>AVENORA · A PLACE WHERE EVERYONE BELONGS</p>
-      </div>
-    </div>`;
+    container.innerHTML = `
+      <div class="hub-page">
 
-    // Fire async data loads after paint
-    if (user) {
-      loadContinueItems();
-    }
-    loadAnnouncements();
-    checkApiStatus();
+        ${user ? _hubWelcome(user) : _hubHero()}
 
-    return () => {
-      // Nothing to clean up for the trigger; companion lives globally
-    };
+        ${_hubPrimaryDest(user)}
+
+        ${user ? _hubRecentActivity() : _hubGuestSecondary()}
+
+        <div id="hub-status-banner" style="display:none;align-items:center;gap:8px;padding:8px 14px;margin:var(--space-md) var(--space-lg) 0;border-radius:8px;background:rgba(192,57,74,0.10);border:1px solid rgba(192,57,74,0.25);font-size:0.8rem;color:var(--text-secondary)">
+          <span style="width:7px;height:7px;border-radius:50%;background:#c0394a;flex-shrink:0;display:inline-block"></span>
+          <span id="hub-status-text"></span>
+          <button style="margin-left:auto;background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:1rem;padding:0 2px" onclick="document.getElementById('hub-status-banner').style.display='none'" aria-label="Dismiss">✕</button>
+        </div>
+
+        <footer class="hub-footer">
+          <p>AVENORA · YOUR DIGITAL UNIVERSE</p>
+        </footer>
+      </div>`;
+
+    if (user) _hubLoadActivity();
+    _hubCheckStatus();
+
+    return () => {};
   }
 });
 
-/* ─── Auth loading screen ────────────────────────────────── */
-function renderAuthLoadingScreen(container) {
+/* ─── Auth loading screen ─────────────────────────────────── */
+function _hubRenderLoading(container) {
   container.innerHTML = `
-    <div class="hub-auth-loading" role="status" aria-label="Checking session">
+    <div class="hub-auth-loading" role="status" aria-label="Entering the universe">
       <div class="hub-auth-loading__inner">
         <p class="hub-auth-loading__brand">AVENORA</p>
         <div class="hub-auth-loading__spinner" aria-hidden="true"></div>
-        <p class="hub-auth-loading__label">Restoring your session…</p>
+        <p class="hub-auth-loading__label">Entering your universe…</p>
       </div>
-    </div>
-  `;
+    </div>`;
 }
 
-/* ─── Profile Header ────────────────────────────────────── */
-function renderProfileHeader(user) {
-  const displayName = user.profile?.displayName || user.username;
-  const bio = user.profile?.bio || '';
-  return `
-    <div class="hub-profile-header">
-      <div class="hub-profile-left">
-        ${avatarHtml(user, 'md')}
-        <div class="hub-profile-info">
-          <div class="hub-profile-name">
-            ${escapeHtml(displayName)}
-            ${roleBadgeHtml(user.role)}
-          </div>
-          ${bio ? `<p class="hub-profile-bio">${escapeHtml(bio)}</p>` : ''}
-        </div>
-      </div>
-      <div class="hub-profile-actions">
-        <button class="hub-icon-btn" aria-label="Notifications" onclick="document.getElementById('btn-notif').click()">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-          <span class="hub-notif-dot hidden" id="hub-notif-dot"></span>
-        </button>
-        <a href="#settings" class="hub-icon-btn" aria-label="Settings">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-        </a>
-        <a href="#profile" class="hub-action-link" aria-label="Edit Profile">Edit Profile</a>
-      </div>
-    </div>
-  `;
-}
-
-function renderGuestHero() {
-  return `
-    <div class="hub-guest-banner">
-      <div class="hub-guest-text">
-        <p class="hub-guest-label">WELCOME TO</p>
-        <h1 class="hub-title text-pulse-blue">AVENORA</h1>
-        <p class="hub-subtitle">A place where everyone belongs.</p>
-      </div>
-      <div class="hub-guest-cta">
-        <button class="btn btn-primary btn-lg" onclick="Modal.open('auth-modal')">Sign In</button>
-        <button class="btn btn-secondary btn-lg" onclick="Modal.open('auth-modal');switchAuthTab('register')">Create Account</button>
-      </div>
-    </div>
-  `;
-}
-
-/* ─── Cinematic Hero ─────────────────────────────────────── */
-function renderHeroArea(user) {
-  if (!user) return '';
+/* ─── Guest hero ──────────────────────────────────────────── */
+function _hubHero() {
   return `
     <div class="hub-hero">
-      <div class="hub-hero-eclipse" aria-hidden="true">
-        <div class="hub-eclipse-ring"></div>
-        <div class="hub-eclipse-core"></div>
+      <div class="hub-hero-orb" aria-hidden="true"></div>
+      <p class="hub-hero-eyebrow">WELCOME TO</p>
+      <h1 class="hub-hero-title">AVENORA</h1>
+      <p class="hub-hero-sub">Your Digital Universe</p>
+      <div class="hub-hero-cta">
+        <button class="btn btn-primary btn-lg" onclick="Modal.open('auth-modal')">Enter the Universe</button>
+        <button class="btn hub-btn-ghost-lg" onclick="navigateTo('discover')">Explore First</button>
       </div>
-      <div class="hub-hero-content">
-        <p class="hub-hero-label">WELCOME TO</p>
-        <h1 class="hub-title text-pulse-blue">AVENORA</h1>
-        <p class="hub-subtitle">A place where everyone belongs.</p>
-        <a href="#social" class="btn btn-primary hub-hero-cta">Open Feed →</a>
-      </div>
-      <div class="hub-hero-particles" aria-hidden="true"></div>
-    </div>
-  `;
+    </div>`;
 }
 
-/* ─── Continue Section ───────────────────────────────────── */
-function renderContinueSection() {
+/* ─── Signed-in welcome bar ───────────────────────────────── */
+function _hubWelcome(user) {
+  const displayName = user.profile?.displayName || user.username || 'Explorer';
+  const initial     = displayName[0].toUpperCase();
+  const avatarUrl   = (typeof resolveAvatarUrl === 'function') ? resolveAvatarUrl(user) : (user.profile?.avatarUrl || null);
+  const avatarStyle = avatarUrl ? `background-image:url(${avatarUrl});background-size:cover;background-position:center` : '';
+  const greeting    = _hubGreeting();
+
   return `
-    <section class="hub-section" aria-label="Continue where you left off">
-      <h2 class="hub-section-title">Continue</h2>
-      <div id="hub-continue" class="hub-continue-list">
-        <div class="hub-empty-state">
-          <span class="hub-empty-icon" aria-hidden="true">◎</span>
-          <p>Your journey begins here.</p>
-        </div>
+    <div class="hub-welcome">
+      <a href="#profile" class="hub-welcome-avatar" style="${avatarStyle}" aria-label="My Universe">${avatarStyle ? '' : escapeHtml(initial)}</a>
+      <div class="hub-welcome-text">
+        <h2>${escapeHtml(greeting)}, <span style="color:var(--univ-blue-electric)">${escapeHtml(displayName)}</span></h2>
+        <p>What will you explore today?</p>
       </div>
-    </section>
-  `;
+    </div>`;
 }
 
-/* ─── Explore AVENORA Feature Cards ─────────────── */
-// Full card definitions — order and visibility are resolved from user preferences
-const HUB_CARD_DEFS = {
-  channel: {
-    title: '📡 24-HOUR CHANNEL',
-    desc: 'The AVENORA always-on channel. Live camera, music, video, slideshows — broadcasting 24/7.',
-    icon: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-      <path d="M2 12h2m18 0h-2M12 2v2m0 18v-2"/>
-      <circle cx="12" cy="12" r="3" fill="currentColor"/>
-      <path d="M6.3 17.7a8 8 0 0 1 0-11.3m11.4 0a8 8 0 0 1 0 11.3"/>
-    </svg>`,
-    page: 'channel', accent: 'blue', founderOnly: false,
-  },
-  cloudstream: {
-    title: '24-Hour Cloud Stream',
-    desc: 'Continuous music and video programming in one connected stream.',
-    icon: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-      <path d="M3 15a4 4 0 0 0 4 4h10a4 4 0 0 0 0-8 5 5 0 0 0-9.9-1A4 4 0 0 0 3 15z"/>
-      <path d="M12 12v4m0 0-2-2m2 2 2-2"/>
-    </svg>`,
-    page: 'cloudstream', accent: 'blue', founderOnly: false,
-  },
-  live: {
-    title: 'Live',
-    desc: 'Watch and access live broadcasts from the platform.',
-    icon: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-      <circle cx="12" cy="12" r="2" fill="currentColor"/>
-      <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.49-8.49a6 6 0 0 0 0 8.49"/>
-      <path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/>
-    </svg>`,
-    page: 'live', accent: 'red', founderOnly: false,
-  },
-  social: {
-    title: 'Share',
-    desc: 'Share favorite moments, media, and updates.',
-    icon: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-      <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-      <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
-      <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-    </svg>`,
-    page: 'social', accent: 'green', founderOnly: false,
-  },
-  dj: {
-    title: 'DJ System',
-    desc: 'Mix tracks, manage playlists, and prepare audio sessions.',
-    icon: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-      <circle cx="12" cy="12" r="3"/>
-      <circle cx="12" cy="12" r="8"/>
-      <line x1="12" y1="2" x2="12" y2="4"/>
-      <line x1="12" y1="20" x2="12" y2="22"/>
-      <line x1="2" y1="12" x2="4" y2="12"/>
-      <line x1="20" y1="12" x2="22" y2="12"/>
-    </svg>`,
-    page: 'dj', accent: 'purple', founderOnly: false,
-  },
-  music: {
-    title: 'Music Hub',
-    desc: 'Discover music, organize your library, and continue listening.',
-    icon: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-      <path d="M9 18V5l12-2v13"/>
-      <circle cx="6" cy="18" r="3"/>
-      <circle cx="18" cy="16" r="3"/>
-    </svg>`,
-    page: 'music', accent: 'blue', founderOnly: false,
-  },
-  gallery: {
-    title: 'Gallery',
-    desc: 'Explore and organize images and visual memories.',
-    icon: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-      <rect x="3" y="3" width="18" height="18" rx="2"/>
-      <circle cx="8.5" cy="8.5" r="1.5"/>
-      <polyline points="21 15 16 10 5 21"/>
-    </svg>`,
-    page: 'gallery', accent: 'green', founderOnly: false,
-  },
-  admin: {
-    title: 'Founder Control Center',
-    desc: 'Manage approved platform controls, moderation, and system tools.',
-    icon: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true">
-      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-    </svg>`,
-    page: 'admin', accent: 'founder', founderOnly: true,
-  },
-};
+function _hubGreeting() {
+  const h = new Date().getHours();
+  if (h < 5)  return 'Good night';
+  if (h < 12) return 'Good morning';
+  if (h < 17) return 'Good afternoon';
+  if (h < 21) return 'Good evening';
+  return 'Good night';
+}
 
-function renderExploreSection(user) {
+/* ─── Primary destinations ────────────────────────────────── */
+function _hubPrimaryDest(user) {
+  // Four primary cards — the most important places.
+  // Everything else is in the nav/More menu.
   const isFounder = user && ['founder', 'admin'].includes(user.role);
 
-  // Read cached preferences for card order/visibility (applied optimistically;
-  // the customize page syncs these via the full preferences API)
-  // 'channel' is the primary 24-hour always-on channel — shown prominently on the hub.
-  // 'cloudstream' is accessible via navigation or Creator Studio.
-  let cardOrder   = ['channel','cloudstream','live','social','dj','music','gallery'];
-  let visibleSet  = new Set(['channel','live','social','dj','music','gallery']);
+  const primary = [
+    {
+      page: 'social',
+      title: 'UNIVERSE FEED',
+      desc: 'Posts, images, polls and community activity.',
+      icon: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>`,
+    },
+    {
+      page: 'discover',
+      title: 'DISCOVER',
+      desc: 'Find people, rooms, galleries and creators.',
+      icon: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>`,
+      green: true,
+    },
+    {
+      page: 'gallery',
+      title: 'CREATOR GALLERY',
+      desc: 'Artwork, photography, design and projects.',
+      icon: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>`,
+    },
+    {
+      page: 'rooms',
+      title: 'UNIVERSE ROOMS',
+      desc: 'Public and private community spaces.',
+      icon: `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>`,
+      green: true,
+    },
+  ];
 
-  try {
-    const raw = localStorage.getItem('avn_prefs_cache');
-    if (raw) {
-      const cached = JSON.parse(raw);
-      if (Array.isArray(cached.homeCards?.cardOrder) && cached.homeCards.cardOrder.length) {
-        cardOrder = cached.homeCards.cardOrder;
-      }
-      if (Array.isArray(cached.homeCards?.visibleCards)) {
-        visibleSet = new Set(cached.homeCards.visibleCards);
-      }
-    }
-  } catch {}
+  // Compact secondary row — important but not in the primary nav bar.
+  // Omit anything already in the mobile bottom nav (Home, Universe, Discover, Messages).
+  const secondary = [
+    { page: 'live',        label: '📡 Live' },
+    { page: 'moments',     label: '✨ Moments' },
+    { page: 'challenges',  label: '🏆 Challenges' },
+  ];
 
-  // Build ordered list of cards to render
-  const rendered = cardOrder
-    .filter(id => HUB_CARD_DEFS[id])
-    .filter(id => !HUB_CARD_DEFS[id].founderOnly || isFounder)
-    .filter(id => visibleSet.has(id))
-    .map(id => ({
-      id,
-      ...HUB_CARD_DEFS[id],
-      available: true,
-    }));
-
-  // Always hide founder card for non-founders — no hint it exists
-  return `
-    <section class="hub-section hub-explore-section" aria-label="Explore AVENORA">
-      <h2 class="hub-section-title hub-explore-title">Explore AVENORA</h2>
-      <div class="hub-explore-grid">
-        ${rendered.length
-          ? rendered.map(card => renderFeatureCard(card)).join('')
-          : `<p style="color:var(--text-muted);font-size:0.9rem;padding:var(--space-md) 0">
-               All service cards are hidden. <a href="#customize">Customize Avenora</a> to show them.
-             </p>`
-        }
-      </div>
-    </section>
-  `;
-}
-
-function renderFeatureCard(card) {
-  const accentClass = `hub-card-accent-${card.accent}`;
-  const labelId = `hub-card-label-${card.id}`;
-
-  if (!card.available) {
-    return `
-      <div class="hub-feature-card hub-feature-card--soon ${accentClass}" aria-label="${escapeHtml(card.title)} — Coming Soon">
-        <div class="hub-feature-card__icon" aria-hidden="true">${card.icon}</div>
-        <div class="hub-feature-card__body">
-          <h3 class="hub-feature-card__title" id="${labelId}">${escapeHtml(card.title)}</h3>
-          <p class="hub-feature-card__desc">${escapeHtml(card.desc)}</p>
-        </div>
-        <div class="hub-feature-card__action">
-          <span class="hub-feature-card__soon-badge">Coming Soon</span>
-        </div>
-      </div>
-    `;
+  if (isFounder) {
+    secondary.push({ page: 'admin', label: '🛡️ Control' });
   }
 
   return `
-    <a href="#${card.page}" class="hub-feature-card ${accentClass}" aria-labelledby="${labelId}">
-      <div class="hub-feature-card__glow" aria-hidden="true"></div>
-      <div class="hub-feature-card__icon" aria-hidden="true">${card.icon}</div>
-      <div class="hub-feature-card__body">
-        <h3 class="hub-feature-card__title" id="${labelId}">${escapeHtml(card.title)}</h3>
-        <p class="hub-feature-card__desc">${escapeHtml(card.desc)}</p>
+    <section class="hub-section" aria-label="Primary destinations">
+      <div class="hub-cards-grid">
+        ${primary.map(c => `
+          <a href="#${c.page}" class="hub-dest-card ${c.green ? 'hub-dest-card--green' : ''}" data-page="${c.page}" aria-label="${c.title}">
+            <div class="hub-dest-card__glow" aria-hidden="true"></div>
+            <div class="hub-dest-card__icon">${c.icon}</div>
+            <h3 class="hub-dest-card__title">${c.title}</h3>
+            <p class="hub-dest-card__desc">${c.desc}</p>
+          </a>`).join('')}
       </div>
-      <div class="hub-feature-card__action">
-        <span class="hub-feature-card__enter" aria-hidden="true">Open →</span>
+
+      <div class="hub-secondary-row">
+        ${secondary.map(s => `
+          <a href="#${s.page}" class="hub-secondary-pill" data-page="${s.page}">${s.label}</a>
+        `).join('')}
       </div>
-    </a>
-  `;
+    </section>`;
 }
 
-/* ─── Announcements ──────────────────────────────────────── */
-function renderAnnouncementsSection() {
+/* ─── Guest: secondary links (no account) ────────────────── */
+function _hubGuestSecondary() {
   return `
-    <section class="hub-section hub-announce-section hidden" id="hub-announce-section" aria-label="Announcements">
-      <h2 class="hub-section-title">Updates</h2>
-      <div id="hub-announce-list"></div>
-    </section>
-  `;
-}
-
-/* ─── Compact Profile & Settings Access ─────────────────── */
-function renderCompactAccess(user) {
-  const isFounder = ['founder', 'admin'].includes(user.role);
-  return `
-    <section class="hub-section hub-section-sm hub-compact-access" aria-label="Account access">
-      <div class="hub-quick-grid">
-        <a href="#profile" class="hub-quick-item">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-          My Profile
-        </a>
-        <a href="#settings" class="hub-quick-item">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-          Settings
-        </a>
-        <button class="hub-quick-item" onclick="document.getElementById('btn-notif').click()">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-          Notifications
-        </button>
-        <div class="hub-api-status" id="api-status" style="display:none">
-          <span class="hub-status-dot" id="api-status-dot"></span>
-          <span id="api-status-text"></span>
-        </div>
+    <div class="hub-guest-links">
+      <p style="font-size:0.78rem;color:var(--univ-text-muted);text-align:center;margin:0 0 var(--space-md)">
+        Explore freely — no account needed
+      </p>
+      <div style="display:flex;gap:var(--space-sm);justify-content:center;flex-wrap:wrap">
+        <a href="#gallery"    class="hub-secondary-pill" data-page="gallery">🖼️ Gallery</a>
+        <a href="#live"       class="hub-secondary-pill" data-page="live">📡 Live</a>
+        <a href="#challenges" class="hub-secondary-pill" data-page="challenges">🏆 Challenges</a>
       </div>
-    </section>
-  `;
+    </div>`;
 }
 
-/* ─── Async data loaders ─────────────────────────────────── */
-async function loadContinueItems() {
-  const el = document.getElementById('hub-continue');
+/* ─── Recent Activity (signed-in only) ───────────────────── */
+function _hubRecentActivity() {
+  return `
+    <section class="hub-section hub-activity-section" aria-label="Recent activity">
+      <h2 class="hub-section-label">Recent Activity</h2>
+      <div id="hub-feed-preview" class="hub-activity-list">
+        <div class="loading-state" style="min-height:72px"><div class="spinner"></div></div>
+      </div>
+      <a href="#social" class="hub-activity-more">See all in Universe Feed →</a>
+    </section>`;
+}
+
+/* ─── Async: load recent posts ───────────────────────────── */
+async function _hubLoadActivity() {
+  const el = document.getElementById('hub-feed-preview');
   if (!el) return;
-
-  // Read personalization prefs from cache
-  let continueWatching  = true;
-  let continueListening = true;
-  let startSection = '';
   try {
-    const raw = localStorage.getItem('avn_prefs_cache');
-    if (raw) {
-      const cached = JSON.parse(raw);
-      if (typeof cached.continueWatching === 'boolean')  continueWatching  = cached.continueWatching;
-      if (typeof cached.continueListening === 'boolean') continueListening = cached.continueListening;
-      if (typeof cached.startSection === 'string')       startSection      = cached.startSection;
-    }
-  } catch {}
-
-  const items = [];
-
-  // Preferred starting section shortcut (optional, never forces a redirect)
-  if (startSection) {
-    const SECTION_LABELS = {
-      social: 'Feed', video: 'Video', music: 'Music Hub', arcade: 'Arcade',
-      chat: 'Chat', gallery: 'Gallery', cloudstream: 'Cloud Stream',
-      live: 'Live', dj: 'DJ System',
-    };
-    const label = SECTION_LABELS[startSection];
-    if (label) {
-      items.push({
-        type: 'shortcut',
-        label: 'Go to',
-        title: label,
-        meta: 'Your preferred section',
-        page: startSection,
-        icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>`,
-      });
-    }
-  }
-
-  // Try watch history
-  if (continueWatching) {
-    try {
-      const history = await LegendAPI.videos.getHistory();
-      const recent = (history.history || []).slice(0, 1)[0];
-      if (recent?.video) {
-        items.push({
-          type: 'video',
-          label: 'Continue watching',
-          title: recent.video.title,
-          meta: recent.video.channelName || '',
-          page: 'video',
-          icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>`,
-        });
-      }
-    } catch { /* offline or no history */ }
-  }
-
-  // Try recently played track
-  if (continueListening) {
-    try {
-      const lastTrack = LS.get('lu_last_track');
-      if (lastTrack && lastTrack.id) {
-        items.push({
-          type: 'music',
-          label: 'Continue listening',
-          title: lastTrack.title || 'Track',
-          meta: lastTrack.artist || '',
-          page: 'music',
-          icon: `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>`,
-        });
-      }
-    } catch { /* no local track state */ }
-  }
-
-  if (items.length === 0) {
-    el.innerHTML = `
-      <div class="hub-empty-state">
-        <span class="hub-empty-icon" aria-hidden="true">◎</span>
-        <p>Your journey begins here.</p>
-      </div>`;
-    return;
-  }
-
-  el.innerHTML = items.map(item => `
-    <a href="#${item.page}" class="hub-continue-item" aria-label="${escapeHtml(item.label)}: ${escapeHtml(item.title)}">
-      <span class="hub-continue-icon">${item.icon}</span>
-      <span class="hub-continue-text">
-        <span class="hub-continue-label">${escapeHtml(item.label)}</span>
-        <span class="hub-continue-title">${escapeHtml(item.title)}</span>
-        ${item.meta ? `<span class="hub-continue-meta">${escapeHtml(item.meta)}</span>` : ''}
-      </span>
-      <span class="hub-continue-arrow" aria-hidden="true">→</span>
-    </a>
-  `).join('');
-}
-
-async function loadAnnouncements() {
-  // Announcements are only shown when real data is available from the API.
-  // If posts feed is empty or unreachable, the section stays hidden.
-  const section = document.getElementById('hub-announce-section');
-  const list = document.getElementById('hub-announce-list');
-  if (!section || !list) return;
-
-  try {
-    // Load recent posts from the feed — only show if real data is available
-    const data = await LegendAPI.posts.feed(1);
+    const data  = await LegendAPI.posts.feed(1);
     const posts = (data.posts || []).filter(p => p.content?.trim()).slice(0, 3);
-    if (!posts.length) return; // keep hidden
-
-    list.innerHTML = posts.map(p => `
-      <div class="hub-announce-item">
-        <div class="hub-announce-meta">
-          <span class="hub-announce-author">@${escapeHtml(p.author?.username || 'legend')}</span>
-          <span class="hub-announce-time">${formatTimeAgo(p.createdAt)}</span>
-        </div>
-        <p class="hub-announce-body">${escapeHtml(p.content || '')}</p>
-      </div>
-    `).join('');
-
-    section.classList.remove('hidden');
+    if (!posts.length) {
+      el.innerHTML = `<p class="hub-activity-empty"><a href="#social">Be the first to post in the Universe Feed →</a></p>`;
+      return;
+    }
+    el.innerHTML = posts.map(p => `
+      <a href="#social" class="hub-activity-item">
+        <span class="hub-activity-item__author">@${escapeHtml(p.author?.username || 'user')}</span>
+        <span class="hub-activity-item__dot">·</span>
+        <span class="hub-activity-item__time">${formatTimeAgo(p.createdAt)}</span>
+        <p class="hub-activity-item__text">${escapeHtml((p.content || '').slice(0, 120))}${(p.content||'').length > 120 ? '…' : ''}</p>
+      </a>`).join('');
   } catch {
-    // Backend not running or no pinned posts — keep section hidden
+    el.innerHTML = `<p class="hub-activity-empty"><a href="#social">Open the Universe Feed →</a></p>`;
   }
 }
 
-async function checkApiStatus() {
-  // Architecture: Firebase + Supabase only — no Render/Express backend.
-  // This function checks Firebase and Supabase reachability and shows a
-  // status banner only when those services actually fail.
-  // Never blocks the page — runs fire-and-forget after paint.
-
-  function _showBanner(msg) {
-    const el   = document.getElementById('hub-backend-status');
-    const text = document.getElementById('hub-backend-status-text');
+/* ─── Status banner (storage check) ─────────────────────── */
+async function _hubCheckStatus() {
+  const SUPABASE_URL      = 'https://licuiqxkkfboqezzmsqu.supabase.co';
+  const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpY3VpcXhra2Zib3Flenptc3F1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNTYxMDQsImV4cCI6MjEwNDkzMjEwNH0.tsYOyCI7skF6Otz2W0oNYhxM63-0551lrqIDCO8NoJo';
+  function _show(msg) {
+    const el   = document.getElementById('hub-status-banner');
+    const text = document.getElementById('hub-status-text');
     if (el && text) { text.textContent = msg; el.style.display = 'flex'; }
   }
-
-  function _hideBanner() {
-    const el = document.getElementById('hub-backend-status');
-    if (el) el.style.display = 'none';
-  }
-
-  // Check Supabase reachability (anon key, public HEAD request)
-  const SUPABASE_URL = 'https://licuiqxkkfboqezzmsqu.supabase.co';
-  const SUPABASE_ANON_KEY = (
-    typeof window !== 'undefined' &&
-    window.LU_SUPABASE_ANON_KEY
-  ) || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxpY3VpcXhra2Zib3Flenptc3F1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkzNTYxMDQsImV4cCI6MjEwNDkzMjEwNH0.tsYOyCI7skF6Otz2W0oNYhxM63-0551lrqIDCO8NoJo';
-
   try {
-    const ac = new AbortController();
+    const ac  = new AbortController();
     const tid = setTimeout(() => ac.abort(), 8000);
-    const r = await fetch(`${SUPABASE_URL}/rest/v1/`, {
+    const r   = await fetch(`${SUPABASE_URL}/rest/v1/`, {
       method: 'HEAD',
       headers: { apikey: SUPABASE_ANON_KEY },
       signal: ac.signal,
     }).finally(() => clearTimeout(tid));
-    // 200, 401, or 404 all mean Supabase is reachable
     if (!r.ok && r.status !== 401 && r.status !== 404) {
-      _showBanner('Supabase service unavailable — some features may be limited.');
-      return;
+      _show('Storage service unavailable — uploads may be limited.');
     }
   } catch (e) {
-    if (e.name === 'AbortError') {
-      _showBanner('Supabase service is slow to respond — some features may be limited.');
-    } else {
-      _showBanner('Supabase service unavailable — check your internet connection.');
-    }
-    return;
+    if (e.name !== 'AbortError') _show('Storage service unreachable — check your connection.');
   }
-
-  // All services reachable — hide any previous banner.
-  _hideBanner();
 }
 
-/* ─── Build / PWA Diagnostic Panel ──────────────────────── */
-/**
- * Renders a small, always-visible diagnostic strip at the bottom of the hub.
- * Shows app version, build timestamp, API base URL, Firebase project ID,
- * and service-worker version so you can confirm a fresh build is loaded.
- * No private secrets are exposed here.
- */
-function renderBuildDiagnostics() {
-  const b = window.AVENORA_BUILD || {};
-  const swStatus = ('serviceWorker' in navigator)
-    ? 'supported'
-    : 'not supported';
-  return `
-    <section class="hub-section hub-section-sm hub-diagnostics" aria-label="Build diagnostics" id="hub-diagnostics">
-      <details style="width:100%">
-        <summary style="cursor:pointer;font-size:0.75rem;color:var(--text-muted);letter-spacing:0.08em;user-select:none">
-          ▸ BUILD DIAGNOSTICS
-        </summary>
-        <div class="hub-diagnostics__grid" style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:0.72rem;color:var(--text-muted)">
-          <span style="color:var(--text-secondary)">App version</span>
-          <span id="diag-version">${escapeHtml(b.version || '—')}</span>
-
-          <span style="color:var(--text-secondary)">Build timestamp</span>
-          <span id="diag-build-ts">${escapeHtml(b.buildTimestamp || '—')}</span>
-
-          <span style="color:var(--text-secondary)">API base URL</span>
-          <span id="diag-api-url" style="word-break:break-all">${escapeHtml(b.apiBaseUrl || window.LU_CONFIG?.apiUrl || '—')}</span>
-
-          <span style="color:var(--text-secondary)">Firebase project</span>
-          <span id="diag-firebase">${escapeHtml(b.firebaseProject || '—')}</span>
-
-          <span style="color:var(--text-secondary)">SW version</span>
-          <span id="diag-sw-version">${escapeHtml(b.swVersion || '—')}</span>
-
-          <span style="color:var(--text-secondary)">SW cache name</span>
-          <span id="diag-sw-cache">${escapeHtml(b.swCacheName || '—')}</span>
-
-          <span style="color:var(--text-secondary)">SW support</span>
-          <span id="diag-sw-support">${swStatus}</span>
-
-          <span style="color:var(--text-secondary)">Base path</span>
-          <span id="diag-base-path">${escapeHtml(b.basePath || location.pathname)}</span>
-        </div>
-        <p style="margin-top:8px;font-size:0.68rem;color:var(--text-muted);opacity:0.6">
-          Visible to all users for deployment verification. No private secrets are shown here.
-        </p>
-      </details>
-    </section>
-  `;
-}
-
+// Kept for backward compat — admin.js / other pages may call these
+function checkApiStatus()    { return _hubCheckStatus(); }
+function loadAnnouncements() { /* no-op: removed from homepage, replaced by feed preview */ }

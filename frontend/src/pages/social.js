@@ -69,15 +69,15 @@ registerPage('social', {
           <div class="sn-brand">
             <div class="sn-eclipse-icon" aria-hidden="true">
               <svg width="38" height="38" viewBox="0 0 38 38">
-                <circle cx="19" cy="19" r="18" fill="rgba(0,170,255,0.05)" stroke="rgba(0,170,255,0.25)" stroke-width="1.5"/>
-                <circle cx="19" cy="19" r="13" fill="rgba(0,0,0,0.8)" stroke="rgba(0,255,136,0.3)" stroke-width="1"/>
-                <circle cx="24" cy="19" r="12" fill="#050508"/>
-                <circle cx="24" cy="19" r="12" fill="rgba(0,170,255,0.04)" stroke="rgba(0,170,255,0.18)" stroke-width="1"/>
+                <circle cx="19" cy="19" r="18" fill="rgba(0,102,255,0.06)" stroke="rgba(0,102,255,0.28)" stroke-width="1.5"/>
+                <circle cx="19" cy="19" r="13" fill="rgba(0,0,0,0.85)" stroke="rgba(0,255,136,0.25)" stroke-width="1"/>
+                <circle cx="24" cy="19" r="12" fill="#030312"/>
+                <circle cx="24" cy="19" r="12" fill="rgba(0,102,255,0.05)" stroke="rgba(0,170,255,0.15)" stroke-width="1"/>
               </svg>
             </div>
             <div>
-              <h1 class="sn-title"><span style="color:var(--neon-blue)">AVENORA</span> FEED</h1>
-              <p class="sn-subtitle">A PLACE WHERE EVERYONE BELONGS</p>
+              <h1 class="sn-title"><span style="background:linear-gradient(135deg,#0066ff,#00aaff,#00ff88);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text">UNIVERSE</span> FEED</h1>
+              <p class="sn-subtitle">YOUR DIGITAL UNIVERSE · SHARE · CONNECT · CREATE</p>
             </div>
           </div>
         </header>

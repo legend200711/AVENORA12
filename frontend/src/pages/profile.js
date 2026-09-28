@@ -92,6 +92,12 @@ registerPage('profile', {
       container.innerHTML = `
         <div class="sn-profile-page">
 
+          <!-- Universe identity header for own profile -->
+          ${isOwn ? `<div style="padding:var(--space-md) var(--space-lg) 0;display:flex;align-items:center;gap:8px">
+            <span style="font-family:var(--font-display);font-size:0.62rem;letter-spacing:0.3em;color:var(--univ-text-muted,#6a7a9a);text-transform:uppercase">MY UNIVERSE</span>
+            <span style="font-size:0.6rem;letter-spacing:0.2em;padding:2px 8px;border-radius:9999px;background:rgba(0,102,255,0.10);color:var(--univ-blue-electric,#00aaff);border:1px solid rgba(0,102,255,0.16)">${escapeHtml(profile.username)}</span>
+          </div>` : ''}
+
           <!-- Banner -->
           <div class="sn-profile-banner" id="sn-profile-banner">
             ${profile.profile?.bannerUrl
@@ -164,6 +170,39 @@ registerPage('profile', {
               </div>
             </div>
           </div>
+
+          <!-- Universe Customization (own profile only) -->
+          ${isOwn ? `
+          <div id="univ-customize-panel" style="display:none;margin:0 var(--space-lg) var(--space-md);padding:var(--space-md);background:rgba(0,102,255,0.06);border:1px solid var(--univ-border);border-radius:var(--radius-lg)">
+            <p style="font-family:var(--font-display);font-size:0.7rem;letter-spacing:0.22em;color:var(--univ-blue-electric,#00aaff);margin:0 0 var(--space-md);text-transform:uppercase">Universe Customization</p>
+            <div style="display:flex;flex-wrap:wrap;gap:var(--space-sm)">
+              <div style="flex:1;min-width:160px">
+                <label style="font-size:0.75rem;color:var(--text-muted);display:block;margin-bottom:4px">Accent Style</label>
+                <div style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="univ-style-btn" data-style="default" onclick="SNProfile.setAccent('default',this)"
+                    style="padding:6px 14px;border-radius:20px;border:1px solid var(--univ-border);background:rgba(0,102,255,0.12);color:var(--univ-blue-electric);font-size:0.75rem;cursor:pointer">
+                    Electric Blue
+                  </button>
+                  <button class="univ-style-btn" data-style="green" onclick="SNProfile.setAccent('green',this)"
+                    style="padding:6px 14px;border-radius:20px;border:1px solid rgba(0,255,136,0.20);background:rgba(0,255,136,0.08);color:#00ff88;font-size:0.75rem;cursor:pointer">
+                    Neon Green
+                  </button>
+                  <button class="univ-style-btn" data-style="purple" onclick="SNProfile.setAccent('purple',this)"
+                    style="padding:6px 14px;border-radius:20px;border:1px solid rgba(102,51,204,0.30);background:rgba(102,51,204,0.10);color:#9966ff;font-size:0.75rem;cursor:pointer">
+                    Cosmic Purple
+                  </button>
+                </div>
+              </div>
+            </div>
+            <button class="btn btn-ghost btn-sm" style="margin-top:var(--space-sm);font-size:0.78rem" onclick="document.getElementById('univ-customize-panel').style.display='none'">Done</button>
+          </div>
+          <div style="padding:0 var(--space-lg) var(--space-sm);display:flex;justify-content:flex-end">
+            <button class="btn btn-ghost btn-sm" style="font-size:0.75rem;color:var(--univ-text-muted)"
+              onclick="const p=document.getElementById('univ-customize-panel');p.style.display=p.style.display==='none'?'':\'none\'">
+              ✦ Customize Universe
+            </button>
+          </div>
+          ` : ''}
 
           <!-- Tabs -->
           <div class="tabs sn-profile-tabs">
@@ -588,6 +627,27 @@ const SNProfile = {
       }
     };
     input.click();
+  },
+
+  // ── Universe Customization ────────────────────────────────
+  setAccent(style, btn) {
+    // Visual feedback
+    document.querySelectorAll('.univ-style-btn').forEach(b => {
+      b.style.outline = '';
+    });
+    if (btn) btn.style.outline = '2px solid currentColor';
+
+    // Apply the chosen accent to the profile page
+    const page = document.querySelector('.sn-profile-page');
+    if (!page) return;
+    page.dataset.univAccent = style;
+
+    // Persist to Firestore silently (best-effort)
+    try {
+      LegendAPI.users.updateProfile({ 'profile.universeAccent': style }).catch(() => {});
+    } catch {}
+
+    Toast.success(`Accent style updated.`);
   },
 };
 window.SNProfile = SNProfile;

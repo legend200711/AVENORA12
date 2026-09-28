@@ -26,9 +26,11 @@ registerPage('admin', {
           ${[
             { id: 'dashboard',   label: '📊 Dashboard' },
             { id: 'users',       label: '👥 Users' },
-            { id: 'moderation',  label: '🛡️ Mod' },
+            { id: 'moderation',  label: '🛡️ Reports' },
+            { id: 'rooms',       label: '🏠 Rooms' },
+            { id: 'challenges',  label: '🏆 Challenges' },
+            { id: 'gallery',     label: '🖼️ Gallery' },
             { id: 'videos',      label: '🎬 Videos' },
-            { id: 'cloudstream', label: '☁️ Stream' },
             { id: 'system',      label: '⚙️ System' },
             { id: 'logs',        label: '📋 Logs' },
             { id: 'theme',       label: '🎨 Theme' },
@@ -42,16 +44,18 @@ registerPage('admin', {
         <!-- Admin sidebar -->
         <div style="width:220px;background:var(--bg-card);border-right:1px solid var(--border-subtle);padding:var(--space-md);flex-shrink:0" class="desktop-only admin-sidebar-desktop">
           <div style="margin-bottom:var(--space-lg)">
-            <h3 style="font-family:var(--font-display);color:var(--neon-blue);letter-spacing:0.1em;font-size:0.9rem">FOUNDER CONTROL</h3>
-            <p style="font-size:0.75rem;color:var(--text-muted)">Avenora Admin</p>
+            <h3 style="font-family:var(--font-display);color:var(--univ-blue-electric,#00aaff);letter-spacing:0.1em;font-size:0.9rem">FOUNDER CONTROL</h3>
+            <p style="font-size:0.75rem;color:var(--text-muted)">AVENORA — YOUR DIGITAL UNIVERSE</p>
           </div>
           <nav>
             ${[
               { id: 'dashboard',   label: '📊 Dashboard' },
               { id: 'users',       label: '👥 Users' },
-              { id: 'moderation',  label: '🛡️ Moderation' },
+              { id: 'moderation',  label: '🛡️ Reports & Moderation' },
+              { id: 'rooms',       label: '🏠 Universe Rooms' },
+              { id: 'challenges',  label: '🏆 Challenges' },
+              { id: 'gallery',     label: '🖼️ Gallery Content' },
               { id: 'videos',      label: '🎬 Avenora Video' },
-              { id: 'cloudstream', label: '☁️ Cloud Stream' },
               { id: 'system',      label: '⚙️ System Status' },
               { id: 'logs',        label: '📋 Logs' },
               { id: 'theme',       label: '🎨 Theme Control' },
@@ -94,12 +98,14 @@ window.adminSection = async function (section) {
       case 'dashboard':   await renderAdminDashboard(content);    break;
       case 'users':       await renderAdminUsers(content);        break;
       case 'moderation':  await renderAdminModeration(content);   break;
+      case 'rooms':       await renderAdminRooms(content);        break;
+      case 'challenges':  await renderAdminChallenges(content);   break;
+      case 'gallery':     await renderAdminGalleryContent(content); break;
       case 'videos':      await renderAdminVideos(content);       break;
-      case 'cloudstream': await renderAdminCloudStream(content);  break;
       case 'system':      await renderAdminSystem(content);       break;
       case 'logs':        renderAdminLogs(content);               break;
       case 'theme':       await renderThemeControlCenter(content); break;
-      default: content.innerHTML = `<p style="color:var(--text-muted)">Section "${section}" coming soon.</p>`;
+      default: content.innerHTML = `<p style="color:var(--text-muted)">Section "${escapeHtml(section)}" coming soon.</p>`;
     }
   } catch (err) {
     console.error(`[AVN] Admin section error [${section}]:`, err);
@@ -1289,3 +1295,155 @@ window.csAdminSetSetting = async function (setting, value) {
     if (el) el.checked = !value;
   }
 };
+
+/* ─── Admin: Universe Rooms ──────────────────────────────── */
+async function renderAdminRooms(container) {
+  container.innerHTML = `
+    <h2 style="font-family:var(--font-display);letter-spacing:0.1em;margin-bottom:var(--space-xl);color:var(--univ-blue-electric,#00aaff)">UNIVERSE ROOMS</h2>
+    <div id="admin-rooms-list"><div class="loading-state"><div class="spinner"></div></div></div>
+  `;
+  try {
+    const { getFirestore } = window.AvenoraFirebase || {};
+    if (!getFirestore) { document.getElementById('admin-rooms-list').innerHTML = '<p style="color:var(--text-muted)">Firebase not available.</p>'; return; }
+    const db = await getFirestore();
+    const { collection, query, orderBy, limit, getDocs, doc, deleteDoc } = await import(
+      'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js'
+    );
+    const q = query(collection(db, 'rooms'), orderBy('createdAt', 'desc'), limit(50));
+    const snap = await getDocs(q);
+    const rooms = [];
+    snap.forEach(d => rooms.push({ id: d.id, ...d.data() }));
+    const list = document.getElementById('admin-rooms-list');
+    if (!list) return;
+    if (!rooms.length) { list.innerHTML = '<p style="color:var(--text-muted)">No rooms yet.</p>'; return; }
+    list.innerHTML = `
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;font-size:0.85rem">
+          <thead><tr>
+            ${['Name','Privacy','Owner','Members','Created','Actions'].map(h => `<th style="text-align:left;padding:8px;border-bottom:1px solid var(--border-subtle);color:var(--text-muted);font-size:0.75rem;text-transform:uppercase;letter-spacing:0.08em">${h}</th>`).join('')}
+          </tr></thead>
+          <tbody>
+            ${rooms.map(r => `
+              <tr style="border-bottom:1px solid var(--border-subtle)">
+                <td style="padding:8px">${escapeHtml(r.name||'Room')}</td>
+                <td style="padding:8px"><span style="font-size:0.72rem;padding:2px 6px;border-radius:4px;background:rgba(0,102,255,0.1);color:var(--univ-blue-electric,#00aaff)">${r.privacy||'public'}</span></td>
+                <td style="padding:8px">${escapeHtml(r.ownerName||r.ownerId||'—')}</td>
+                <td style="padding:8px">${r.memberCount||0}</td>
+                <td style="padding:8px;color:var(--text-muted);font-size:0.78rem">${formatTimeAgo(r.createdAt)}</td>
+                <td style="padding:8px">
+                  <button class="btn btn-danger btn-sm" onclick="adminDeleteRoom('${escapeHtml(r.id)}')">Delete</button>
+                </td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  } catch (err) {
+    document.getElementById('admin-rooms-list').innerHTML = `<p style="color:var(--text-muted)">Error loading rooms: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+window.adminDeleteRoom = async function(id) {
+  const user = LegendAPI.auth.getUser();
+  if (!user || !['founder','admin'].includes(user.role)) return;
+  if (!confirm('Delete this room? This cannot be undone.')) return;
+  try {
+    const { getFirestore } = window.AvenoraFirebase || {};
+    if (!getFirestore) return;
+    const db = await getFirestore();
+    const { doc, deleteDoc } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+    await deleteDoc(doc(db, 'rooms', id));
+    Toast.success('Room deleted.');
+    await adminSection('rooms');
+  } catch { Toast.error('Could not delete room.'); }
+};
+
+/* ─── Admin: Challenges ──────────────────────────────────── */
+async function renderAdminChallenges(container) {
+  container.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-xl);flex-wrap:wrap;gap:var(--space-sm)">
+      <h2 style="font-family:var(--font-display);letter-spacing:0.1em;color:var(--univ-blue-electric,#00aaff);margin:0">CHALLENGES</h2>
+      <button class="btn btn-primary btn-sm" onclick="navigateTo('challenges')">View Public Challenges</button>
+    </div>
+    <div id="admin-challenges-list"><div class="loading-state"><div class="spinner"></div></div></div>
+  `;
+  try {
+    const { getFirestore } = window.AvenoraFirebase || {};
+    if (!getFirestore) { document.getElementById('admin-challenges-list').innerHTML = '<p style="color:var(--text-muted)">Firebase not available.</p>'; return; }
+    const db = await getFirestore();
+    const { collection, query, orderBy, limit, getDocs } = await import(
+      'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js'
+    );
+    const q = query(collection(db, 'challenges'), orderBy('createdAt', 'desc'), limit(50));
+    const snap = await getDocs(q);
+    const challenges = [];
+    snap.forEach(d => challenges.push({ id: d.id, ...d.data() }));
+    const list = document.getElementById('admin-challenges-list');
+    if (!list) return;
+    if (!challenges.length) { list.innerHTML = '<p style="color:var(--text-muted)">No challenges yet. Go to Challenges to create one.</p>'; return; }
+    list.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:var(--space-md)">
+        ${challenges.map(c => `
+          <div class="card" style="border-color:rgba(0,102,255,0.15)">
+            <div style="display:flex;align-items:center;gap:var(--space-sm);margin-bottom:var(--space-sm)">
+              <span style="font-size:1.5rem">${c.icon||'✨'}</span>
+              <div>
+                <div style="font-weight:600;font-size:0.9rem">${escapeHtml(c.title||'Challenge')}</div>
+                <div style="font-size:0.72rem;color:var(--text-muted)">${escapeHtml(c.category||'')} · ${c.entries||0} entries</div>
+              </div>
+            </div>
+            <p style="font-size:0.8rem;color:var(--text-secondary);margin-bottom:var(--space-md)">${escapeHtml((c.description||'').slice(0,100))}</p>
+            <button class="btn btn-danger btn-sm" onclick="adminDeleteChallenge('${escapeHtml(c.id)}')">Delete</button>
+          </div>`).join('')}
+      </div>`;
+  } catch (err) {
+    document.getElementById('admin-challenges-list').innerHTML = `<p style="color:var(--text-muted)">Error: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+window.adminDeleteChallenge = async function(id) {
+  const user = LegendAPI.auth.getUser();
+  if (!user || !['founder','admin'].includes(user.role)) return;
+  if (!confirm('Delete this challenge?')) return;
+  try {
+    const { getFirestore } = window.AvenoraFirebase || {};
+    if (!getFirestore) return;
+    const db = await getFirestore();
+    const { doc, deleteDoc } = await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+    await deleteDoc(doc(db, 'challenges', id));
+    Toast.success('Challenge deleted.');
+    await adminSection('challenges');
+  } catch { Toast.error('Could not delete challenge.'); }
+};
+
+/* ─── Admin: Gallery Content ─────────────────────────────── */
+async function renderAdminGalleryContent(container) {
+  container.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:var(--space-xl);flex-wrap:wrap;gap:var(--space-sm)">
+      <h2 style="font-family:var(--font-display);letter-spacing:0.1em;color:var(--univ-blue-electric,#00aaff);margin:0">GALLERY CONTENT</h2>
+      <button class="btn btn-primary btn-sm" onclick="navigateTo('gallery')">View Gallery</button>
+    </div>
+    <p style="color:var(--text-muted);margin-bottom:var(--space-lg)">Review and moderate gallery uploads. Use the Gallery page to view full content.</p>
+    <div id="admin-gallery-list"><div class="loading-state"><div class="spinner"></div></div></div>
+  `;
+  try {
+    const data = await LegendAPI.gallery.list({ page: 1, limit: 20 });
+    const items = data.items || data.gallery || [];
+    const list = document.getElementById('admin-gallery-list');
+    if (!list) return;
+    if (!items.length) { list.innerHTML = '<p style="color:var(--text-muted)">No gallery items found.</p>'; return; }
+    list.innerHTML = `
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:var(--space-sm)">
+        ${items.map(item => `
+          <div style="background:var(--bg-card);border:1px solid var(--border-subtle);border-radius:var(--radius-md);overflow:hidden">
+            ${item.imageUrl ? `<img src="${escapeHtml(item.imageUrl)}" style="width:100%;height:120px;object-fit:cover;display:block" alt="${escapeHtml(item.title||'')}">` :
+              `<div style="height:120px;background:var(--bg-secondary);display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:2rem">🖼️</div>`}
+            <div style="padding:8px">
+              <div style="font-size:0.78rem;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(item.title||'Untitled')}</div>
+              <div style="font-size:0.7rem;color:var(--text-muted)">${escapeHtml(item.uploader?.username||'')}</div>
+            </div>
+          </div>`).join('')}
+      </div>`;
+  } catch (err) {
+    document.getElementById('admin-gallery-list').innerHTML = `<p style="color:var(--text-muted)">Gallery data unavailable: ${escapeHtml(err.message)}</p>`;
+  }
+}

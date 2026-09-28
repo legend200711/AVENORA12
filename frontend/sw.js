@@ -1,7 +1,7 @@
 /**
- * AVENORA — Service Worker v55
+ * AVENORA — Service Worker v56
  *
- * Global stabilization release — 2026.09.23
+ * Universe redesign release — 2026.10.01
  * Deployment-aware: detects GitHub Pages vs Firebase Hosting automatically.
  *   GitHub Pages:      https://legend200711.github.io/AVENORA12/  → BASE = /AVENORA12
  *   Firebase Hosting:  https://<project>.web.app/                 → BASE = (empty string)
@@ -48,8 +48,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v55';
-const CACHE_NAME  = 'avenora-cache-v55';
+const SW_VERSION  = 'v56';
+const CACHE_NAME  = 'avenora-cache-v56';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -110,6 +110,7 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v52', // v52 — evict: music hub/radio/profiles/follow global repair
   'avenora-cache-v53', // v53 — evict: force update for Music Hub audio playback repair
   'avenora-cache-v54', // v54 — evict: silent audio bug — Web Audio graph & crossOrigin fix
+  'avenora-cache-v55', // v55 — evict: Universe redesign — new pages, new identity
   // v55 = current — not in evict list
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
@@ -142,21 +143,19 @@ const STATIC_ASSETS = [
   `${BASE}/live-hub.html`,
   `${BASE}/live-room.html`,
   `${BASE}/src/styles/avenora-cosmic.css`,
+  `${BASE}/src/styles/universe.css`,
   `${BASE}/src/styles/theme.css`,
   `${BASE}/src/styles/visual.css`,
   `${BASE}/src/styles/social.css`,
   `${BASE}/src/styles/midnight.css`,
-  `${BASE}/src/styles/music.css`,
   `${BASE}/src/styles/hub.css`,
   `${BASE}/src/styles/chat-extended.css`,
   `${BASE}/src/styles/companion.css`,
-  `${BASE}/src/styles/cloudstudio.css`,
   `${BASE}/src/styles/responsive.css`,
   `${BASE}/src/styles/customize.css`,
   `${BASE}/src/styles/theme-control.css`,
   `${BASE}/src/styles/dj-cosmic.css`,
   `${BASE}/src/styles/radio.css`,
-  `${BASE}/src/styles/channel.css`,
   `${BASE}/src/store/state.js`,
   `${BASE}/src/utils/ui.js`,
   `${BASE}/src/services/api.js`,
@@ -173,15 +172,13 @@ const STATIC_ASSETS = [
   `${BASE}/src/pages/social.js`,
   `${BASE}/src/pages/video.js`,
   `${BASE}/src/pages/live.js`,
-  `${BASE}/src/pages/channel.js`,
-  `${BASE}/src/pages/channelstudio.js`,
-  `${BASE}/src/pages/cloudstream.js`,
-  `${BASE}/src/pages/cloudstudio.js`,
-  `${BASE}/cloud-stream/index.html`,
-  `${BASE}/cloud-stream/css/cloud-stream.css`,
-  `${BASE}/cloud-stream/js/cloud-stream.js`,
+  `${BASE}/src/pages/moments.js`,
+  `${BASE}/src/pages/rooms.js`,
+  `${BASE}/src/pages/discover.js`,
+  `${BASE}/src/pages/challenges.js`,
+  `${BASE}/src/pages/collections.js`,
+  `${BASE}/src/pages/notifications.js`,
   `${BASE}/src/pages/dj.js`,
-  `${BASE}/src/pages/music.js`,
   `${BASE}/src/pages/radio.js`,
   `${BASE}/src/pages/radioadmin.js`,
   `${BASE}/src/pages/arcade.js`,

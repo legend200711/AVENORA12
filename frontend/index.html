@@ -3,18 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="description" content="Avenora — A place where everyone belongs. A welcoming space for connection, creativity, positivity, and new beginnings.">
-  <meta name="theme-color" content="#090807">
+  <meta name="description" content="AVENORA — Your Digital Universe. A unique social and creative digital universe for connection, creativity, and community.">
+  <meta name="theme-color" content="#000007">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="AVENORA">
 
   <!-- Open Graph -->
-  <meta property="og:title" content="AVENORA">
-  <meta property="og:description" content="A place where everyone belongs. A welcoming space for connection, creativity, positivity, and new beginnings.">
+  <meta property="og:title" content="AVENORA — Your Digital Universe">
+  <meta property="og:description" content="A unique social and creative digital universe. Connect, create, and explore.">
   <meta property="og:type" content="website">
 
-  <title>AVENORA — A PLACE WHERE EVERYONE BELONGS</title>
+  <title>AVENORA — YOUR DIGITAL UNIVERSE</title>
 
   <!-- PWA -->
   <link rel="manifest" href="manifest.json">
@@ -34,27 +34,31 @@
   <link rel="stylesheet" href="src/styles/visual.css">
   <link rel="stylesheet" href="src/styles/social.css">
   <link rel="stylesheet" href="src/styles/midnight.css">
-  <link rel="stylesheet" href="src/styles/music.css">
   <link rel="stylesheet" href="src/styles/hub.css">
   <link rel="stylesheet" href="src/styles/chat-extended.css">
   <link rel="stylesheet" href="src/styles/companion.css">
-  <!-- Creator Studio — mobile-first layout fix -->
-  <link rel="stylesheet" href="src/styles/cloudstudio.css">
+  <!-- Universe Design System — new identity -->
+  <link rel="stylesheet" href="src/styles/universe.css">
   <!-- Responsive overrides — must load last to win specificity -->
   <link rel="stylesheet" href="src/styles/responsive.css">
   <link rel="stylesheet" href="src/styles/customize.css">
   <!-- Founder Theme Control Center (founder-only panel, admin-scoped styles) -->
   <link rel="stylesheet" href="src/styles/theme-control.css">
-  <!-- DJ System — Cosmic Edition visual upgrade -->
-  <link rel="stylesheet" href="src/styles/dj-cosmic.css">
-  <!-- Avenora Radio -->
-  <link rel="stylesheet" href="src/styles/radio.css">
-  <!-- 24-Hour Channel + Channel Studio -->
-  <link rel="stylesheet" href="src/styles/channel.css?v=30">
 
   <!-- Page-specific styles loaded dynamically -->
 </head>
 <body class="has-mobile-nav">
+
+  <!-- ═══════ UNIVERSE INTRO ANIMATION ════════════════════════ -->
+  <!-- Single startup animation — shown once on first paint, then dismissed -->
+  <div class="univ-intro-overlay" id="univ-intro" aria-label="AVENORA loading" role="status">
+    <div style="position:relative;width:120px;height:120px;display:flex;align-items:center;justify-content:center">
+      <div class="univ-intro-ring"></div>
+      <div class="univ-intro-ring univ-intro-ring-2"></div>
+    </div>
+    <p class="univ-intro-logo">AVENORA</p>
+    <p class="univ-intro-sub">Your Digital Universe</p>
+  </div>
 
   <!-- Skip navigation link for keyboard users -->
   <a href="#main-content" class="skip-to-main">Skip to main content</a>
@@ -77,22 +81,19 @@
     </button>
 
     <a href="#hub" class="nav-brand" aria-label="Avenora Home" style="display:flex;flex-direction:column;line-height:1.15;text-decoration:none">
-      <span style="font-family:var(--font-display);font-size:1.05rem;font-weight:900;letter-spacing:0.18em;background:linear-gradient(135deg,#ffd060 0%,#f0e8d8 45%,#c9a84c 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 8px rgba(201,168,76,0.45))">AVENORA</span>
-      <span id="nav-subtitle" style="font-size:0.52rem;letter-spacing:0.28em;color:rgba(201,168,76,0.70);font-family:var(--font-display);font-weight:600;text-transform:uppercase">HOME</span>
+      <span style="font-family:var(--font-display);font-size:1.05rem;font-weight:900;letter-spacing:0.18em;background:linear-gradient(135deg,#0066ff 0%,#00aaff 50%,#00ff88 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 8px rgba(0,102,255,0.45))">AVENORA</span>
+      <span id="nav-subtitle" style="font-size:0.47rem;letter-spacing:0.28em;color:rgba(0,170,255,0.75);font-family:var(--font-display);font-weight:600;text-transform:uppercase">YOUR DIGITAL UNIVERSE</span>
     </a>
 
     <!-- Desktop nav links -->
     <ul class="nav-links" role="list" id="nav-links">
-      <li><a href="#hub"     class="nav-link" data-page="hub">HOME</a></li>
-      <li><a href="#social"  class="nav-link" data-page="social">FEED</a></li>
-      <li><a href="#video"   class="nav-link" data-page="video">VIDEO</a></li>
-      <li><a href="#channel" class="nav-link" data-page="channel">📡 CHANNEL</a></li>
-      <li><a href="#live"    class="nav-link" data-page="live">LIVE</a></li>
-      <li><a href="#dj"      class="nav-link" data-page="dj">DJ</a></li>
-      <li><a href="#music"   class="nav-link" data-page="music">MUSIC</a></li>
-      <li><a href="#arcade"  class="nav-link" data-page="arcade">ARCADE</a></li>
-      <li><a href="#chat"    class="nav-link" data-page="chat">CHAT</a></li>
-      <li><a href="#gallery" class="nav-link" data-page="gallery">GALLERY</a></li>
+      <li><a href="#hub"          class="nav-link" data-page="hub">HOME</a></li>
+      <li><a href="#social"       class="nav-link" data-page="social">UNIVERSE</a></li>
+      <li><a href="#discover"     class="nav-link" data-page="discover">DISCOVER</a></li>
+      <li><a href="#rooms"        class="nav-link" data-page="rooms">ROOMS</a></li>
+      <li><a href="#gallery"      class="nav-link" data-page="gallery">GALLERY</a></li>
+      <li><a href="#live"         class="nav-link" data-page="live">LIVE</a></li>
+      <li><a href="#chat"         class="nav-link" data-page="chat">MESSAGES</a></li>
     </ul>
 
     <!-- Desktop search -->
@@ -129,23 +130,24 @@
       <!-- User menu (shown when logged in) -->
       <div class="dropdown" id="user-dropdown" style="display:none;position:relative">
         <button class="btn btn-ghost btn-sm" id="btn-user-menu" aria-label="User menu" aria-expanded="false" aria-haspopup="true" style="display:flex;align-items:center;gap:6px">
-          <div id="nav-avatar" style="width:30px;height:30px;border-radius:50%;background:rgba(201,168,76,0.12);border:1px solid rgba(201,168,76,0.28);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;box-shadow:0 0 8px rgba(201,168,76,0.20)"></div>
-          <span id="nav-username" style="font-size:0.82rem;font-weight:600;max-width:90px;color:var(--cs-text,#f0e8d8)" class="truncate desktop-only"></span>
+          <div id="nav-avatar" style="width:30px;height:30px;border-radius:50%;background:rgba(0,102,255,0.12);border:1px solid rgba(0,102,255,0.28);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;box-shadow:0 0 8px rgba(0,102,255,0.20)"></div>
+          <span id="nav-username" style="font-size:0.82rem;font-weight:600;max-width:90px;color:var(--univ-text,#e8f0ff)" class="truncate desktop-only"></span>
         </button>
         <div class="dropdown-menu hidden" id="user-menu" role="menu">
-          <a class="dropdown-item" href="#profile" data-page="profile">👤 My Profile</a>
+          <a class="dropdown-item" href="#profile" data-page="profile">👤 My Universe</a>
+          <a class="dropdown-item" href="#notifications" data-page="notifications">🔔 Notifications</a>
+          <a class="dropdown-item" href="#collections" data-page="collections">🔖 Collections</a>
           <a class="dropdown-item" href="#settings" data-page="settings">⚙️ Settings</a>
           <a class="dropdown-item" href="#customize" data-page="customize">✦ Customize</a>
           <div class="divider"></div>
           <a class="dropdown-item" id="admin-link" href="#admin" data-page="admin" style="display:none">🛡️ Founder Control</a>
-          <a class="dropdown-item" id="channel-studio-link" href="#channelstudio" data-page="channelstudio" style="display:none">📡 Channel Studio</a>
           <button class="dropdown-item danger" id="btn-logout" onclick="handleLogout()">🚪 Sign Out</button>
         </div>
       </div>
 
       <!-- Auth button (shown when logged out) -->
-      <button class="btn btn-primary btn-sm" id="btn-auth" onclick="navigateTo('auth')">
-        Sign In
+      <button class="btn btn-primary btn-sm" id="btn-auth" onclick="navigateTo('auth')" style="background:linear-gradient(135deg,#0055dd,#0088ff);border:none">
+        Enter Universe
       </button>
     </div>
   </nav>
@@ -165,6 +167,7 @@
   </main>
 
   <!-- ═══════ MOBILE BOTTOM NAVIGATION ════════════════════════ -->
+  <!-- Primary 5 items on bottom nav; secondary items in "More" overlay -->
   <nav class="mobile-nav" role="navigation" aria-label="Mobile navigation">
     <ul class="mobile-nav-items" role="list">
       <li>
@@ -175,48 +178,92 @@
       </li>
       <li>
         <a href="#social" class="mobile-nav-item" data-page="social">
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          FEED
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          UNIVERSE
         </a>
       </li>
       <li>
-        <a href="#video" class="mobile-nav-item" data-page="video">
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2"/></svg>
-          VIDEO
-        </a>
-      </li>
-      <li>
-        <a href="#arcade" class="mobile-nav-item" data-page="arcade">
-          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><circle cx="16.5" cy="11" r="0.5" fill="currentColor"/><circle cx="18.5" cy="13" r="0.5" fill="currentColor"/><path d="M11.5 17H13a2 2 0 0 0 2-2v-1a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h6"/></svg>
-          ARCADE
+        <a href="#discover" class="mobile-nav-item" data-page="discover">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          DISCOVER
         </a>
       </li>
       <li>
         <a href="#chat" class="mobile-nav-item" data-page="chat" style="position:relative">
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          CHAT
+          MESSAGES
           <span id="chat-nav-unread-badge" class="chat-nav-badge" style="display:none">0</span>
         </a>
+      </li>
+      <li>
+        <button class="mobile-nav-item" id="mobile-more-btn" onclick="univToggleMoreMenu()" aria-label="More navigation options" aria-expanded="false">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="5" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>
+          MORE
+        </button>
       </li>
     </ul>
   </nav>
 
-  <!-- ═══════ MINI RADIO PLAYER ════════════════════════════════ -->
-  <!-- Persistent mini-player shown when radio is active but user is on another page -->
-  <div class="radio-mini-player hidden" id="radio-mini-player" aria-label="Avenora Radio mini player">
-    <div class="radio-mini-inner" onclick="navigateTo('radio')" role="button" tabindex="0"
-         onkeydown="if(event.key==='Enter')navigateTo('radio')">
-      <span class="radio-mini-dot" aria-hidden="true"></span>
-      <div class="radio-mini-info">
-        <div class="radio-mini-station">AVENORA RADIO</div>
-        <div class="radio-mini-track" id="radio-mini-track">Loading…</div>
-      </div>
-      <div class="radio-mini-controls" onclick="event.stopPropagation()">
-        <button class="radio-mini-btn" id="radio-mini-play" onclick="radioMiniTogglePlay()" aria-label="Play/Pause">▶</button>
-        <button class="radio-mini-btn" onclick="radioMiniClose()" aria-label="Close mini player" title="Close">✕</button>
-      </div>
-    </div>
+  <!-- More menu overlay (secondary nav destinations) -->
+  <div class="univ-mobile-more-menu" id="univ-more-menu" role="navigation" aria-label="More navigation">
+    <a href="#rooms"        class="univ-more-item" data-page="rooms"        onclick="univToggleMoreMenu()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+      ROOMS
+    </a>
+    <a href="#gallery"      class="univ-more-item" data-page="gallery"      onclick="univToggleMoreMenu()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+      GALLERY
+    </a>
+    <a href="#moments"      class="univ-more-item" data-page="moments"      onclick="univToggleMoreMenu()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="4"/></svg>
+      MOMENTS
+    </a>
+    <a href="#live"         class="univ-more-item" data-page="live"         onclick="univToggleMoreMenu()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.49-8.49a6 6 0 0 0 0 8.49"/></svg>
+      LIVE
+    </a>
+    <a href="#challenges"   class="univ-more-item" data-page="challenges"   onclick="univToggleMoreMenu()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 2H6v7a6 6 0 0 0 12 0V2z"/></svg>
+      CHALLENGES
+    </a>
+    <a href="#collections"  class="univ-more-item" data-page="collections"  onclick="univToggleMoreMenu()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/></svg>
+      COLLECTIONS
+    </a>
+    <a href="#notifications" class="univ-more-item" data-page="notifications" onclick="univToggleMoreMenu()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+      NOTIFS
+    </a>
+    <a href="#profile"      class="univ-more-item" data-page="profile"      onclick="univToggleMoreMenu()">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+      PROFILE
+    </a>
   </div>
+
+  <!-- Overlay backdrop for more menu -->
+  <div id="univ-more-backdrop" style="display:none;position:fixed;inset:0;z-index:249;background:rgba(0,0,0,0.5)" onclick="univToggleMoreMenu()"></div>
+
+  <script>
+    function univToggleMoreMenu() {
+      const menu = document.getElementById('univ-more-menu');
+      const backdrop = document.getElementById('univ-more-backdrop');
+      const btn = document.getElementById('mobile-more-btn');
+      if (!menu) return;
+      const isOpen = menu.classList.contains('open');
+      menu.classList.toggle('open', !isOpen);
+      if (backdrop) backdrop.style.display = isOpen ? 'none' : '';
+      if (btn) btn.setAttribute('aria-expanded', String(!isOpen));
+    }
+    // Close more menu on hash change
+    window.addEventListener('hashchange', function() {
+      const menu = document.getElementById('univ-more-menu');
+      const backdrop = document.getElementById('univ-more-backdrop');
+      if (menu) menu.classList.remove('open');
+      if (backdrop) backdrop.style.display = 'none';
+      const btn = document.getElementById('mobile-more-btn');
+      if (btn) btn.setAttribute('aria-expanded', 'false');
+    });
+  </script>
 
   <!-- ═══════ TOAST CONTAINER ══════════════════════════════════ -->
   <div id="toast-container" class="toast-container" aria-live="polite" aria-atomic="true"></div>
@@ -225,7 +272,7 @@
   <div id="auth-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="auth-modal-title">
     <div class="modal" style="max-width:420px">
       <div class="modal-header">
-        <h3 id="auth-modal-title" style="margin:0;font-family:var(--font-display);letter-spacing:0.16em;font-size:1.1rem;background:linear-gradient(135deg,#ffd060 0%,#f0e8d8 45%,#c9a84c 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 8px rgba(201,168,76,0.40))">AVENORA</h3>
+        <h3 id="auth-modal-title" style="margin:0;font-family:var(--font-display);letter-spacing:0.16em;font-size:1.1rem;background:linear-gradient(135deg,#0066ff 0%,#00aaff 50%,#00ff88 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;filter:drop-shadow(0 0 8px rgba(0,102,255,0.40))">AVENORA</h3>
         <button class="btn btn-ghost btn-sm" onclick="Modal.close('auth-modal')" aria-label="Close">✕</button>
       </div>
       <div class="modal-body">
@@ -301,14 +348,14 @@
   -->
   <script>
     // ── Production version (one canonical string for all devices) ─────────
-    window.AVENORA_VERSION = '2026.09.23-global';
+    window.AVENORA_VERSION = '2026.10.01-universe';
 
     // ── Build / version metadata ──────────────────────────────
     window.AVENORA_BUILD = {
-      version:         '2026.09.23-global',
-      buildTimestamp:  '2026-09-23T00:00:00Z',
-      swVersion:       'v53',
-      swCacheName:     'avenora-cache-v53',
+      version:         '2026.10.01-universe',
+      buildTimestamp:  '2026-10-01T00:00:00Z',
+      swVersion:       'v56',
+      swCacheName:     'avenora-cache-v56',
       firebaseProject: 'avenora-6e147',
       basePath:        '/AVENORA12/',
     };
@@ -353,7 +400,7 @@
     })();
 
     // ── Production version diagnostic ─────────────────────────
-    console.info('[AVENORA] Production version: ' + window.AVENORA_VERSION + ' (SW: v53)');
+    console.info('[AVENORA] Production version: ' + window.AVENORA_VERSION + ' (SW: v56)');
 
     window.avenoraVersionCheck = function() {
       return {
@@ -397,23 +444,16 @@
   <script src="src/services/supabase.js"></script>
   <!-- Founder theme token service — applies published theme CSS vars on every page load -->
   <script src="src/services/themeService.js"></script>
+  <!-- musicService.js kept: still referenced by video.js and dj.js (shared dependency) -->
   <script src="src/services/musicService.js"></script>
   <script src="src/components/visual/visualEngine.js"></script>
 
-  <!-- Page modules -->
+  <!-- ── Core page modules ────────────────────────────────── -->
   <script src="src/pages/hub.js"></script>
   <script src="src/pages/auth.js"></script>
   <script src="src/pages/social.js"></script>
   <script src="src/pages/video.js"></script>
   <script src="src/pages/live.js"></script>
-  <script src="src/pages/channel.js?v=30"></script>
-  <script src="src/pages/channelstudio.js?v=30"></script>
-  <script src="src/pages/cloudstream.js"></script>
-  <script src="src/pages/cloudstudio.js"></script>
-  <script src="src/pages/dj.js"></script>
-  <script src="src/pages/music.js"></script>
-  <script src="src/pages/radio.js"></script>
-  <script src="src/pages/radioadmin.js"></script>
   <script src="src/pages/arcade.js"></script>
   <script src="src/pages/chat.js"></script>
   <script src="src/pages/gallery.js"></script>
@@ -425,8 +465,46 @@
   <script src="src/pages/settings.js"></script>
   <script src="src/pages/customize.js"></script>
 
+  <!-- ── NEW UNIVERSE PAGES ────────────────────────────────── -->
+  <script src="src/pages/moments.js"></script>
+  <script src="src/pages/rooms.js"></script>
+  <script src="src/pages/discover.js"></script>
+  <script src="src/pages/challenges.js"></script>
+  <script src="src/pages/collections.js"></script>
+  <script src="src/pages/notifications.js"></script>
+
+  <!-- ── Legacy pages kept for backward compat (not in main nav) ── -->
+  <!-- channel, channelstudio, cloudstream, cloudstudio removed from nav
+       but dj/radio still accessible via direct URL for existing users -->
+  <script src="src/pages/dj.js"></script>
+  <script src="src/pages/radio.js"></script>
+  <script src="src/pages/radioadmin.js"></script>
+
   <!-- Main router + app bootstrap -->
   <script src="src/app.js"></script>
+
+  <!-- Intro animation dismissal -->
+  <script>
+    (function() {
+      var _dismissed = false;
+      function _dismiss() {
+        if (_dismissed) return;
+        _dismissed = true;
+        var el = document.getElementById('univ-intro');
+        if (!el) return;
+        el.classList.add('fade-out');
+        setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 700);
+      }
+      // Max 2.5s; dismiss earlier on auth-ready or hashchange
+      setTimeout(_dismiss, 2500);
+      window.addEventListener('lu:auth-ready', _dismiss, { once: true });
+      window.addEventListener('hashchange', _dismiss, { once: true });
+      // Reduced motion: dismiss quickly
+      if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        setTimeout(_dismiss, 400);
+      }
+    })();
+  </script>
 
   <!-- Avenora Companion (Easter egg) — loads after router so auth state is available -->
   <script src="src/components/companion/companion.js"></script>
