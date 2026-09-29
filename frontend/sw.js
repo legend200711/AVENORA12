@@ -1,7 +1,7 @@
 /**
- * AVENORA — Service Worker v56
+ * AVENORA — Service Worker v57
  *
- * Universe redesign release — 2026.10.01
+ * Creator Gallery video/photo upload rebuild + navigation cleanup
  * Deployment-aware: detects GitHub Pages vs Firebase Hosting automatically.
  *   GitHub Pages:      https://legend200711.github.io/AVENORA12/  → BASE = /AVENORA12
  *   Firebase Hosting:  https://<project>.web.app/                 → BASE = (empty string)
@@ -48,8 +48,8 @@ _messaging.onBackgroundMessage((payload) => {
 
 // ── Cache identity ───────────────────────────────────────────────────────────
 // SW_VERSION is embedded at build time so the diagnostic panel can read it.
-const SW_VERSION  = 'v56';
-const CACHE_NAME  = 'avenora-cache-v56';
+const SW_VERSION  = 'v57';
+const CACHE_NAME  = 'avenora-cache-v57';
 
 // Prefixes of ALL old caches that must be wiped on activate.
 // Covers every previous Avenora and Shadow Nexus name that may be installed
@@ -111,7 +111,8 @@ const OLD_CACHE_PREFIXES = [
   'avenora-cache-v53', // v53 — evict: force update for Music Hub audio playback repair
   'avenora-cache-v54', // v54 — evict: silent audio bug — Web Audio graph & crossOrigin fix
   'avenora-cache-v55', // v55 — evict: Universe redesign — new pages, new identity
-  // v55 = current — not in evict list
+  'avenora-cache-v56', // v56 — evict: Creator Gallery video upload rebuild, nav cleanup
+  // v56 = replaced by v57
   'legend-cache',     // old legend-universe names
   'shadow-nexus',     // old Shadow Nexus caches
   'snx-cache',

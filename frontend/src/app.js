@@ -14,8 +14,8 @@
  */
 
 // Build identifier — visible in DevTools console for version verification
-const AVENORA_BUILD = 'v56-2026-10-01';
-console.info('[AVENORA] Build:', AVENORA_BUILD, '— SW: avenora-cache-v56');
+const AVENORA_BUILD = 'v57-2026-10-01';
+console.info('[AVENORA] Build:', AVENORA_BUILD, '— SW: avenora-cache-v57');
 window.AVENORA_BUILD = AVENORA_BUILD;
 
 (function () {
