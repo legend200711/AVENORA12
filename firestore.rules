@@ -9,19 +9,28 @@ service cloud.firestore {
       allow create: if request.auth != null
         && (request.resource.data.author.id == request.auth.uid
             || request.resource.data.authorUid == request.auth.uid);
+      // Allow update by: original author (old or new schema) OR moderator+
       allow update: if request.auth != null
         && (resource.data.author.id == request.auth.uid
+            || resource.data.authorUid == request.auth.uid
             || isModeratorOrAbove());
       allow delete: if request.auth != null
         && (resource.data.author.id == request.auth.uid
+            || resource.data.authorUid == request.auth.uid
             || isModeratorOrAbove());
 
       // Comments sub-collection
       match /comments/{commentId} {
         allow read: if true;
         allow create: if request.auth != null;
+        // Allow update (e.g. editing own comment) by the comment author
+        allow update: if request.auth != null
+          && (resource.data.author.id == request.auth.uid
+              || resource.data.authorUid == request.auth.uid
+              || isModeratorOrAbove());
         allow delete: if request.auth != null
           && (resource.data.author.id == request.auth.uid
+              || resource.data.authorUid == request.auth.uid
               || isModeratorOrAbove());
       }
     }
@@ -334,6 +343,46 @@ service cloud.firestore {
     match /cloudStreamTracks/{uid}/tracks/{trackId} {
       allow write: if request.auth != null && request.auth.uid == uid;
       allow read:  if request.auth != null;
+    }
+
+    // ── Moments ────────────────────────────────────────────
+    // Temporary 24-hour posts stored in the root moments collection.
+    // Schema: { uid, username, displayName, avatarUrl, type, content,
+    //           mediaUrl, extra, createdAt, expiresAt, reactions, replyCount }
+    //
+    // Read:   Anyone (authenticated or guest) may read — moments are public.
+    //         The query filters by expiresAt > now so expired docs are never
+    //         returned by the standard query.
+    // Create: Authenticated users only; they must set uid == their own auth UID.
+    // Update: Owner or moderator+ (for reactions / reply counts).
+    // Delete: Owner or moderator+.
+    match /moments/{momentId} {
+      allow read: if true;
+      allow create: if request.auth != null
+        && request.resource.data.uid == request.auth.uid;
+      allow update: if request.auth != null
+        && (resource.data.uid == request.auth.uid
+            || isModeratorOrAbove());
+      allow delete: if request.auth != null
+        && (resource.data.uid == request.auth.uid
+            || isModeratorOrAbove());
+    }
+
+    // ── Notifications ──────────────────────────────────────
+    // Each notification is addressed to a specific user (toUid).
+    // Only the recipient may read, update (mark as read), or delete their own notifications.
+    // Only authenticated users may create notifications (for security, server-side logic
+    // should write these, but direct client writes are permitted for social events).
+    match /notifications/{notifId} {
+      // Only the recipient can read their own notifications
+      allow read: if request.auth != null && resource.data.toUid == request.auth.uid;
+      // Any authenticated user may create a notification for another user
+      // (e.g. after following, commenting, or liking a post)
+      allow create: if request.auth != null
+        && request.resource.data.fromUid == request.auth.uid;
+      // Only the recipient may update (mark as read) or delete their own notifications
+      allow update: if request.auth != null && resource.data.toUid == request.auth.uid;
+      allow delete: if request.auth != null && resource.data.toUid == request.auth.uid;
     }
 
     // ── Helper functions ───────────────────────────────────

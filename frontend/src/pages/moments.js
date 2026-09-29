@@ -176,12 +176,18 @@ const MomentsPage = {
       } else if (this._currentType === 'photo') {
         content = (document.getElementById('moment-photo-caption')?.value || '').trim();
         if (!this._photoFile) throw new Error('Please select a photo.');
-        // Upload via Supabase storage if available
+        // Upload photo via AvenoraStorage (Supabase gallery bucket)
         try {
-          const uploaded = await AvenoraFirebase.Storage.upload(this._photoFile, `moments/${user.uid}/${Date.now()}_${this._photoFile.name}`);
-          mediaUrl = uploaded.url;
-        } catch {
-          throw new Error('Photo upload failed. Try again.');
+          const storage = window.AvenoraFirebase?.Storage || window.AvenoraStorage;
+          if (!storage) throw new Error('Storage not available.');
+          // AvenoraFirebase.Storage.upload(category, file) — category 'image' → gallery bucket
+          const uploadUrl = storage.upload
+            ? await storage.upload('image', this._photoFile)
+            : await window.AvenoraStorage.uploadImage(this._photoFile);
+          mediaUrl = typeof uploadUrl === 'string' ? uploadUrl : uploadUrl?.url || null;
+          if (!mediaUrl) throw new Error('No URL returned from upload.');
+        } catch (uploadErr) {
+          throw new Error('Photo upload failed: ' + (uploadErr.message || 'Try again.'));
         }
       } else if (this._currentType === 'quote') {
         content = (document.getElementById('moment-quote-text')?.value || '').trim();
@@ -237,6 +243,18 @@ const MomentsPage = {
   async loadOrbs() {
     const orbsRow = document.getElementById('moments-orbs-row');
     if (!orbsRow) return;
+
+    // Wait for Firebase auth to settle before querying — prevents a race where
+    // Firestore gets a request before auth.currentUser is known and rejects it.
+    if (LegendState && LegendState.get('authLoading') === true) {
+      await new Promise(resolve => {
+        const unsub = LegendState.subscribe('authLoading', val => {
+          if (!val) { unsub(); resolve(); }
+        });
+        setTimeout(() => { unsub(); resolve(); }, 6000);
+      });
+    }
+
     const user = LegendAPI.auth.getUser();
 
     try {
@@ -309,6 +327,16 @@ const MomentsPage = {
     if (!feed) return;
 
     feed.innerHTML = `<div class="loading-state"><div class="spinner"></div></div>`;
+
+    // Wait for Firebase auth to settle before querying
+    if (LegendState && LegendState.get('authLoading') === true) {
+      await new Promise(resolve => {
+        const unsub = LegendState.subscribe('authLoading', val => {
+          if (!val) { unsub(); resolve(); }
+        });
+        setTimeout(() => { unsub(); resolve(); }, 6000);
+      });
+    }
 
     try {
       const { getFirestore } = window.AvenoraFirebase || {};

@@ -363,6 +363,15 @@ const SNProfile = {
         await LegendAPI.users.unfollow(userId);
       } else {
         await LegendAPI.users.follow(userId);
+        // Fire a follow notification to the followed user (non-blocking, best-effort)
+        if (window.AvenoraFirebase?.Firestore?.createNotification) {
+          const actor = LegendAPI.auth.getUser();
+          window.AvenoraFirebase.Firestore.createNotification({
+            toUid: userId,
+            type:  'follow',
+            body:  `${actor?.username || 'Someone'} started following you`,
+          });
+        }
       }
     } catch (err) {
       // Roll back optimistic UI

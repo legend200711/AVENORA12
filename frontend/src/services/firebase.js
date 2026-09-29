@@ -560,6 +560,53 @@
    * used by the app (posts, profiles, gallery items).
    */
   const FirestoreService = {
+
+    // ─── Notifications ───────────────────────────────────────────────────────
+    /**
+     * Write a notification document to Firestore.
+     * Called client-side after social events (comment, follow, like, reaction).
+     *
+     * Schema: notifications/{auto-id}
+     *   toUid        — recipient Firebase UID (required)
+     *   fromUid      — actor Firebase UID (required, must match auth.uid for Firestore rules)
+     *   fromUsername — actor display name
+     *   type         — 'comment' | 'reply' | 'like' | 'reaction' | 'follow' | 'mention'
+     *   body         — human-readable message
+     *   postId       — (optional) associated post/comment ID
+     *   read         — false (initial)
+     *   readAt       — null (initial)
+     *   createdAt    — serverTimestamp()
+     *
+     * Never throws — notification failure must NEVER break the primary action.
+     */
+    async createNotification({ toUid, type, body, postId = null, extra = {} } = {}) {
+      // Never send a notification to yourself
+      const user = LegendState.get('user');
+      const fromUid = user?.uid || user?.id || null;
+      if (!fromUid || !toUid || fromUid === toUid) return;
+
+      try {
+        const db = await getFirestore();
+        const { collection, addDoc, serverTimestamp } = await loadModule('firestore');
+        await addDoc(collection(db, 'notifications'), {
+          toUid,
+          fromUid,
+          fromUsername: user.username || user.profile?.displayName || '',
+          fromAvatar:   user.profile?.avatarUrl || null,
+          type:         type || 'system',
+          body:         body || '',
+          postId:       postId || null,
+          read:         false,
+          readAt:       null,
+          createdAt:    serverTimestamp(),
+          ...extra,
+        });
+      } catch (err) {
+        // Non-fatal — log but never surface to the user
+        console.warn('[AVN] createNotification failed (non-critical):', err.code, err.message);
+      }
+    },
+
     async getPosts(limitCount = 20) {
       const db = await getFirestore();
       const { collection, query, orderBy, limit, getDocs } = await loadModule('firestore');

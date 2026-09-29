@@ -363,6 +363,8 @@ const SNPost = {
     const el = document.createElement('article');
     el.className = 'sn-card sn-post';
     el.dataset.postId = postId;
+    // Store author UID so comment/like handlers can send notifications without extra Firestore reads
+    el.dataset.authorUid = post.authorUid || post.author?.uid || post.author?.id || '';
     el.setAttribute('aria-label', `Post by ${post.author?.username || 'Unknown'}`);
 
     const user = LegendAPI.auth.getUser();
@@ -518,6 +520,21 @@ const SNPost = {
       if (data && data.liked !== undefined) {
         btn.classList.toggle('sn-liked', data.liked);
         btn.setAttribute('aria-pressed', String(data.liked));
+      }
+      // Fire a like notification to the post author when newly liked (non-blocking)
+      const justLiked = data?.liked ?? !wasLiked;
+      if (justLiked && window.AvenoraFirebase?.Firestore?.createNotification) {
+        const postEl = document.querySelector(`[data-post-id="${postId}"]`);
+        const authorUid = postEl?.dataset?.authorUid || null;
+        if (authorUid) {
+          const actor = LegendAPI.auth.getUser();
+          window.AvenoraFirebase.Firestore.createNotification({
+            toUid:  authorUid,
+            type:   'like',
+            body:   `${actor?.username || 'Someone'} liked your post`,
+            postId,
+          });
+        }
       }
     } catch (err) {
       console.warn('[AVN] Like error:', err);
@@ -817,6 +834,18 @@ const SNComments = {
       if (btn) { btn.disabled = false; btn.textContent = 'Send'; }
       this.loadedPosts.delete(postId); // Force reload
       await this.load(postId);
+      // Fire a comment notification to the post author (non-blocking, best-effort)
+      const postEl = document.querySelector(`[data-post-id="${postId}"]`);
+      const authorUid = postEl?.dataset?.authorUid || null;
+      if (authorUid && window.AvenoraFirebase?.Firestore?.createNotification) {
+        const actor = LegendAPI.auth.getUser();
+        window.AvenoraFirebase.Firestore.createNotification({
+          toUid:  authorUid,
+          type:   'comment',
+          body:   `${actor?.username || 'Someone'} commented on your post`,
+          postId,
+        });
+      }
     } catch (err) {
       console.warn('[AVN] Comment submit error:', err);
       if (errEl) { errEl.textContent = 'Your comment could not be sent. Please try again.'; errEl.classList.remove('hidden'); }

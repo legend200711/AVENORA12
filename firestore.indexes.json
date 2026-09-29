@@ -133,24 +133,34 @@
     },
     {
       "collectionGroup": "tracks",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "position", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "tracks",
-      "queryScope": "COLLECTION_GROUP",
-      "fields": [
-        { "fieldPath": "position", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "tracks",
       "queryScope": "COLLECTION_GROUP",
       "fields": [
         { "fieldPath": "addedByUid", "order": "ASCENDING" },
         { "fieldPath": "position",   "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "moments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "uid",       "order": "ASCENDING" },
+        { "fieldPath": "expiresAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "toUid",     "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "notifications",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "toUid",  "order": "ASCENDING" },
+        { "fieldPath": "read",   "order": "ASCENDING" }
       ]
     }
   ],

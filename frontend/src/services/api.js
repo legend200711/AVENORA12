@@ -1641,10 +1641,95 @@
   };
 
   // ─── Notifications API ────────────────────────────────────
+  // Primary: REST backend (when BASE_URL is configured).
+  // Fallback: Firestore notifications/{notifId} (Firebase + Supabase architecture).
+  // Schema: { toUid, fromUid, fromUsername, type, body, read, readAt, createdAt, postId? }
   const NotificationsAPI = {
-    list: (page = 1) => get(`/notifications?page=${page}&limit=20`),
-    markRead: (id) => put(`/notifications/${id}/read`, {}),
-    markAllRead: () => put('/notifications/read-all', {}),
+    async list(page = 1) {
+      // REST path (backend configured)
+      if (BASE_URL) {
+        try { return await get(`/notifications?page=${page}&limit=20`); } catch (_) {}
+      }
+      // Firestore fallback
+      return this._firestoreList(page);
+    },
+
+    async get(page = 1, limit = 20) {
+      if (BASE_URL) {
+        try { return await get(`/notifications?page=${page}&limit=${limit}`); } catch (_) {}
+      }
+      return this._firestoreList(page, limit);
+    },
+
+    async _firestoreList(page = 1, limit = 20) {
+      const user = LegendState.get('user');
+      if (!user) return { notifications: [], unreadCount: 0 };
+      const uid = user.uid || user.id;
+      if (!uid || !window.AvenoraFirebase?.getFirestore) return { notifications: [], unreadCount: 0 };
+      try {
+        const db = await window.AvenoraFirebase.getFirestore();
+        const { collection, query, where, orderBy, limit: fsLimit, getDocs } =
+          await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+        const q = query(
+          collection(db, 'notifications'),
+          where('toUid', '==', uid),
+          orderBy('createdAt', 'desc'),
+          fsLimit(limit)
+        );
+        const snap = await getDocs(q);
+        const notifications = [];
+        snap.forEach(d => notifications.push({ id: d.id, ...d.data() }));
+        const unreadCount = notifications.filter(n => !n.read && !n.readAt).length;
+        return { notifications, unreadCount };
+      } catch (err) {
+        console.warn('[AVN] NotificationsAPI._firestoreList error:', err.code, err.message);
+        return { notifications: [], unreadCount: 0 };
+      }
+    },
+
+    async markRead(id) {
+      if (BASE_URL) {
+        try { return await put(`/notifications/${id}/read`, {}); } catch (_) {}
+      }
+      // Firestore fallback
+      if (!window.AvenoraFirebase?.getFirestore) return {};
+      try {
+        const db = await window.AvenoraFirebase.getFirestore();
+        const { doc, updateDoc } =
+          await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+        await updateDoc(doc(db, 'notifications', id), { read: true, readAt: new Date().toISOString() });
+      } catch (_) {}
+      return {};
+    },
+
+    async markAllRead() {
+      if (BASE_URL) {
+        try { return await put('/notifications/read-all', {}); } catch (_) {}
+      }
+      // Firestore fallback — batch mark all unread notifications as read
+      const user = LegendState.get('user');
+      if (!user || !window.AvenoraFirebase?.getFirestore) return {};
+      const uid = user.uid || user.id;
+      try {
+        const db = await window.AvenoraFirebase.getFirestore();
+        const { collection, query, where, getDocs, doc, writeBatch } =
+          await import('https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js');
+        const q = query(
+          collection(db, 'notifications'),
+          where('toUid', '==', uid),
+          where('read', '==', false)
+        );
+        const snap = await getDocs(q);
+        if (snap.empty) return {};
+        const batch = writeBatch(db);
+        const now = new Date().toISOString();
+        snap.forEach(d => batch.update(doc(db, 'notifications', d.id), { read: true, readAt: now }));
+        await batch.commit();
+      } catch (err) {
+        console.warn('[AVN] NotificationsAPI.markAllRead Firestore error:', err.code, err.message);
+      }
+      return {};
+    },
   };
 
   // ─── Web Push API ─────────────────────────────────────────

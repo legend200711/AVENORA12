@@ -265,7 +265,7 @@ window.AVENORA_BUILD = AVENORA_BUILD;
         } else {
           list.innerHTML = data.notifications.map(n => `
             <div class="dropdown-item" style="cursor:default">
-              <span>${escapeHtml(n.message || 'Notification')}</span>
+              <span>${escapeHtml(n.body || n.message || n.content || 'Notification')}</span>
               <span style="font-size:0.75rem;color:var(--text-muted)">${formatTimeAgo(n.createdAt)}</span>
             </div>
           `).join('');
