@@ -97,11 +97,6 @@ window.AVENORA_BUILD = AVENORA_BUILD;
       dj:             'DJ SYSTEM',
       radio:          'AVENORA RADIO',
       radioadmin:     'RADIO ADMIN',
-      channel:        'CHANNEL',
-      channelstudio:  'CHANNEL STUDIO',
-      cloudstream:    'CLOUD STREAM',
-      cloudstudio:    'CREATOR STUDIO',
-      music:          'MUSIC HUB',
     };
     const subtitle = document.getElementById('nav-subtitle');
     if (subtitle) subtitle.textContent = subtitleMap[pageName] || 'YOUR DIGITAL UNIVERSE';
@@ -116,10 +111,11 @@ window.AVENORA_BUILD = AVENORA_BUILD;
 
     const module = pageRegistry[pageName];
     if (!module) {
-      // Legacy pages that are no longer in main nav
+      // Legacy pages that are no longer in main nav (JS files not loaded → these
+      // hashes are never in the registry, so the redirect fires correctly)
       const _legacyRedirects = {
         music: 'gallery', cloudstream: 'hub', cloudstudio: 'hub',
-        channel: 'hub', channelstudio: 'admin', dj: 'hub',
+        channel: 'hub', channelstudio: 'admin',
       };
       const _legacyTarget = _legacyRedirects[pageName];
       if (_legacyTarget) {
