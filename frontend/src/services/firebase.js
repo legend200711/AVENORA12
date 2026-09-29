@@ -792,24 +792,112 @@
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     },
 
-    async addGalleryItem(url, mediaType, caption = '') {
+    async addGalleryItem(url, mediaType, caption = '', fileType = 'image', storagePath = null, storageBucket = null) {
       const db = await getFirestore();
       const { collection, addDoc, serverTimestamp } = await loadModule('firestore');
       const user = LegendState.get('user');
       if (!user) throw new Error('Not authenticated');
+      const authorUid = user.uid || user.id;
       const ref = await addDoc(collection(db, 'gallery'), {
         url, mediaType, caption,
-        author: { id: user.id, username: user.username },
+        // fileType: 'image' | 'video' — used by the gallery grid to choose
+        // between an <img> and a <video> player when rendering.
+        fileType: fileType === 'video' ? 'video' : 'image',
+        // storagePath + storageBucket allow the file to be deleted from Supabase Storage.
+        // null for records uploaded before this was added (legacy records).
+        storagePath: storagePath || null,
+        storageBucket: storageBucket || null,
+        author: { id: authorUid, uid: authorUid, username: user.username },
         likes: [],
         createdAt: serverTimestamp(),
       });
       return { id: ref.id };
     },
 
+    /**
+     * Delete a gallery item owned by the currently authenticated user.
+     *
+     * Steps:
+     *   1. Verify Firebase Auth has resolved and get auth.currentUser.uid.
+     *   2. Read the Firestore gallery document.
+     *   3. Verify the authenticated UID matches the document's author.id / author.uid.
+     *   4. Attempt to delete the Supabase Storage file (using storagePath + storageBucket
+     *      stored in the document). If the record has no storagePath (old upload), the
+     *      Firestore doc is still deleted but a warning is logged so the developer can
+     *      manually clean up the orphaned storage file.
+     *   5. Delete the Firestore document.
+     *
+     * Throws with a safe user-facing message on any failure.
+     * Always logs the full technical error to the console.
+     */
     async deleteGalleryItem(id) {
+      // 1. Verify Firebase Auth has resolved
+      const auth = await getFirebaseAuth();
+      const fbUser = auth.currentUser;
+      if (!fbUser) {
+        const e = new Error('You must be signed in to delete a gallery item.');
+        e.code = 'unauthenticated';
+        throw e;
+      }
+      const authUid = fbUser.uid;
+
+      // 2. Read the document
       const db = await getFirestore();
-      const { doc, deleteDoc } = await loadModule('firestore');
-      await deleteDoc(doc(db, 'gallery', id));
+      const { doc, getDoc, deleteDoc } = await loadModule('firestore');
+      const docRef = doc(db, 'gallery', id);
+      const snap = await getDoc(docRef);
+
+      if (!snap.exists()) {
+        // Already gone — treat as success so the UI can still remove the card
+        console.warn('[AVN] deleteGalleryItem: document not found — already deleted?', id);
+        return { storageDeleted: false, reason: 'not-found' };
+      }
+
+      const data = snap.data();
+
+      // 3. Verify ownership — check both author.uid (new records) and author.id (legacy records)
+      const docOwnerUid = data.author?.uid || data.author?.id;
+      if (docOwnerUid && docOwnerUid !== authUid) {
+        console.error('[AVN] deleteGalleryItem: ownership mismatch', {
+          docId: id, docOwnerUid, authUid,
+        });
+        const e = new Error('You can only delete your own gallery uploads.');
+        e.code = 'permission-denied';
+        throw e;
+      }
+
+      // 4. Attempt Supabase Storage deletion
+      let storageDeleted = false;
+      const storagePath   = data.storagePath   || null;
+      const storageBucket = data.storageBucket || null;
+
+      if (storagePath && storageBucket && window.AvenoraStorage?.deleteFile) {
+        try {
+          await window.AvenoraStorage.deleteFile(storageBucket, storagePath);
+          storageDeleted = true;
+          console.info('[AVN] deleteGalleryItem: storage file deleted', { storageBucket, storagePath });
+        } catch (storageErr) {
+          // Log but do NOT abort — deleting the Firestore record without the storage
+          // file is a recoverable orphan; the reverse (storage gone, doc remains)
+          // would make the item permanently undeletable.
+          console.error('[AVN] deleteGalleryItem: storage deletion failed (continuing to delete Firestore doc)', {
+            docId: id, storageBucket, storagePath,
+            code: storageErr?.code, message: storageErr?.message, error: storageErr,
+          });
+        }
+      } else {
+        // Old upload: no storagePath stored — log so developer can manually clean up
+        console.warn('[AVN] deleteGalleryItem: no storagePath in Firestore doc — storage file cannot be deleted', {
+          docId: id, url: data.url,
+          reason: 'This record was uploaded before storagePath was stored in gallery documents.',
+        });
+      }
+
+      // 5. Delete the Firestore document (rules enforce ownership server-side too)
+      await deleteDoc(docRef);
+      console.info('[AVN] deleteGalleryItem: Firestore doc deleted', { docId: id, storageDeleted });
+
+      return { storageDeleted };
     },
 
     async likeGalleryItem(id) {

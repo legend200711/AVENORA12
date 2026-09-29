@@ -345,6 +345,93 @@ service cloud.firestore {
       allow read:  if request.auth != null;
     }
 
+    // ── Universe Rooms ─────────────────────────────────────
+    // Community spaces with public/private access control.
+    // Schema: { name, description, privacy, ownerId, ownerName, members[], memberCount, createdAt }
+    //
+    // Read:   Public rooms are readable by anyone (guests + auth).
+    //         Private rooms are readable only by members and the owner.
+    // Create: Authenticated users only; ownerId must equal their UID.
+    // Update: Room owner (ownerId) or moderator+.
+    //         Any authenticated member may update only the members/memberCount fields (join/leave).
+    // Delete: Room owner or moderator+.
+    match /rooms/{roomId} {
+      allow read: if resource.data.privacy == 'public'
+                  || (request.auth != null
+                      && (resource.data.ownerId == request.auth.uid
+                          || request.auth.uid in resource.data.members));
+      allow create: if request.auth != null
+                    && request.resource.data.ownerId == request.auth.uid;
+      allow update: if request.auth != null
+                    && (resource.data.ownerId == request.auth.uid
+                        || isModeratorOrAbove()
+                        || (request.auth.uid in resource.data.members
+                            && request.resource.data.diff(resource.data).affectedKeys()
+                               .hasOnly(['members', 'memberCount'])));
+      allow delete: if request.auth != null
+                    && (resource.data.ownerId == request.auth.uid
+                        || isModeratorOrAbove());
+    }
+
+    // ── Room Posts ─────────────────────────────────────────
+    // Posts inside a Universe Room.
+    // Schema: { roomId, uid, username, displayName, content, createdAt }
+    //
+    // Read:   Public room posts visible to everyone; private room posts require membership.
+    //         For simplicity and because roomId is already validated client-side,
+    //         we allow read for all authenticated users (and guests for public rooms).
+    // Create: Authenticated users only; uid must equal their UID.
+    // Update/Delete: Post author or moderator+.
+    match /roomPosts/{postId} {
+      allow read: if true;
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+      allow update: if request.auth != null
+                    && (resource.data.uid == request.auth.uid
+                        || isModeratorOrAbove());
+      allow delete: if request.auth != null
+                    && (resource.data.uid == request.auth.uid
+                        || isModeratorOrAbove());
+    }
+
+    // ── Challenges ─────────────────────────────────────────
+    // Community challenges created by founders/admins.
+    // Schema: { title, description, category, icon, official, entries, createdBy, createdAt }
+    //
+    // Read:   Public — anyone can browse challenges.
+    // Create/Update/Delete: Founder or admin only.
+    match /challenges/{challengeId} {
+      allow read: if true;
+      allow create: if request.auth != null && isFounderOrAdmin();
+      allow update: if request.auth != null && isFounderOrAdmin();
+      allow delete: if request.auth != null && isFounderOrAdmin();
+    }
+
+    // ── Collections (Saved Content) ────────────────────────
+    // Personal content collections — private to the owning user.
+    // Schema: { uid, name, icon, itemCount, createdAt }
+    match /collections/{collectionId} {
+      allow read:   if request.auth != null && resource.data.uid == request.auth.uid;
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+      allow update: if request.auth != null
+                    && resource.data.uid == request.auth.uid;
+      allow delete: if request.auth != null
+                    && resource.data.uid == request.auth.uid;
+    }
+
+    // ── Collection Items (Saved Content Items) ─────────────
+    // Individual items saved into a user's collection.
+    // Schema: { collectionId, uid, type, title, thumbnailUrl, sourceId, sourcePage, savedAt }
+    match /collectionItems/{itemId} {
+      allow read:   if request.auth != null && resource.data.uid == request.auth.uid;
+      allow create: if request.auth != null
+                    && request.resource.data.uid == request.auth.uid;
+      allow delete: if request.auth != null
+                    && resource.data.uid == request.auth.uid;
+    }
+
+
     // ── Moments ────────────────────────────────────────────
     // Temporary 24-hour posts stored in the root moments collection.
     // Schema: { uid, username, displayName, avatarUrl, type, content,

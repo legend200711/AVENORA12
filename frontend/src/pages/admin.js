@@ -1338,7 +1338,10 @@ async function renderAdminRooms(container) {
         </table>
       </div>`;
   } catch (err) {
-    document.getElementById('admin-rooms-list').innerHTML = `<p style="color:var(--text-muted)">Error loading rooms: ${escapeHtml(err.message)}</p>`;
+    const safeMsg = typeof firebaseUserMsg === 'function'
+      ? firebaseUserMsg(err, 'Universe Rooms')
+      : 'Could not load rooms. Please try again.';
+    document.getElementById('admin-rooms-list').innerHTML = `<p style="color:var(--text-muted)">${escapeHtml(safeMsg)}</p>`;
   }
 }
 
@@ -1396,7 +1399,10 @@ async function renderAdminChallenges(container) {
           </div>`).join('')}
       </div>`;
   } catch (err) {
-    document.getElementById('admin-challenges-list').innerHTML = `<p style="color:var(--text-muted)">Error: ${escapeHtml(err.message)}</p>`;
+    const safeMsg = typeof firebaseUserMsg === 'function'
+      ? firebaseUserMsg(err, 'Challenges')
+      : 'Could not load challenges. Please try again.';
+    document.getElementById('admin-challenges-list').innerHTML = `<p style="color:var(--text-muted)">${escapeHtml(safeMsg)}</p>`;
   }
 }
 

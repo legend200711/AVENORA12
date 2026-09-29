@@ -279,7 +279,11 @@ const CollectionsPage = {
       document.getElementById('coll-create-name') && (document.getElementById('coll-create-name').value = '');
       await this.loadCollections();
     } catch (err) {
-      if (errEl) { errEl.textContent = err.message; errEl.classList.remove('hidden'); }
+      const isFirebase = err && (err.code || (err.message || '').toLowerCase().includes('firebase'));
+      const safeMsg = isFirebase && typeof firebaseUserMsg === 'function'
+        ? firebaseUserMsg(err, 'Collections')
+        : (err && err.message ? err.message : 'Could not create collection. Please try again.');
+      if (errEl) { errEl.textContent = safeMsg; errEl.classList.remove('hidden'); }
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Create'; }
     }

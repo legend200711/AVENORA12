@@ -282,7 +282,11 @@ const ChallengesPage = {
       Modal.close('challenge-create-modal');
       await this.load(this._filter);
     } catch (err) {
-      if (errEl) { errEl.textContent = err.message; errEl.classList.remove('hidden'); }
+      const isFirebase = err && (err.code || (err.message || '').toLowerCase().includes('firebase'));
+      const safeMsg = isFirebase && typeof firebaseUserMsg === 'function'
+        ? firebaseUserMsg(err, 'Challenges')
+        : (err && err.message ? err.message : 'Could not create challenge. Please try again.');
+      if (errEl) { errEl.textContent = safeMsg; errEl.classList.remove('hidden'); }
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Create Challenge'; }
     }

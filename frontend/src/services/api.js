@@ -1831,6 +1831,8 @@
         return { images: filtered.map(i => ({
           _id: i.id, url: i.url, title: i.caption || i.title || 'Untitled',
           category: i.mediaType || i.category || 'artwork',
+          // fileType stored in Firestore record tells the grid to use <video> or <img>
+          fileType: i.fileType || 'image',
           uploader: { username: i.author?.username, _id: i.author?.id },
           likeCount: (i.likes || []).length,
           likedByMe: (i.likes || []).includes(LegendAPI?.auth?.getUser()?.id),
@@ -1842,7 +1844,8 @@
     },
     async upload(formData) {
       // Upload directly to Supabase Storage via AvenoraStorage.
-      // No silent fallback to an unavailable backend route.
+      // Images → gallery bucket (max 20 MB).
+      // Videos → videos bucket  (max 500 MB).
       if (!window.AvenoraStorage) {
         throw new Error('Storage service not loaded. Refresh the page and try again.');
       }
@@ -1850,13 +1853,19 @@
       const category = formData.get('category') || 'artwork';
       const title    = formData.get('title') || '';
       if (!file) throw new Error('No file selected.');
-      const result = await window.AvenoraStorage.uploadImage(file);
+      const isVideo  = file.type.startsWith('video/');
+      const result   = isVideo
+        ? await window.AvenoraStorage.uploadVideo(file)
+        : await window.AvenoraStorage.uploadImage(file);
+      const fileType      = isVideo ? 'video' : 'image';
+      const storagePath   = result.storagePath   || null;
+      const storageBucket = result.bucket        || (isVideo ? 'videos' : 'gallery');
       try {
         if (window.AvenoraFirebase?.Firestore?.addGalleryItem) {
-          await window.AvenoraFirebase.Firestore.addGalleryItem(result.url, category, title);
+          await window.AvenoraFirebase.Firestore.addGalleryItem(result.url, category, title, fileType, storagePath, storageBucket);
         }
       } catch (_) {}
-      return { images: [{ _id: Date.now().toString(), url: result.url, title, category,
+      return { images: [{ _id: Date.now().toString(), url: result.url, title, category, fileType,
         uploader: { username: LegendAPI?.auth?.getUser()?.username }, createdAt: new Date().toISOString() }] };
     },
     async like(id) {

@@ -164,7 +164,10 @@ const RoomsPage = {
 
       grid.innerHTML = this._rooms.map(r => this._renderRoomCard(r)).join('');
     } catch (err) {
-      grid.innerHTML = `<div style="grid-column:1/-1;padding:var(--space-xl);text-align:center;color:var(--text-muted)">Could not load rooms. ${escapeHtml(err.message)}</div>`;
+      const safeMsg = typeof firebaseUserMsg === 'function'
+        ? firebaseUserMsg(err, 'Universe Rooms')
+        : 'Could not load rooms. Please try again.';
+      grid.innerHTML = `<div style="grid-column:1/-1;padding:var(--space-xl);text-align:center;color:var(--text-muted)">${escapeHtml(safeMsg)}</div>`;
     }
   },
 
@@ -411,7 +414,10 @@ const RoomsPage = {
       document.getElementById('room-create-desc') && (document.getElementById('room-create-desc').value = '');
       await this.loadRooms(this._filter);
     } catch (err) {
-      if (errEl) { errEl.textContent = err.message; errEl.classList.remove('hidden'); }
+      const safeMsg = typeof firebaseUserMsg === 'function'
+        ? firebaseUserMsg(err, 'Universe Rooms')
+        : 'Could not create room. Please try again.';
+      if (errEl) { errEl.textContent = safeMsg; errEl.classList.remove('hidden'); }
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Create Room'; }
     }

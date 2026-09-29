@@ -647,3 +647,61 @@ window.AVENORA_BUILD = AVENORA_BUILD;
   }
 
 })();
+
+// ─── Firebase error classifier ────────────────────────────────────────────────
+// Translates raw Firebase/Firestore errors into safe, user-facing messages.
+// Logs the full technical error to the developer console.
+// Never exposes Firebase project IDs, console URLs, or SDK internals to users.
+//
+// Usage (from any page module):
+//   const msg = firebaseUserMsg(err, 'Universe Rooms');
+//   // → "Universe Rooms are getting ready. Please try again shortly."  (index building)
+//   // → "Universe Rooms are not available right now."                   (permission)
+//   // → "Could not load universe rooms. Please try again."              (other)
+window.firebaseUserMsg = function firebaseUserMsg(err, feature) {
+  // Always log the full technical detail for developers — never shown to users.
+  console.error('[AVN] Firebase error (' + (feature || 'unknown') + '):', {
+    code:    err && err.code,
+    message: err && err.message,
+    error:   err,
+  });
+
+  if (!err) return 'Something went wrong. Please try again.';
+
+  const code = err.code || '';
+  const msg  = (err.message || '').toLowerCase();
+
+  // Firestore index still building — code is 'failed-precondition' and the
+  // raw message contains a console.firebase.google.com URL.
+  if (
+    code === 'failed-precondition' ||
+    msg.includes('console.firebase.google.com') ||
+    (msg.includes('index') && (msg.includes('building') || msg.includes('required')))
+  ) {
+    const label = feature ? feature + ' are' : 'This feature is';
+    return label + ' getting ready. Please try again shortly.';
+  }
+
+  // Permission denied
+  if (code === 'permission-denied' || msg.includes('permission') || msg.includes('insufficient')) {
+    return 'Content is not available right now.';
+  }
+
+  // Unauthenticated
+  if (code === 'unauthenticated') {
+    return 'Please sign in to continue.';
+  }
+
+  // Network / service unavailable
+  if (
+    code === 'unavailable' ||
+    msg.includes('network') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('net::err')
+  ) {
+    return 'Connection issue. Check your network and try again.';
+  }
+
+  // Generic fallback — deliberately omits err.message (may contain URLs/paths)
+  return 'Could not load ' + (feature ? feature.toLowerCase() : 'content') + '. Please try again.';
+};

@@ -423,34 +423,44 @@
     },
 
     /**
-     * Batch-upload gallery images, save each to Firestore gallery collection.
+     * Batch-upload gallery images OR videos, save each to Firestore gallery collection.
+     * Images go to the 'gallery' bucket (max 20 MB each).
+     * Videos go to the 'videos' bucket  (max 500 MB each).
      */
     async uploadGallery(files, meta = {}) {
-      const uid = _requireUid('upload gallery images');
+      const uid = _requireUid('upload gallery media');
       const results = [];
       for (const file of files) {
-        if (!file.type.startsWith('image/')) {
-          console.warn('[AvenoraStorage] Skipping non-image file:', file.name);
+        const isImage = file.type.startsWith('image/');
+        const isVideo = file.type.startsWith('video/');
+        if (!isImage && !isVideo) {
+          console.warn('[AvenoraStorage] Skipping unsupported gallery file:', file.name, file.type);
           continue;
         }
-        if (file.size > 20 * 1024 * 1024) {
-          throw new Error(`File "${file.name}" is too large (max 20 MB).`);
+        if (isImage && file.size > 20 * 1024 * 1024) {
+          throw new Error(`"${file.name}" is too large. Images must be under 20 MB.`);
         }
-        const path   = _storagePath('gallery', uid, file.name);
-        const result = await _upload('gallery', path, file, null);
+        if (isVideo && file.size > 500 * 1024 * 1024) {
+          throw new Error(`"${file.name}" is too large. Videos must be under 500 MB.`);
+        }
+        const bucket = isVideo ? 'videos' : 'gallery';
+        const path   = _storagePath(bucket, uid, file.name);
+        const result = await _upload(bucket, path, file, null);
+        // fileType distinguishes image from video in the Firestore record
+        result.fileType = isVideo ? 'video' : 'image';
         results.push(result);
         // Save to Firestore gallery collection
         try {
           if (global.AvenoraFirebase?.Firestore?.addGalleryItem) {
             await global.AvenoraFirebase.Firestore.addGalleryItem(
-              result.url, meta.category || 'artwork', meta.title || ''
+              result.url, meta.category || 'artwork', meta.title || '', result.fileType
             );
           }
         } catch (fsErr) {
           console.warn('[AvenoraStorage] Firestore gallery save skipped:', fsErr.message);
         }
       }
-      return { success: true, images: results.map(r => ({ url: r.url, storagePath: r.storagePath })) };
+      return { success: true, images: results.map(r => ({ url: r.url, storagePath: r.storagePath, fileType: r.fileType })) };
     },
 
     /**
@@ -725,6 +735,41 @@
      */
     getPublicUrl(bucket, storagePath) {
       return _publicUrl(bucket, storagePath);
+    },
+
+    /**
+     * Delete a single file from a Supabase Storage bucket.
+     * Uses the Supabase Storage REST API (DELETE /object/{bucket}).
+     * The anon key is sufficient when the bucket has a DELETE policy for anon.
+     * Throws with a safe message if the deletion fails.
+     *
+     * @param {string} bucket      — e.g. 'gallery' or 'videos'
+     * @param {string} storagePath — e.g. 'uid/1234567890-abc123.jpg'
+     * @returns {Promise<void>}
+     */
+    async deleteFile(bucket, storagePath) {
+      if (!bucket || !storagePath) {
+        throw new Error('deleteFile: bucket and storagePath are required.');
+      }
+      const url = `${STORAGE_BASE}/object/${bucket}`;
+      const resp = await fetch(url, {
+        method: 'DELETE',
+        headers: {
+          'apikey':        SUPABASE_ANON,
+          'Authorization': `Bearer ${SUPABASE_ANON}`,
+          'Content-Type':  'application/json',
+        },
+        body: JSON.stringify({ prefixes: [storagePath] }),
+      });
+      if (!resp.ok && resp.status !== 404) {
+        // 404 means the file is already gone — treat as success.
+        // Any other non-200 is a real failure.
+        let msg = `Supabase Storage DELETE failed (HTTP ${resp.status})`;
+        try { const j = await resp.json(); msg = j.message || j.error || msg; } catch (_) {}
+        const e = new Error(msg);
+        e.status = resp.status;
+        throw e;
+      }
     },
   };
 

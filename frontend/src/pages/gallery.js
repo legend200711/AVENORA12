@@ -60,12 +60,12 @@ registerPage('gallery', {
                    ondragover="event.preventDefault();this.style.borderColor='var(--neon-green)'"
                    ondragleave="this.style.borderColor=''"
                    ondrop="galleryHandleDrop(event)">
-                <p style="font-size:2rem;margin-bottom:var(--space-sm)">📷</p>
-                <p style="color:var(--text-secondary)">Click to select images or drag & drop</p>
-                <p style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">JPEG, PNG, WebP, GIF · max 20 MB each · up to 10 files</p>
-              </div>
-              <input type="file" id="gallery-file-input" accept="image/*" multiple style="display:none"
-                     onchange="galleryFilesSelected(this.files)">
+                 <p style="font-size:2rem;margin-bottom:var(--space-sm)">📷🎬</p>
+                 <p style="color:var(--text-secondary)">Click to select images or videos, or drag &amp; drop</p>
+                 <p style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">Images: JPEG, PNG, WebP, GIF · max 20 MB · Videos: MP4, WebM · max 500 MB · up to 10 files</p>
+               </div>
+               <input type="file" id="gallery-file-input" accept="image/*,video/mp4,video/webm,video/ogg,video/quicktime,video/*" multiple style="display:none"
+                      onchange="galleryFilesSelected(this.files)">
               <div id="gallery-upload-preview" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:var(--space-md)"></div>
               <div class="form-group" style="margin-top:var(--space-md)">
                 <label class="form-label">Category</label>
@@ -93,6 +93,23 @@ registerPage('gallery', {
             <div class="modal-footer">
               <button class="btn btn-ghost" onclick="Modal.close('gallery-upload-modal')">Cancel</button>
               <button class="btn btn-green" id="gallery-submit-btn" onclick="submitGalleryUpload()">Upload</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Delete confirmation modal — shown instead of browser confirm() -->
+        <div id="gallery-delete-modal" class="modal-backdrop hidden" role="dialog" aria-modal="true" aria-labelledby="gallery-delete-title">
+          <div class="modal" style="max-width:400px">
+            <div class="modal-header">
+              <h3 id="gallery-delete-title" style="margin:0;font-size:0.95rem;font-family:var(--font-display);letter-spacing:0.1em">DELETE CREATION</h3>
+              <button class="btn btn-ghost btn-sm" onclick="Modal.close('gallery-delete-modal')" aria-label="Close">✕</button>
+            </div>
+            <div class="modal-body">
+              <p id="gallery-delete-body" style="color:var(--text-secondary);margin-bottom:0">Delete this creation? This cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+              <button class="btn btn-ghost" onclick="Modal.close('gallery-delete-modal')">Cancel</button>
+              <button class="btn btn-danger" id="gallery-delete-confirm-btn">Delete</button>
             </div>
           </div>
         </div>
@@ -169,6 +186,7 @@ async function loadGallery(filter = 'all', query = '', page = 1, append = false)
       url: img.url,
       title: img.title,
       category: img.category,
+      fileType: img.fileType || 'image',
       author: img.uploader?.username,
       likeCount: img.likeCount || 0,
       likedByMe: img.likedByMe || false,
@@ -205,14 +223,28 @@ function renderGalleryGrid(items, grid, append = false) {
     return;
   }
 
-  const html = items.map(item => `
-    <div style="break-inside:avoid;margin-bottom:12px;cursor:pointer;position:relative" data-gallery-id="${item.id || ''}">
-      <div style="position:relative;border-radius:var(--radius-md);overflow:hidden;background:var(--bg-secondary);group">
-        <img src="${escapeHtml(item.url)}" alt="${escapeHtml(item.title || 'Gallery image')}"
-             style="width:100%;display:block;transition:transform var(--transition-slow)"
-             onclick="openLightbox('${escapeHtml(item.url)}','${escapeHtml(item.title||'')}','${escapeHtml(item.author||'')}','${item.id||''}')"
-             loading="lazy"
-             onerror="this.parentElement.innerHTML='<div style=padding:40px;text-align:center;color:var(--text-muted)>Failed to load</div>'">
+  const html = items.map(item => {
+    const isVideo = item.fileType === 'video';
+    // Grid thumbnail: video gets a <video> element with controls; image stays as <img>
+    const mediaThumbnail = isVideo
+      ? `<video src="${escapeHtml(item.url)}"
+               style="width:100%;display:block;max-height:320px;object-fit:cover;cursor:pointer"
+               controls
+               playsinline
+               preload="metadata"
+               onclick="event.stopPropagation();openVideoLightbox('${escapeHtml(item.url)}','${escapeHtml(item.title||'')}','${escapeHtml(item.author||'')}','${item.id||''}')"
+               aria-label="${escapeHtml(item.title || 'Gallery video')}">
+           Your browser does not support the video element.
+         </video>`
+      : `<img src="${escapeHtml(item.url)}" alt="${escapeHtml(item.title || 'Gallery image')}"
+              style="width:100%;display:block;transition:transform var(--transition-slow)"
+              onclick="openLightbox('${escapeHtml(item.url)}','${escapeHtml(item.title||'')}','${escapeHtml(item.author||'')}','${item.id||''}')"
+              loading="lazy"
+              onerror="this.parentElement.innerHTML='<div style=padding:40px;text-align:center;color:var(--text-muted)>Failed to load</div>'">`;
+    return `
+    <div style="break-inside:avoid;margin-bottom:12px;cursor:pointer;position:relative" data-gallery-id="${item.id || ''}" data-file-type="${isVideo ? 'video' : 'image'}">
+      <div style="position:relative;border-radius:var(--radius-md);overflow:hidden;background:var(--bg-secondary)">
+        ${mediaThumbnail}
         <!-- Hover overlay -->
         <div class="gallery-overlay" style="position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.75));padding:10px 8px 7px;opacity:0;transition:opacity 200ms"
              onmouseover="this.style.opacity=1" onmouseout="this.style.opacity=0">
@@ -226,9 +258,10 @@ function renderGalleryGrid(items, grid, append = false) {
           </div>
         </div>
         <span class="badge badge-blue" style="position:absolute;top:8px;right:8px;font-size:0.6rem">${escapeHtml(item.category || 'art')}</span>
+        ${isVideo ? `<span style="position:absolute;top:8px;left:8px;background:rgba(0,0,0,0.6);border-radius:4px;padding:2px 6px;font-size:0.6rem;color:#fff;letter-spacing:0.06em">▶ VIDEO</span>` : ''}
       </div>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 
   if (append && grid.innerHTML.includes('loading-state')) {
     grid.innerHTML = html;
@@ -256,6 +289,44 @@ window.openLightbox = function (url, title, author, id) {
   `;
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   document.addEventListener('keydown', function esc(e) { if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', esc); } });
+  document.body.appendChild(overlay);
+};
+
+// Video lightbox — full-screen HTML5 video player with native controls.
+// No autoplay. Works on Android, iPhone (via playsinline + controls), and desktop.
+window.openVideoLightbox = function (url, title, author, id) {
+  const overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.96);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px';
+  overlay.innerHTML = `
+    <video src="${escapeHtml(url)}"
+           style="max-width:90vw;max-height:80vh;border-radius:8px;outline:none"
+           controls
+           playsinline
+           preload="metadata"
+           aria-label="${escapeHtml(title || 'Gallery video')}">
+      Your browser does not support the video element.
+    </video>
+    <div style="margin-top:12px;text-align:center">
+      <p style="font-weight:600;color:#fff;margin:0 0 2px">${escapeHtml(title || 'Untitled')}</p>
+      ${author ? `<p style="color:rgba(255,255,255,0.55);font-size:0.85rem;margin:0">by ${escapeHtml(author)}</p>` : ''}
+    </div>
+    <button style="position:absolute;top:16px;right:16px;background:rgba(255,255,255,0.12);border:none;color:#fff;width:36px;height:36px;border-radius:50%;font-size:1.1rem;cursor:pointer"
+            aria-label="Close video lightbox"
+            onclick="this.closest('[style*=z-index]').querySelector('video')?.pause();this.parentElement.remove()">✕</button>
+  `;
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) {
+      overlay.querySelector('video')?.pause();
+      overlay.remove();
+    }
+  });
+  document.addEventListener('keydown', function esc(e) {
+    if (e.key === 'Escape') {
+      overlay.querySelector('video')?.pause();
+      overlay.remove();
+      document.removeEventListener('keydown', esc);
+    }
+  });
   document.body.appendChild(overlay);
 };
 
@@ -292,21 +363,52 @@ window.galleryLike = async function (id, btn) {
   }
 };
 
-window.galleryDelete = async function (id, container) {
-  if (!confirm('Delete this image? This cannot be undone.')) return;
+window.galleryDelete = function (id, container) {
+  // Show the custom delete confirmation modal instead of browser confirm().
+  const bodyEl   = document.getElementById('gallery-delete-body');
+  const confirmBtn = document.getElementById('gallery-delete-confirm-btn');
+  if (!confirmBtn) {
+    // Fallback in case the modal HTML hasn't rendered yet (should not happen)
+    _galleryDoDelete(id, container);
+    return;
+  }
+  if (bodyEl) bodyEl.textContent = 'Delete this creation? This cannot be undone.';
+  // Clear any previous click handler and attach a fresh one
+  const fresh = confirmBtn.cloneNode(true);
+  confirmBtn.parentNode.replaceChild(fresh, confirmBtn);
+  fresh.addEventListener('click', function handleConfirm() {
+    Modal.close('gallery-delete-modal');
+    _galleryDoDelete(id, container);
+  });
+  Modal.open('gallery-delete-modal');
+};
+
+async function _galleryDoDelete(id, container) {
   try {
-    await LegendAPI.gallery.delete(id);
-    Toast.success('Image deleted');
+    const result = await LegendAPI.gallery.delete(id);
+    // result.storageDeleted tells us whether the Supabase file was also removed
+    if (result && result.storageDeleted === false && result.reason !== 'not-found') {
+      // Old upload without storagePath — Firestore doc deleted but storage file remains
+      console.warn('[AVN] Gallery delete: Firestore doc deleted but Supabase file could not be removed (old upload — no storagePath stored).');
+    }
+    Toast.success('Creation deleted');
     if (container) {
       container.style.transition = 'opacity 300ms';
       container.style.opacity = '0';
       setTimeout(() => container.remove(), 300);
     }
   } catch (err) {
-    console.warn('[AVN] Gallery delete error:', err);
-    Toast.error('This item could not be deleted. Please try again.');
+    // Full error logged to console; only a clean message shown to user
+    console.error('[AVN] Gallery delete error:', {
+      id,
+      code:    err?.code,
+      message: err?.message,
+      error:   err,
+    });
+    // Use a fixed, clean message for delete failures — never expose raw Firebase errors
+    Toast.error("We couldn\u2019t delete this creation. Please try again.");
   }
-};
+}
 
 // ─── Upload ───────────────────────────────────────────────────
 
@@ -333,14 +435,45 @@ window.galleryHandleDrop = function (e) {
   e.preventDefault();
   const zone = document.getElementById('gallery-drop-zone');
   if (zone) zone.style.borderColor = '';
-  const files = Array.from(e.dataTransfer?.files || []).filter(f => f.type.startsWith('image/'));
+  // Accept both images and videos from drag-and-drop
+  const files = Array.from(e.dataTransfer?.files || []).filter(
+    f => f.type.startsWith('image/') || f.type.startsWith('video/')
+  );
   addPendingFiles(files);
 };
 
 function addPendingFiles(files) {
-  const valid = files.filter(f => f.size <= 20 * 1024 * 1024 && f.type.startsWith('image/'));
-  const tooLarge = files.filter(f => f.size > 20 * 1024 * 1024);
-  if (tooLarge.length) Toast.warning(`${tooLarge.length} file(s) too large (max 20 MB each)`);
+  const errEl = document.getElementById('gallery-upload-error');
+  const tooLarge = [];
+  const unsupported = [];
+  const valid = [];
+
+  for (const f of files) {
+    const isImage = f.type.startsWith('image/');
+    const isVideo = f.type.startsWith('video/');
+    if (!isImage && !isVideo) {
+      unsupported.push(f.name);
+      continue;
+    }
+    const maxBytes = isVideo ? 500 * 1024 * 1024 : 20 * 1024 * 1024;
+    if (f.size > maxBytes) {
+      tooLarge.push({ name: f.name, isVideo });
+      continue;
+    }
+    valid.push(f);
+  }
+
+  if (unsupported.length) {
+    Toast.warning(`${unsupported.length} file(s) skipped — only images and videos are supported.`);
+  }
+  if (tooLarge.length) {
+    const msgs = tooLarge.map(t => `"${t.name}" is too large (max ${t.isVideo ? '500 MB' : '20 MB'})`);
+    const msg = msgs.join('; ');
+    Toast.warning(msg);
+    if (errEl) { errEl.textContent = msg; errEl.classList.remove('hidden'); }
+  } else if (errEl) {
+    errEl.classList.add('hidden');
+  }
 
   _pendingFiles.push(...valid);
   // Max 10 files
@@ -357,10 +490,15 @@ function renderUploadPreviews() {
   if (!preview) return;
   preview.innerHTML = _pendingFiles.map((f, i) => {
     const url = URL.createObjectURL(f);
+    const isVideo = f.type.startsWith('video/');
+    const thumb = isVideo
+      // Video preview: small muted video element so user can confirm their selection
+      ? `<video src="${url}" style="height:72px;width:72px;object-fit:cover;border-radius:6px;border:1px solid var(--border-subtle)" muted playsinline preload="metadata"></video>`
+      : `<img src="${url}" style="height:72px;width:72px;object-fit:cover;border-radius:6px;border:1px solid var(--border-subtle)" alt="">`;
     return `
       <div style="position:relative" data-file-idx="${i}">
-        <img src="${url}" style="height:72px;width:72px;object-fit:cover;border-radius:6px;border:1px solid var(--border-subtle)" alt="">
-        <button onclick="removePendingFile(${i})" style="position:absolute;top:-4px;right:-4px;background:var(--bg-secondary);border:1px solid var(--border-subtle);color:var(--text-muted);width:16px;height:16px;border-radius:50%;font-size:10px;padding:0;line-height:1;cursor:pointer">✕</button>
+        ${thumb}
+        <button onclick="removePendingFile(${i})" style="position:absolute;top:-4px;right:-4px;background:var(--bg-secondary);border:1px solid var(--border-subtle);color:var(--text-muted);width:16px;height:16px;border-radius:50%;font-size:10px;padding:0;line-height:1;cursor:pointer" aria-label="Remove">✕</button>
         <p style="font-size:0.6rem;color:var(--text-muted);text-align:center;max-width:72px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(f.name)}</p>
       </div>
     `;
@@ -368,13 +506,15 @@ function renderUploadPreviews() {
 }
 
 window.removePendingFile = function (idx) {
-  URL.revokeObjectURL(document.querySelector(`[data-file-idx="${idx}"] img`)?.src || '');
+  // Revoke the object URL from either the img or video thumbnail element
+  const el = document.querySelector(`[data-file-idx="${idx}"] img, [data-file-idx="${idx}"] video`);
+  if (el?.src) URL.revokeObjectURL(el.src);
   _pendingFiles.splice(idx, 1);
   renderUploadPreviews();
 };
 
 window.submitGalleryUpload = async function () {
-  if (!_pendingFiles.length) { Toast.error('Select at least one image first'); return; }
+  if (!_pendingFiles.length) { Toast.error('Select at least one image or video first'); return; }
 
   const category = document.getElementById('gallery-category')?.value || 'artwork';
   const title = document.getElementById('gallery-title-input')?.value?.trim() || 'Untitled';
@@ -411,6 +551,8 @@ window.submitGalleryUpload = async function () {
           url: img.url,
           title: img.title || title,
           category: img.category || category,
+          // Preserve fileType so local-store renders the correct element type
+          fileType: img.fileType || (_pendingFiles[i]?.type?.startsWith('video/') ? 'video' : 'image'),
           author: img.uploader?.username || LegendAPI.auth.getUser()?.username || 'Unknown',
           likeCount: 0,
           likedByMe: false,
@@ -437,7 +579,8 @@ window.submitGalleryUpload = async function () {
     setTimeout(() => {
       if (progressDiv) progressDiv.classList.add('hidden');
       Modal.close('gallery-upload-modal');
-      Toast.success(`${uploaded} image${uploaded > 1 ? 's' : ''} uploaded!`);
+      const noun = _pendingFiles.some(f => f.type?.startsWith('video/')) ? 'item' : 'image';
+      Toast.success(`${uploaded} ${noun}${uploaded > 1 ? 's' : ''} uploaded!`);
       _pendingFiles = [];
       loadGallery(GalleryState.currentFilter, GalleryState.currentQuery);
     }, 500);

@@ -234,7 +234,12 @@ const MomentsPage = {
       await this.loadOrbs();
       await this.loadFeed();
     } catch (err) {
-      if (errEl) { errEl.textContent = err.message; errEl.classList.remove('hidden'); }
+      // Sanitise Firebase errors; keep plain user-facing validation messages as-is.
+      const isFirebase = err && (err.code || (err.message || '').includes('firebase') || (err.message || '').includes('firestore'));
+      const safeMsg = isFirebase && typeof firebaseUserMsg === 'function'
+        ? firebaseUserMsg(err, 'Moments')
+        : (err && err.message ? err.message : 'Could not share moment. Please try again.');
+      if (errEl) { errEl.textContent = safeMsg; errEl.classList.remove('hidden'); }
     } finally {
       if (btn) { btn.disabled = false; btn.textContent = 'Share Moment'; }
     }
@@ -371,7 +376,10 @@ const MomentsPage = {
 
       feed.innerHTML = this._moments.map(m => this._renderMomentCard(m)).join('');
     } catch (err) {
-      feed.innerHTML = `<div class="error-state" style="min-height:200px"><p>Could not load moments. ${escapeHtml(err.message)}</p></div>`;
+      const safeMsg = typeof firebaseUserMsg === 'function'
+        ? firebaseUserMsg(err, 'Moments')
+        : 'Could not load Moments. Please try again.';
+      feed.innerHTML = `<div class="error-state" style="min-height:200px"><p>${escapeHtml(safeMsg)}</p></div>`;
     }
   },
 
