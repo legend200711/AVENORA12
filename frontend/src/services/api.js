@@ -1822,9 +1822,14 @@
     async list(params = {}) {
       if (window.AvenoraFirebase?.Firestore) {
         const items = await window.AvenoraFirebase.Firestore.getGallery(params.limit || 24);
-        // Client-side filter by category / search query
+        // Client-side filter by category / search query.
+        // The 'video' category tab must also match items whose fileType is 'video'
+        // (for backward-compat records that stored fileType but not category).
         const filtered = items.filter(i => {
-          const catOk = !params.category || params.category === 'all' || i.mediaType === params.category || i.category === params.category;
+          const cat = params.category;
+          const catOk = !cat || cat === 'all'
+            || i.mediaType === cat || i.category === cat
+            || (cat === 'video' && i.fileType === 'video');
           const qOk   = !params.q || (i.caption || i.title || '').toLowerCase().includes(params.q.toLowerCase());
           return catOk && qOk;
         });

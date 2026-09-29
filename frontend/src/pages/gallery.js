@@ -64,7 +64,7 @@ registerPage('gallery', {
                  <p style="color:var(--text-secondary)">Click to select images or videos, or drag &amp; drop</p>
                  <p style="font-size:0.8rem;color:var(--text-muted);margin-top:4px">Images: JPEG, PNG, WebP, GIF · max 20 MB · Videos: MP4, WebM · max 500 MB · up to 10 files</p>
                </div>
-               <input type="file" id="gallery-file-input" accept="image/*,video/mp4,video/webm,video/ogg,video/quicktime,video/*" multiple style="display:none"
+               <input type="file" id="gallery-file-input" accept="image/*,video/*" multiple style="display:none"
                       onchange="galleryFilesSelected(this.files)">
               <div id="gallery-upload-preview" style="display:flex;flex-wrap:wrap;gap:8px;margin-top:var(--space-md)"></div>
               <div class="form-group" style="margin-top:var(--space-md)">

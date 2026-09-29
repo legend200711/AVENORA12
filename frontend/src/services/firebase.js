@@ -798,11 +798,14 @@
       const user = LegendState.get('user');
       if (!user) throw new Error('Not authenticated');
       const authorUid = user.uid || user.id;
+      const resolvedFileType = fileType === 'video' ? 'video' : 'image';
       const ref = await addDoc(collection(db, 'gallery'), {
-        url, mediaType, caption,
+        url,
+        // Store under both field names: legacy code reads mediaType, filter code reads category
+        mediaType, category: mediaType, caption,
         // fileType: 'image' | 'video' — used by the gallery grid to choose
         // between an <img> and a <video> player when rendering.
-        fileType: fileType === 'video' ? 'video' : 'image',
+        fileType: resolvedFileType,
         // storagePath + storageBucket allow the file to be deleted from Supabase Storage.
         // null for records uploaded before this was added (legacy records).
         storagePath: storagePath || null,
